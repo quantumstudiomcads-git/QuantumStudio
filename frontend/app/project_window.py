@@ -259,6 +259,9 @@ class ProjectWindow(QMainWindow):
         self.device_builder = DeviceBuilderWorkspace(
             self.project
         )
+        self.device_builder.history_changed.connect(
+            self._update_active_history_actions
+        )
 
         self.calculator = CalculateWorkspace(
             self.project
@@ -370,6 +373,34 @@ class ProjectWindow(QMainWindow):
             self.builder_toolbar.setVisible(
                 index == 0
             )
+            self._update_active_history_actions()
+
+    def _undo_active_workspace(self, *_):
+        if self.workspace.currentIndex() == 1:
+            return self.device_builder.undo()
+        if self.workspace.currentIndex() == 0:
+            return self.builder._qs_undo()
+        return False
+
+    def _redo_active_workspace(self, *_):
+        if self.workspace.currentIndex() == 1:
+            return self.device_builder.redo()
+        if self.workspace.currentIndex() == 0:
+            return self.builder._qs_redo()
+        return False
+
+    def _update_active_history_actions(self, *_):
+        if not hasattr(self, "undo_action"):
+            return
+        index = self.workspace.currentIndex()
+        if index == 1:
+            self.undo_action.setEnabled(self.device_builder.can_undo())
+            self.redo_action.setEnabled(self.device_builder.can_redo())
+        elif index == 0:
+            self.builder._update_history_actions()
+        else:
+            self.undo_action.setEnabled(False)
+            self.redo_action.setEnabled(False)
 
     # ============================================================
     # Contextual Builder toolbar
@@ -396,17 +427,19 @@ class ProjectWindow(QMainWindow):
             return item
 
         self.undo_action = action(
-            "Undo", "Undo the last structure modification",
-            self.builder._qs_undo
+            "Undo", "Undo in the active workspace",
+            self._undo_active_workspace
         )
         self.undo_action.setShortcut(QKeySequence("Ctrl+Z"))
         self.undo_action.setEnabled(False)
 
         self.redo_action = action(
-            "Redo", "Redo the last undone structure modification",
-            self.builder._qs_redo
+            "Redo", "Redo in the active workspace",
+            self._redo_active_workspace
         )
-        self.redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        self.redo_action.setShortcuts(
+            [QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")]
+        )
         self.redo_action.setEnabled(False)
 
         self.builder_toolbar.addSeparator()

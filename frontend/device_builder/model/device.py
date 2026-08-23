@@ -23,6 +23,10 @@ class Device:
         self.periodic = tuple(self.periodic)
         self.padding = tuple(float(value) for value in self.padding)
         self.origin_offset = tuple(float(value) for value in self.origin_offset)
+        if not isinstance(self.metadata, dict):
+            raise ValueError("Device metadata must be a dictionary.")
+        if not isinstance(self.id, str) or not self.id.strip():
+            raise ValueError("Device requires a non-empty id.")
 
     def add_region(self, region):
         if not isinstance(region, DeviceRegion):
@@ -56,3 +60,35 @@ class Device:
 
     def assemble(self):
         return self.assemble_with_membership().structure
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "regions": [region.to_dict() for region in self.regions],
+            "cell": None if self.cell is None else [[float(value) for value in vector] for vector in self.cell],
+            "periodic": list(self.periodic),
+            "transport_direction": self.transport_direction,
+            "padding": list(self.padding),
+            "origin_offset": list(self.origin_offset),
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        if not isinstance(data, dict):
+            raise ValueError("Device data must be a dictionary.")
+        regions_data = data.get("regions", [])
+        if not isinstance(regions_data, list):
+            raise ValueError("Device regions must be a list.")
+        return cls(
+            id=data.get("id"),
+            name=data.get("name", "Untitled Device"),
+            regions=[DeviceRegion.from_dict(item) for item in regions_data],
+            cell=data.get("cell"),
+            periodic=data.get("periodic", (False, False, False)),
+            transport_direction=data.get("transport_direction", "Z"),
+            padding=data.get("padding", (5.0, 5.0, 5.0)),
+            origin_offset=data.get("origin_offset", (0.0, 0.0, 0.0)),
+            metadata=dict(data.get("metadata", {})),
+        )

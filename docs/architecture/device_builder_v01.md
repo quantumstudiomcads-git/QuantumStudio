@@ -107,14 +107,55 @@ viewport has no DeviceRegion semantics.
 boundary, makes an independent copy for the DeviceRegion, and never reads a
 Builder widget/private field.
 
-## Persistence and deferred work
+## Project ownership and persistence
 
-Device state remains in memory only. `.qs` serialization is intentionally
-unchanged. A dedicated persistence stage must serialize Device identity,
-regions/source structures, transforms, roles, cell, PBC, transport direction,
-padding, origin offset, and metadata while retaining old-project compatibility.
+`Project` is the sole persistent owner of the active Device. New projects start
+with `Project.device is None`; Device Builder presents a lazy empty Device until
+the first committed Device edit. At that point it calls `Project.set_device()`
+and the regular Project dirty flag is updated.
 
-Still deferred: Device undo/redo, periodic collision checks, lattice/interface
-matching, Heterostructure/Moiré integration, automatic placement beyond the
-Stage 2 geometric operations, collision visualization, templates, electrodes,
-gates, NEGF, and transport physics.
+`.qs` format v0.3 adds an **optional** `device` section. The existing
+structure/calculator/workflow fields are unchanged. A pre-Device v0.2 project
+without this section loads normally with `Project.device is None`.
+
+The Device section serializes canonical source state only:
+
+- Device: id, name, regions, explicit cell or `null`, PBC, transport direction,
+  padding, origin offset, and metadata;
+- DeviceRegion: id, name, role, source Structure through `Structure.to_dict()`,
+  translation, rotation, visibility, and metadata.
+
+Assembled preview atoms, transformed source copies, bounds, collision results,
+viewport state, selection/reference widgets, dialogs, and history are excluded.
+They are derived again after load. Device and region UUIDs are supplied back to
+the model during deserialization and are never regenerated.
+
+`Project.load()` validates a present Device widget-free. Malformed optional
+Device data leaves the remainder of the Project available, sets
+`Project.device` to `None`, and exposes `Project.device_load_error` for the
+Device Builder workspace to report.
+
+## Device history
+
+Device Builder has a Qt-free `DeviceHistory` that is independent of Builder's
+Structure history. v0.1 uses complete before/after Device serialization
+snapshots per committed command. This is deliberately conservative: it makes
+add/remove/duplicate, property edits, placement/alignment, repetition, padding,
+and cell fitting deterministic and reversible without modifying source
+Structures.
+
+The public workspace API is `can_undo()`, `can_redo()`, `undo()`, `redo()`, and
+`clear_history()`. History is never serialized. Loading a project restores the
+Device model and begins with empty Device undo/redo stacks.
+
+Undo/redo controls live in Device Builder. ProjectWindow routes its existing
+Ctrl+Z, Ctrl+Shift+Z, and Ctrl+Y actions to Device Builder only while that
+workspace is active; Builder operations continue to use the frozen Builder
+history when Builder is active.
+
+## Deferred work
+
+Still deferred: periodic collision checks, lattice/interface matching,
+Heterostructure/Moiré integration, collision visualization, templates,
+electrodes, gates, NEGF, transport physics, and Device-specific command
+coalescing beyond widget `editingFinished` commits.

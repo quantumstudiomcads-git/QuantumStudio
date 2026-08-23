@@ -7,7 +7,7 @@ from frontend.core.structure import Structure
 class Project:
 
     FORMAT = "qstudio"
-    VERSION = "0.2"
+    VERSION = "0.3"
 
     def __init__(
         self,
@@ -24,6 +24,8 @@ class Project:
         )
 
         self.structure = {}
+        self.device = None
+        self.device_load_error = None
 
         self.calculator = {}
         self.workflows = {}
@@ -47,6 +49,13 @@ class Project:
             },
 
             "structure": self.structure,
+            # Optional from v0.3. It is source Device state only; assembled
+            # previews and UI/history state are intentionally excluded.
+            "device": (
+                None
+                if self.device is None
+                else self.device.to_dict()
+            ),
 
             "calculator": self.calculator,
             "workflows": self.workflows,
@@ -152,6 +161,21 @@ class Project:
             {},
         )
 
+        # Device data is optional for pre-Device Builder .qs projects. A
+        # malformed optional device does not prevent the rest of the Project
+        # from opening; the recoverable failure is exposed to Device Builder.
+        device_data = data.get("device", None)
+        if device_data is not None:
+            try:
+                from frontend.device_builder.assembly import validate_device
+                from frontend.device_builder.model import Device
+                device = Device.from_dict(device_data)
+                validate_device(device, allow_empty=True).require_valid()
+                project.device = device
+            except Exception as error:
+                project.device = None
+                project.device_load_error = f"Device data was not loaded: {error}"
+
         project.modified = False
 
         return project
@@ -213,3 +237,24 @@ class Project:
         )
 
         self.modified = True
+
+    # ============================================================
+    # Device model
+    # ============================================================
+
+    def get_device(self):
+        """Return the optional persistent Device domain object, if present."""
+        return self.device
+
+    def set_device(self, device):
+        """Set the active Device through the Project ownership boundary."""
+        if device is not None:
+            from frontend.device_builder.model import Device
+            if not isinstance(device, Device):
+                raise TypeError("Project device must be a Device or None.")
+        self.device = device
+        self.device_load_error = None
+        self.modified = True
+
+    def clear_device(self):
+        self.set_device(None)

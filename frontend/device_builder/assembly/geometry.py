@@ -162,6 +162,13 @@ def repeat_region(device, region_id: str, nx: int = 1, ny: int = 1, nz: int = 1)
     return tuple(duplicates)
 
 
+def set_device_padding(device, padding: Iterable[float]) -> tuple[float, float, float]:
+    """Set Device-level padding without deriving or changing a Device cell."""
+    values = _finite_vector(padding, "Device padding", nonnegative=True)
+    device.padding = tuple(float(value) for value in values)
+    return device.padding
+
+
 def fit_device_cell(device, padding: Iterable[float] = (5.0, 5.0, 5.0)) -> RegionBounds:
     """Fit an axis-aligned Device cell without changing relative region transforms."""
     padding = _finite_vector(padding, "Device padding", nonnegative=True)
@@ -173,6 +180,6 @@ def fit_device_cell(device, padding: Iterable[float] = (5.0, 5.0, 5.0)) -> Regio
         raise ValueError("Unable to derive a valid Device cell from current geometry.")
     current_origin = _finite_vector(getattr(device, "origin_offset", (0.0, 0.0, 0.0)), "Device origin offset")
     device.origin_offset = tuple(float(value) for value in current_origin + padding - minimum)
-    device.padding = tuple(float(value) for value in padding)
+    set_device_padding(device, padding)
     device.cell = np.diag(lengths).tolist()
     return RegionBounds(tuple(float(value) for value in padding), tuple(float(value) for value in padding + maximum - minimum))

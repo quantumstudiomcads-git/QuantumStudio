@@ -873,29 +873,25 @@ Preserve this separation.
 
 ---
 
-# 34. CURRENT DEVICE PERSISTENCE POLICY
+# 34. DEVICE PERSISTENCE AND HISTORY POLICY
 
-Device state is currently IN MEMORY ONLY.
+Device state is persisted optionally in `.qs` format v0.3 through the public
+`Project.device` boundary. Existing projects without a `device` section remain
+valid and load with `Project.device is None`.
 
-There has been no `.qs` schema migration yet.
+Persist canonical Device/DeviceRegion source state only: stable IDs, roles,
+source Structures, transforms, visibility, metadata, Device cell/PBC,
+transport direction, padding, and origin offset. Do not persist assembled
+previews, viewport state, bounds, collision caches, selections, or history.
 
-This is intentional.
+Malformed optional Device data must not prevent the remainder of a Project from
+loading. Expose a clear recoverable Device load error instead.
 
-Do not assume Device objects currently survive save/reopen.
+Device undo/redo is session-only and separate from frozen Builder Structure
+history. It must never be serialized into `.qs` files or coupled to Builder's
+history stack.
 
-When Device persistence is implemented later:
-
-- preserve old `.qs` compatibility;
-- add explicit migration/version behavior;
-- persist region IDs;
-- persist roles;
-- persist transforms;
-- persist Device cell;
-- persist PBC;
-- persist transport direction;
-- preserve source structures or appropriate references.
-
-Do not make a breaking `.qs` change casually.
+Do not make further breaking `.qs` changes casually.
 
 ---
 

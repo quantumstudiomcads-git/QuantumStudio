@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment / local config
+.env
+.env.*
+
+# Logs / crash output
+*.log
+qs_crash.log
+qs_error.log
+
+# Debug / diagnostic artifacts
+quantumstudio_calculate_diagnostic.txt
+quantumstudio_visualizer_fix.tar.gz
+
+# Temporary / backup files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.broken
+*.corrupted
+*~
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Local project files / user workspaces
+Projects/
+Test_Project.qs
+
+# Misc accidental files
+touch
+
+# Bundled/local software environments and binaries
+software/*
+!software/manifests/
+!software/manifests/**
+
+# Historical source backups / migration snapshots
+frontend/backups/
+*.before_*
+*.before_*.py
+*.syntax_error_backup.py

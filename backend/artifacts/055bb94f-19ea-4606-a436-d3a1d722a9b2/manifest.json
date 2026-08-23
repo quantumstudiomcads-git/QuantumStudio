@@ -1,0 +1,71 @@
+{
+  "quantum_studio": {
+    "manifest_version": "1.0"
+  },
+  "calculation": {
+    "id": "055bb94f-19ea-4606-a436-d3a1d722a9b2",
+    "workflow": "scf",
+    "created_at": "2026-08-20T05:55:17.907273+00:00",
+    "status": "created"
+  },
+  "structure": {
+    "lattice": [
+      [
+        3.567,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        3.567,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        3.567
+      ]
+    ],
+    "species": [
+      "C",
+      "C"
+    ],
+    "positions": [
+      [
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.25,
+        0.25,
+        0.25
+      ]
+    ],
+    "coordinate_system": "crystal"
+  },
+  "parameters": {
+    "functional": "PBE",
+    "ecutwfc": 60,
+    "ecutrho": 480,
+    "kpoints": [
+      6,
+      6,
+      6
+    ]
+  },
+  "dependencies": [],
+  "execution": {
+    "target": "local"
+  },
+  "engine": {
+    "resolved": null,
+    "version": null
+  },
+  "artifacts": {
+    "directory": null,
+    "inputs": [],
+    "outputs": [],
+    "results": null
+  }
+}

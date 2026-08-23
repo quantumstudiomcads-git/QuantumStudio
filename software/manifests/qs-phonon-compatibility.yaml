@@ -1,0 +1,17 @@
+profile: qs-phonons
+
+python:
+  version: "3.12"
+
+phonopy:
+  constraint: ">=4.3.0,<4.4.0"
+
+phono3py:
+  version: "4.3.3"
+
+compatibility:
+  phonopy_phono3py: validated
+
+dependency_check:
+  command: "python -m pip check"
+  status: "passed"

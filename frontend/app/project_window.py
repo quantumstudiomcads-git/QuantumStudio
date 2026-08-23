@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from frontend.core.project import Project
 from frontend.builder import Builder
 from frontend.calculate import CalculateWorkspace
+from frontend.device_builder import DeviceBuilderWorkspace
 
 
 class VerticalButton(QPushButton):
@@ -184,6 +185,10 @@ class ProjectWindow(QMainWindow):
             VerticalButton("Builder")
         )
 
+        self.device_builder_button = (
+            VerticalButton("Device Builder")
+        )
+
         self.calculate_button = (
             VerticalButton("Calculate")
         )
@@ -194,6 +199,10 @@ class ProjectWindow(QMainWindow):
 
         nav_layout.addWidget(
             self.builder_button
+        )
+
+        nav_layout.addWidget(
+            self.device_builder_button
         )
 
         nav_layout.addWidget(
@@ -247,6 +256,10 @@ class ProjectWindow(QMainWindow):
 
         self._build_builder_toolbar()
 
+        self.device_builder = DeviceBuilderWorkspace(
+            self.project
+        )
+
         self.calculator = CalculateWorkspace(
             self.project
         )
@@ -260,6 +273,10 @@ class ProjectWindow(QMainWindow):
 
         self.workspace.addWidget(
             self.builder
+        )
+
+        self.workspace.addWidget(
+            self.device_builder
         )
 
         self.workspace.addWidget(
@@ -278,12 +295,16 @@ class ProjectWindow(QMainWindow):
             lambda: self._select_vertical(0)
         )
 
-        self.calculate_button.clicked.connect(
+        self.device_builder_button.clicked.connect(
             lambda: self._select_vertical(1)
         )
 
-        self.analyze_button.clicked.connect(
+        self.calculate_button.clicked.connect(
             lambda: self._select_vertical(2)
+        )
+
+        self.analyze_button.clicked.connect(
+            lambda: self._select_vertical(3)
         )
 
         self._select_vertical(0)
@@ -321,6 +342,7 @@ class ProjectWindow(QMainWindow):
 
         buttons = [
             self.builder_button,
+            self.device_builder_button,
             self.calculate_button,
             self.analyze_button,
         ]
@@ -335,8 +357,9 @@ class ProjectWindow(QMainWindow):
         # Contextual toolbar
         #
         # 0 = Builder
-        # 1 = Calculate
-        # 2 = Analyze
+        # 1 = Device Builder
+        # 2 = Calculate
+        # 3 = Analyze
         # --------------------------------------------------------
 
         if hasattr(

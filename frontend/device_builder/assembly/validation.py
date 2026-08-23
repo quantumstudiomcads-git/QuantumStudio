@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from frontend.core.structure import Structure
 from frontend.device_builder.model.device import VALID_TRANSPORT_DIRECTIONS
+from frontend.device_builder.model.interface import DeviceInterface, InterfaceMode, VALID_INTERFACE_STRAIN_MODES
 
 
 @dataclass
@@ -29,6 +30,9 @@ def validate_device(device, assembled_structure=None, *, allow_empty=False, chec
         result.errors.append("Device must contain at least one region.")
     if len(region_ids) != len(set(region_ids)):
         result.errors.append("Device region ids must be unique.")
+    interface_ids = [interface.id for interface in getattr(device, "interfaces", ())]
+    if len(interface_ids) != len(set(interface_ids)):
+        result.errors.append("Device interface ids must be unique.")
     for region in getattr(device, "regions", ()):
         if not isinstance(region.source_structure, Structure):
             result.errors.append(f"Region {region.id} has no valid source Structure.")
@@ -36,6 +40,29 @@ def validate_device(device, assembled_structure=None, *, allow_empty=False, chec
             array = np.asarray(values, dtype=float)
             if array.shape != (3,) or not np.all(np.isfinite(array)):
                 result.errors.append(f"Region {region.id} has invalid {label}.")
+    known_region_ids = set(region_ids)
+    for interface in getattr(device, "interfaces", ()):
+        if not isinstance(interface, DeviceInterface):
+            result.errors.append("Device interfaces must be DeviceInterface instances.")
+            continue
+        if interface.region_a_id not in known_region_ids or interface.region_b_id not in known_region_ids:
+            result.errors.append(f"Interface {interface.id} references an unknown region.")
+        if interface.region_a_id == interface.region_b_id:
+            result.errors.append(f"Interface {interface.id} must reference two different regions.")
+        if interface.mode not in (InterfaceMode.ALIGNED, InterfaceMode.TWISTED):
+            result.errors.append(f"Interface {interface.id} has an invalid mode.")
+        if not np.isfinite(interface.requested_twist_deg):
+            result.errors.append(f"Interface {interface.id} has invalid requested twist.")
+        if not np.isfinite(interface.max_strain) or interface.max_strain < 0.0:
+            result.errors.append(f"Interface {interface.id} has invalid max strain.")
+        if interface.strain_mode not in VALID_INTERFACE_STRAIN_MODES:
+            result.errors.append(f"Interface {interface.id} has invalid strain mode.")
+        if not np.isfinite(interface.gap) or interface.gap < 0.0:
+            result.errors.append(f"Interface {interface.id} has invalid gap.")
+        if int(interface.max_index) < 1:
+            result.errors.append(f"Interface {interface.id} has invalid max_index.")
+        if not isinstance(interface.diagnostics, dict) or not isinstance(interface.metadata, dict):
+            result.errors.append(f"Interface {interface.id} has invalid metadata.")
     periodic = getattr(device, "periodic", None)
     if not isinstance(periodic, (list, tuple)) or len(periodic) != 3 or not all(isinstance(value, (bool, np.bool_)) for value in periodic):
         result.errors.append("Device PBC must contain three Boolean values.")

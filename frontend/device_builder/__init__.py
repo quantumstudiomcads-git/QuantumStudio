@@ -2,9 +2,9 @@
 
 The model remains Qt-free; UI symbols are loaded lazily.
 """
-from .model import Device, DeviceHistory, DeviceRegion, RegionRole
+from .model import Device, DeviceHistory, DeviceInterface, DeviceRegion, InterfaceMode, RegionRole
 
-__all__ = ["DeviceBuilderWorkspace", "Device", "DeviceHistory", "DeviceRegion", "RegionRole",
+__all__ = ["DeviceBuilderWorkspace", "Device", "DeviceHistory", "DeviceInterface", "DeviceRegion", "InterfaceMode", "RegionRole",
            "DeviceAssembly", "assemble_device", "validate_device"]
 
 def __getattr__(name):

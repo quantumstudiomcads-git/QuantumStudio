@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
     QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
@@ -11,8 +11,10 @@ from frontend.device_builder.assembly import (
     align_region_centers, align_region_surface, assemble_device,
     detect_inter_region_collisions, fit_device_cell, place_region, repeat_region, set_device_padding,
 )
-from frontend.device_builder.model import Device, DeviceHistory, DeviceRegion, RegionRole
-from frontend.device_builder.ui import PlacementControls, RegionProperties, RegionTree
+from frontend.device_builder.interface import apply_interface_match, prepare_interface_match
+from frontend.device_builder.interface.worker import InterfaceMatchWorker
+from frontend.device_builder.model import Device, DeviceHistory, DeviceRegion, InterfaceMode, RegionRole
+from frontend.device_builder.ui import InterfaceControls, PlacementControls, RegionProperties, RegionTree
 
 
 class DeviceBuilderWorkspace(QWidget):
@@ -26,6 +28,9 @@ class DeviceBuilderWorkspace(QWidget):
         self.device = self._project_device_or_empty()
         self.history = DeviceHistory()
         self.selected_region_id = None
+        self._interface_thread = None
+        self._interface_worker = None
+        self._interface_fit_cell_after_match = False
 
         layout = QHBoxLayout(self)
         panel_scroll = QScrollArea()
@@ -54,9 +59,11 @@ class DeviceBuilderWorkspace(QWidget):
         self.region_tree = RegionTree()
         self.properties = RegionProperties()
         self.placement = PlacementControls()
+        self.interface_controls = InterfaceControls()
         panel_layout.addWidget(self.region_tree)
         panel_layout.addWidget(self.properties)
         panel_layout.addWidget(self.placement)
+        panel_layout.addWidget(self.interface_controls)
         panel_layout.addStretch()
         panel_scroll.setWidget(panel)
 
@@ -70,6 +77,7 @@ class DeviceBuilderWorkspace(QWidget):
         self.region_tree.duplicate_requested.connect(self.duplicate_selected_region)
         self.region_tree.selection_changed.connect(self.select_region)
         self.properties.region_changed.connect(self.update_region)
+        self.interface_controls.match_requested.connect(self.start_interface_match)
         self.undo_button.clicked.connect(self.undo)
         self.redo_button.clicked.connect(self.redo)
         self._wire_geometry_controls()
@@ -161,6 +169,84 @@ class DeviceBuilderWorkspace(QWidget):
             editor.editingFinished.connect(lambda: self._run_geometry(self.set_device_padding_from_controls))
         self.placement.fit_cell_button.clicked.connect(lambda: self._run_geometry(self.fit_cell_to_device))
         self.placement.check_overlaps_button.clicked.connect(self.check_overlaps)
+
+    def _interface_regions(self, region_a_id, region_b_id):
+        region_a = self.device.get_region(region_a_id)
+        region_b = self.device.get_region(region_b_id)
+        if region_a is None or region_b is None:
+            raise ValueError("Select two valid interface regions.")
+        if region_a.id == region_b.id:
+            raise ValueError("Interface regions must be different.")
+        return region_a, region_b
+
+    def match_interface(
+        self, region_a_id, region_b_id, *, mode=InterfaceMode.ALIGNED,
+        requested_twist_deg=0.0, max_strain=0.05, strain_mode="balanced",
+        gap=3.0, max_index=3, fit_cell_after_match=False,
+    ):
+        """Synchronously compute and commit one reversible Device interface command."""
+        region_a, region_b = self._interface_regions(region_a_id, region_b_id)
+        result = prepare_interface_match(
+            region_a, region_b, mode=mode, requested_twist_deg=requested_twist_deg,
+            max_strain=max_strain, strain_mode=strain_mode, gap=gap, max_index=max_index,
+        )
+        interface = self._commit_device_edit(
+            "Match Interface",
+            lambda: apply_interface_match(
+                self.device, result, fit_cell_after_match=bool(fit_cell_after_match)
+            ),
+        )
+        self.interface_controls.show_diagnostics(interface.diagnostics)
+        return interface
+
+    def start_interface_match(self):
+        if self._interface_thread is not None:
+            return
+        try:
+            values = self.interface_controls.parameters()
+            region_a, region_b = self._interface_regions(values.pop("region_a_id"), values.pop("region_b_id"))
+            self._interface_fit_cell_after_match = bool(values.pop("fit_cell_after_match"))
+        except Exception as error:
+            QMessageBox.warning(self, "Match Interface", str(error))
+            return
+        self.interface_controls.set_busy(True)
+        thread = QThread(self)
+        worker = InterfaceMatchWorker(region_a, region_b, values)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._interface_match_finished)
+        worker.failed.connect(self._interface_match_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(self._interface_thread_finished)
+        self._interface_thread = thread
+        self._interface_worker = worker
+        thread.start()
+
+    def _interface_match_finished(self, result):
+        try:
+            interface = self._commit_device_edit(
+                "Match Interface",
+                lambda: apply_interface_match(
+                    self.device, result,
+                    fit_cell_after_match=self._interface_fit_cell_after_match,
+                ),
+            )
+            self.interface_controls.show_diagnostics(interface.diagnostics)
+        except Exception as error:
+            QMessageBox.warning(self, "Match Interface", str(error))
+
+    def _interface_match_failed(self, message):
+        QMessageBox.warning(self, "Match Interface Failed", str(message))
+
+    def _interface_thread_finished(self):
+        if self._interface_worker is not None:
+            self._interface_worker.deleteLater()
+        if self._interface_thread is not None:
+            self._interface_thread.deleteLater()
+        self._interface_worker = None
+        self._interface_thread = None
+        self.interface_controls.set_busy(False)
 
     def add_region_from_structure(self, structure, name=None):
         """Add an independent source copy through the Device history boundary."""
@@ -336,3 +422,4 @@ class DeviceBuilderWorkspace(QWidget):
         self.region_tree.set_device(self.device, self.selected_region_id)
         self.properties.set_region(self.device.get_region(self.selected_region_id))
         self.placement.set_device(self.device, self.selected_region_id)
+        self.interface_controls.set_device(self.device)

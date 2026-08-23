@@ -881,7 +881,8 @@ valid and load with `Project.device is None`.
 
 Persist canonical Device/DeviceRegion source state only: stable IDs, roles,
 source Structures, transforms, visibility, metadata, Device cell/PBC,
-transport direction, padding, and origin offset. Do not persist assembled
+transport direction, padding, origin offset, and semantic DeviceInterfaces.
+Do not persist assembled
 previews, viewport state, bounds, collision caches, selections, or history.
 
 Malformed optional Device data must not prevent the remainder of a Project from
@@ -920,23 +921,12 @@ Prefer:
 
 # 36. DEVICE UNDO / REDO
 
-Device Builder does not yet have Device-specific history.
+Device Builder has session-only snapshot-based DeviceHistory. It is independent
+of frozen Builder atomistic history and is routed by active workspace. Device
+commands, including explicit interface matching, must use this history as one
+meaningful reversible action.
 
-Do not reuse Builder's atomistic history stack automatically.
-
-Future Device actions such as:
-
-- add region;
-- delete region;
-- move region;
-- rotate region;
-- rename region;
-- change role;
-- change visibility;
-
-should eventually belong to Device-specific commands/history.
-
-Do not couple the two histories without an explicit design.
+Do not couple the two histories or serialize Device history into `.qs` files.
 
 ---
 
@@ -979,13 +969,11 @@ Planned:
 
 ## Stage 3 — Interface integration
 
-Planned:
+COMPLETE.
 
-- reuse shared lattice matcher;
-- Heterostructure integration;
-- Moiré integration;
-- interface preparation;
-- compatible lattice assembly.
+Uses frozen public Heterostructure/Moiré APIs for aligned and twisted Z-stacked
+interfaces. DeviceInterface retains semantic links and diagnostics; matching is
+an explicit reversible source-structure replacement operation.
 
 ## Stage 4 — Device templates
 
@@ -1019,19 +1007,16 @@ These operations should update DeviceRegion transforms, not destructively rewrit
 
 ---
 
-# 39. FUTURE INTERFACE MATCHING
+# 39. DEVICE INTERFACE MATCHING
 
-Device Builder should not implement a second lattice-matching engine.
+Device Builder must not implement a second lattice-matching engine. Stage 3
+interfaces reuse frozen public Builder Heterostructure/Moiré APIs, which in turn
+use the validated shared lattice matcher. Do not duplicate or alter matcher
+mathematics during Device work.
 
-Future Device interface operations must reuse:
-
-    frontend.builder.build.lattice_matching
-
-Heterostructure and Moiré already provide validated scientific foundations.
-
-Do not duplicate the matcher inside Device Builder.
-
-If Device Builder needs a new public matcher capability, extend the shared public boundary carefully and preserve existing tests.
+Interface matching is explicit and may replace the two participating Region
+source Structures with matched supercells. Preserve Region IDs and make the
+operation one reversible Device history command.
 
 ---
 

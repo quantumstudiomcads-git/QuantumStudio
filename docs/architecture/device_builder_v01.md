@@ -153,9 +153,66 @@ Ctrl+Z, Ctrl+Shift+Z, and Ctrl+Y actions to Device Builder only while that
 workspace is active; Builder operations continue to use the frozen Builder
 history when Builder is active.
 
+## Device interfaces and shared matching
+
+A `DeviceInterface` is a persistent semantic relationship between exactly two
+DeviceRegions. It stores stable interface/region IDs, aligned or twisted mode,
+requested twist, max strain, existing Builder strain mode, gap, max index, and
+serializable scientific diagnostics. It has no transport behavior.
+
+Device Builder does **not** implement a matcher. Its interface service calls
+only the frozen public Builder APIs:
+
+- `frontend.builder.build.heterostructure.create_heterostructure` for aligned
+  Z-stacked interfaces;
+- `frontend.builder.build.moire.create_moire_structure` for twisted interfaces.
+
+Those APIs remain the source of truth for HNF matching, Cartesian residuals,
+polar-decomposition strains, common-target construction, strict Moiré rotation
+preservation, and atomic assembly. The ordered A/B result is split using the
+recorded determinant-derived atom counts and converted through `StructureIO`.
+
+## Interface source-replacement policy
+
+Normal placement remains non-destructive. **Match Interface** is an explicit,
+reversible geometry-generation command: it replaces the two participating
+Region source Structures with their matched/deformed A and B supercells and
+resets only those regions' Device transforms to zero. Their stable Region IDs,
+roles, visibility, and metadata remain unchanged. The replacement sources
+already contain the accepted common lattice, requested physical twist (once),
+and outermost-plane Z gap.
+
+This currently supports only Z-stacked interfaces, matching the frozen Builder
+Heterostructure/Moiré semantics. Stage 2 geometric left/right placement remains
+separate; arbitrary crystallographic X/Y interfaces are not claimed.
+
+An interface match is one Device history snapshot. Undo restores both original
+source structures, transforms, interface list, cell/origin state, and redo
+restores the matched state deterministically. Removing a participating Region
+cleans up its interfaces; duplicating a Region creates no interface links.
+
+## Interface safety and UI responsiveness
+
+Interface input validates distinct regions, native source structures, planar
+cells through the shared Builder APIs, finite twist/strain/gap, and positive
+max index. A conservative 100,000 atom hard cap rejects excessive searches.
+The UI shows determinants, atom count, principal strain, residual rotation,
+Cartesian residual, requested twist, and gap after a successful match.
+
+The UI runs matching in a short-lived `QThread` worker. The worker only computes
+an `InterfaceMatchResult`; it never mutates Device or widgets. The main thread
+commits the one history command. The frozen matcher is bounded but not
+cancellable during an individual call, so the UI disables Match while a worker
+is active.
+
+Interfaces are serialized as an optional `Device.interfaces` list inside the
+existing v0.3 optional Device section. Existing v0.3 Device records without
+`interfaces` deserialize as an empty list. Candidate caches, worker state, and
+history remain non-persistent.
+
 ## Deferred work
 
-Still deferred: periodic collision checks, lattice/interface matching,
-Heterostructure/Moiré integration, collision visualization, templates,
-electrodes, gates, NEGF, transport physics, and Device-specific command
-coalescing beyond widget `editingFinished` commits.
+Still deferred: periodic collision checks, interface candidate browsing or
+cancellation, arbitrary non-Z interface orientation, Heterostructure/Moiré
+templates, collision visualization, electrodes, gates, NEGF, transport physics,
+and Device-specific command coalescing beyond widget `editingFinished` commits.

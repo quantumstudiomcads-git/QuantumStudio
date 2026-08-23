@@ -3,10 +3,12 @@ import numpy as np
 from frontend.core.structure import Atom, Structure
 from .validation import validate_device
 
+
 @dataclass(frozen=True)
 class DeviceAssembly:
     structure: Structure
     atom_region_ids: tuple[str, ...]
+
 
 def _derived_preview_cell(atoms):
     if not atoms:
@@ -15,19 +17,22 @@ def _derived_preview_cell(atoms):
     lengths = np.maximum(positions.max(axis=0) - positions.min(axis=0), 1.0) + 10.0
     return np.diag(lengths).tolist()
 
+
 def assemble_device(device):
-    validate_device(device).require_valid()
+    validate_device(device, allow_empty=True).require_valid()
     atoms, membership = [], []
+    origin_offset = np.asarray(getattr(device, "origin_offset", (0.0, 0.0, 0.0)), dtype=float)
     for region in device.regions:
         if not region.visible:
             continue
         transformed = region.transformed_structure()
         for atom in transformed.atoms:
-            atoms.append(Atom(atom.element, atom.x, atom.y, atom.z))
+            position = np.asarray((atom.x, atom.y, atom.z), dtype=float) + origin_offset
+            atoms.append(Atom(atom.element, *position.tolist()))
             membership.append(region.id)
     cell = device.cell if device.cell is not None else _derived_preview_cell(atoms)
     periodic = list(device.periodic) if device.cell is not None else [False, False, False]
     structure = Structure(atoms=atoms, cell=[[float(value) for value in vector] for vector in cell], name=device.name)
     structure.periodic = periodic
-    validate_device(device, assembled_structure=structure).require_valid()
+    validate_device(device, assembled_structure=structure, allow_empty=True).require_valid()
     return DeviceAssembly(structure=structure, atom_region_ids=tuple(membership))

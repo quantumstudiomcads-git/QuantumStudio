@@ -38,3 +38,23 @@ class DeviceWorkspaceTests(unittest.TestCase):
         self.assertEqual(workspace.region_tree.tree.topLevelItemCount(), 0)
         self.assertEqual(len(workspace.viewport.atoms), 0)
         workspace.close()
+
+    def test_add_current_builder_structure_uses_project_public_structure_copy(self):
+        app()
+        project = Project("Current Builder Structure")
+        source = Structure([Atom("Si", 1.0, 2.0, 3.0)], [[4.0, 0.0, 0.0], [0.0, 4.0, 0.0], [0.0, 0.0, 4.0]], name="Builder Source")
+        project.set_structure(source)
+        before = project.get_structure().to_dict()
+        workspace = DeviceBuilderWorkspace(project)
+        region = workspace.add_current_builder_structure()
+        self.assertIsNotNone(region)
+        self.assertIsNot(region.source_structure, source)
+        workspace.selected_region_id = region.id
+        workspace.update_region({
+            "id": region.id, "name": region.name, "role": region.role,
+            "visible": True, "translation": (9.0, 0.0, 0.0), "rotation": (0.0, 0.0, 0.0),
+        })
+        self.assertEqual(project.get_structure().to_dict(), before)
+        self.assertEqual(workspace.viewport.atoms[0].x, 10.0)
+        self.assertTrue(hasattr(workspace, "placement"))
+        workspace.close()

@@ -3,6 +3,7 @@ import numpy as np
 from frontend.core.structure import Structure
 from frontend.device_builder.model.device import VALID_TRANSPORT_DIRECTIONS
 
+
 @dataclass
 class DeviceValidationResult:
     errors: list[str] = field(default_factory=list)
@@ -16,13 +17,16 @@ class DeviceValidationResult:
         if self.errors:
             raise ValueError("; ".join(self.errors))
 
-def validate_device(device, assembled_structure=None):
+
+def validate_device(device, assembled_structure=None, *, allow_empty=False, check_collisions=False, collision_scale=None):
     result = DeviceValidationResult()
     if not isinstance(getattr(device, "id", None), str) or not device.id.strip():
         result.errors.append("Device requires a non-empty id.")
     if not isinstance(getattr(device, "name", None), str) or not device.name.strip():
         result.errors.append("Device requires a non-empty name.")
     region_ids = [region.id for region in getattr(device, "regions", ())]
+    if not region_ids and not allow_empty:
+        result.errors.append("Device must contain at least one region.")
     if len(region_ids) != len(set(region_ids)):
         result.errors.append("Device region ids must be unique.")
     for region in getattr(device, "regions", ()):
@@ -37,6 +41,14 @@ def validate_device(device, assembled_structure=None):
         result.errors.append("Device PBC must contain three Boolean values.")
     if getattr(device, "transport_direction", None) not in VALID_TRANSPORT_DIRECTIONS:
         result.errors.append("Device transport direction must be X, Y, or Z.")
+    for label, values, nonnegative in (
+        ("Device padding", getattr(device, "padding", (5.0, 5.0, 5.0)), True),
+        ("Device origin offset", getattr(device, "origin_offset", (0.0, 0.0, 0.0)), False),
+    ):
+        array = np.asarray(values, dtype=float)
+        if array.shape != (3,) or not np.all(np.isfinite(array)) or (nonnegative and np.any(array < 0.0)):
+            qualifier = "non-negative " if nonnegative else ""
+            result.errors.append(f"{label} must contain three finite {qualifier}values.")
     if getattr(device, "cell", None) is not None:
         cell = np.asarray(device.cell, dtype=float)
         if cell.shape != (3, 3) or not np.all(np.isfinite(cell)):
@@ -47,4 +59,15 @@ def validate_device(device, assembled_structure=None):
         positions = np.asarray([(atom.x, atom.y, atom.z) for atom in assembled_structure.atoms], dtype=float)
         if positions.size and not np.all(np.isfinite(positions)):
             result.errors.append("Assembled coordinates must be finite.")
+        if positions.size and getattr(device, "cell", None) is not None and not result.errors:
+            cell = np.asarray(device.cell, dtype=float)
+            fractional = positions @ np.linalg.inv(cell)
+            tolerance = 1.0e-8
+            if np.any(fractional < -tolerance) or np.any(fractional > 1.0 + tolerance):
+                result.warnings.append("Assembled geometry extends outside the explicit Device cell.")
+    if check_collisions and not result.errors:
+        from .collisions import DEFAULT_COLLISION_SCALE, detect_inter_region_collisions
+        collisions = detect_inter_region_collisions(device, DEFAULT_COLLISION_SCALE if collision_scale is None else collision_scale)
+        if collisions:
+            result.warnings.append(f"{len(collisions)} possible inter-region atomic overlap(s) detected.")
     return result

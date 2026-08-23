@@ -5,6 +5,7 @@ from .region import DeviceRegion
 
 VALID_TRANSPORT_DIRECTIONS = ("X", "Y", "Z")
 
+
 @dataclass
 class Device:
     name: str = "Untitled Device"
@@ -12,9 +13,16 @@ class Device:
     cell: list[list[float]] | None = None
     periodic: tuple[bool, bool, bool] = (False, False, False)
     transport_direction: str = "Z"
+    padding: tuple[float, float, float] = (5.0, 5.0, 5.0)
+    origin_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
     metadata: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: str(uuid4()))
     _last_assembly: object = field(default=None, init=False, repr=False)
+
+    def __post_init__(self):
+        self.periodic = tuple(self.periodic)
+        self.padding = tuple(float(value) for value in self.padding)
+        self.origin_offset = tuple(float(value) for value in self.origin_offset)
 
     def add_region(self, region):
         if not isinstance(region, DeviceRegion):

@@ -2,9 +2,11 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 from frontend.device_builder.model.roles import role_label
 
+
 class RegionTree(QWidget):
     selection_changed = Signal(str)
     add_requested = Signal()
+    add_current_requested = Signal()
     remove_requested = Signal()
     duplicate_requested = Signal()
 
@@ -16,15 +18,16 @@ class RegionTree(QWidget):
         self.tree.itemSelectionChanged.connect(self._emit_selection)
         layout.addWidget(self.tree)
         actions = QHBoxLayout()
-        self.add_button = QPushButton("+ Add Region")
-        self.remove_button = QPushButton("- Remove")
+        self.add_button = QPushButton("Add From File")
+        self.add_current_button = QPushButton("Add Current")
+        self.remove_button = QPushButton("Remove")
         self.duplicate_button = QPushButton("Duplicate")
         self.add_button.clicked.connect(self.add_requested)
+        self.add_current_button.clicked.connect(self.add_current_requested)
         self.remove_button.clicked.connect(self.remove_requested)
         self.duplicate_button.clicked.connect(self.duplicate_requested)
-        actions.addWidget(self.add_button)
-        actions.addWidget(self.remove_button)
-        actions.addWidget(self.duplicate_button)
+        for button in (self.add_button, self.add_current_button, self.remove_button, self.duplicate_button):
+            actions.addWidget(button)
         layout.addLayout(actions)
 
     def set_device(self, device, selected_id=None):

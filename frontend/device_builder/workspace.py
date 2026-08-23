@@ -14,7 +14,10 @@ from frontend.device_builder.assembly import (
 from frontend.device_builder.interface import apply_interface_match, prepare_interface_match
 from frontend.device_builder.interface.worker import InterfaceMatchWorker
 from frontend.device_builder.model import Device, DeviceHistory, DeviceRegion, InterfaceMode, RegionRole
-from frontend.device_builder.ui import InterfaceControls, PlacementControls, RegionProperties, RegionTree
+from frontend.device_builder.templates import DEFAULT_TEMPLATE_REGISTRY
+from frontend.device_builder.ui import (
+    InterfaceControls, PlacementControls, RegionProperties, RegionTree, TemplateControls, TemplateDialog,
+)
 
 
 class DeviceBuilderWorkspace(QWidget):
@@ -27,6 +30,7 @@ class DeviceBuilderWorkspace(QWidget):
         self.project = project
         self.device = self._project_device_or_empty()
         self.history = DeviceHistory()
+        self.template_registry = DEFAULT_TEMPLATE_REGISTRY
         self.selected_region_id = None
         self._interface_thread = None
         self._interface_worker = None
@@ -56,10 +60,12 @@ class DeviceBuilderWorkspace(QWidget):
         history_layout.addWidget(self.undo_button)
         history_layout.addWidget(self.redo_button)
         panel_layout.addWidget(self.history_controls)
+        self.template_controls = TemplateControls(self.template_registry)
         self.region_tree = RegionTree()
         self.properties = RegionProperties()
         self.placement = PlacementControls()
         self.interface_controls = InterfaceControls()
+        panel_layout.addWidget(self.template_controls)
         panel_layout.addWidget(self.region_tree)
         panel_layout.addWidget(self.properties)
         panel_layout.addWidget(self.placement)
@@ -71,6 +77,7 @@ class DeviceBuilderWorkspace(QWidget):
         layout.addWidget(panel_scroll)
         layout.addWidget(self.viewport, 1)
 
+        self.template_controls.create_requested.connect(self.open_template_dialog)
         self.region_tree.add_requested.connect(self.add_region_from_file)
         self.region_tree.add_current_requested.connect(self.add_current_builder_structure)
         self.region_tree.remove_requested.connect(self.remove_selected_region)
@@ -247,6 +254,61 @@ class DeviceBuilderWorkspace(QWidget):
         self._interface_worker = None
         self._interface_thread = None
         self.interface_controls.set_busy(False)
+
+    def _template_source_options(self):
+        """Return independent canonical Structure choices without reading Builder widgets."""
+        options = []
+        if self.project is not None:
+            structure = self.project.get_structure()
+            if structure is not None and structure.atoms:
+                options.append((f"Current Builder Structure ({structure.name or 'Structure'})", structure.copy()))
+        for region in self.device.regions:
+            if region.source_structure.atoms:
+                options.append((f"Region: {region.name}", region.source_structure.copy()))
+        return tuple(options)
+
+    def create_template(self, template_id, parameters, *, replace=False):
+        """Build a complete Device transactionally and commit it as one history entry."""
+        template = self.template_registry.get(template_id)
+        # Build before touching the active Device. A failed domain build is therefore atomic.
+        result = template.build(**dict(parameters))
+        if self.device.regions and not replace:
+            raise ValueError("Creating a template would replace the current Device; confirmation is required.")
+
+        def operation():
+            self.device = result.device
+            self.selected_region_id = self.device.regions[0].id if self.device.regions else None
+            return result
+
+        committed = self._commit_device_edit(f"Create Template: {template.name}", operation)
+        return committed
+
+    def open_template_dialog(self, template_id):
+        try:
+            template = self.template_registry.get(template_id)
+            sources = self._template_source_options()
+            if not sources:
+                raise ValueError("Add a region or load a Builder structure before creating a Device template.")
+            dialog = TemplateDialog(template, sources, self)
+            if dialog.exec() != dialog.Accepted:
+                return None
+            replace = False
+            if self.device.regions:
+                answer = QMessageBox.question(
+                    self, "Replace Current Device?",
+                    "Creating a template replaces the current Device configuration. You can undo this operation. Continue?",
+                    QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel,
+                )
+                if answer != QMessageBox.Yes:
+                    return None
+                replace = True
+            result = self.create_template(template_id, dialog.parameters(), replace=replace)
+            if result.warnings:
+                QMessageBox.warning(self, template.name, "\n".join(result.warnings))
+            return result
+        except Exception as error:
+            QMessageBox.warning(self, "Create Device Template", str(error))
+            return None
 
     def add_region_from_structure(self, structure, name=None):
         """Add an independent source copy through the Device history boundary."""

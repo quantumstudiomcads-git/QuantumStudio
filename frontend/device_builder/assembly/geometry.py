@@ -101,8 +101,8 @@ def align_region_centers(moving_region, reference_region, axes: str = "XYZ") -> 
     if moving_region.id == reference_region.id:
         raise ValueError("The moving and reference regions must be different.")
     requested = str(axes).upper()
-    if requested not in {"X", "Y", "Z", "XY", "XYZ"}:
-        raise ValueError("Center alignment axes must be X, Y, Z, XY, or XYZ.")
+    if requested not in {"X", "Y", "Z", "XY", "XZ", "YZ", "XYZ"}:
+        raise ValueError("Center alignment axes must be X, Y, Z, XY, XZ, YZ, or XYZ.")
     moving = np.asarray(transformed_region_bounds(moving_region).center, dtype=float)
     reference = np.asarray(transformed_region_bounds(reference_region).center, dtype=float)
     delta = np.zeros(3, dtype=float)

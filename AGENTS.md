@@ -977,15 +977,24 @@ an explicit reversible source-structure replacement operation.
 
 ## Stage 4 — Device templates
 
-Potential:
+COMPLETE.
 
-- vertical heterostructure;
-- lateral two-probe;
-- FET;
-- tunnel junction;
-- adsorbate/substrate.
+`frontend.device_builder.templates` owns a Qt-free `DeviceTemplate` contract
+and deterministic registry. Templates build complete replacement Devices
+transactionally, compose existing Device Builder primitives, and commit as one
+DeviceHistory command from the workspace. Do not add template-specific geometry
+algorithms to workspace UI code.
 
-Do not jump to Stage 4 before placement/interface foundations are stable.
+Initial templates are:
+
+- Vertical Stack (optionally through the public Stage 3 interface path);
+- Lateral Two-Probe;
+- Tunnel Junction;
+- Surface + Adsorbate.
+
+These are geometry/semantic-role constructors only. They do not imply NEGF,
+principal layers, valid transport leads, calculations, relaxation, or automated
+adsorption-site discovery.
 
 ---
 

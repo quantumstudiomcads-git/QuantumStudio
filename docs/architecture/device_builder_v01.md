@@ -38,7 +38,7 @@ The source Structure is never edited.
 - **Left:** `xmax(moving) = xmin(reference) - gap`
 
 The UI defaults the bounding-plane gap to 3.0 Å. Center alignment supports X,
-Y, Z, XY, and XYZ. Surface alignment supports equal named top, bottom, left,
+Y, Z, XY, XZ, YZ, and XYZ. Surface alignment supports equal named top, bottom, left,
 and right bounding planes. Reference and moving regions must be distinct.
 
 ## Repetition
@@ -210,9 +210,62 @@ existing v0.3 optional Device section. Existing v0.3 Device records without
 `interfaces` deserialize as an empty list. Candidate caches, worker state, and
 history remain non-persistent.
 
+
+## Device templates
+
+`frontend.device_builder.templates` is a Qt-free convenience-construction
+layer. Its public `DeviceTemplate` contract exposes stable `id`, `name`,
+`description`, `required_inputs`, `validate(**parameters)`, and
+`build(**parameters)` members. `build` always constructs a complete, new
+`Device`; it never mutates an active Device or an input native `Structure`.
+`TemplateRegistry` owns the deterministic set of available templates, so the
+workspace contains no template-specific switchboard.
+
+The Device Builder UI contains a compact registry-driven **Device Template**
+selector. Its dialog collects canonical Structures from the public Project
+structure boundary or existing Region source copies. File selection remains a
+normal Add Region workflow; template-domain modules never open dialogs or
+inspect widgets. Creating a template replaces the active Device only after a
+clear confirmation. The entire replacement is one DeviceHistory snapshot, so
+undo restores the exact prior Device and redo restores the generated one.
+
+Template provenance is optional, non-authoritative Device metadata:
+`template_id`, `template_name`, and serializable template parameters. The
+actual Device/Region geometry remains the persistent source of truth and uses
+the existing optional v0.3 Device serialization without a template-specific
+project format.
+
+### Initial templates
+
+- **Vertical Stack** creates two `ACTIVE_LAYER` regions, aligns their XY
+  bounding-box centres, places the top above the bottom with the requested
+  outermost-plane Z gap, and fits the Device cell. Its optional interface mode
+  delegates exclusively to the Stage 3 public aligned/Moiré interface service;
+  it does not implement lattice matching itself. Zero twist selects aligned
+  matching, nonzero twist selects the strict Moiré path.
+- **Lateral Two-Probe** creates ordered `ELECTRODE`, `CHANNEL`, and
+  `ELECTRODE` regions. It aligns YZ centres, applies independent left/right X
+  bounding-plane gaps, fits the cell, and stores semantic transport direction
+  `X`. This is geometry and role metadata only, not an NEGF-ready device.
+- **Tunnel Junction** uses the same lateral placement primitives with
+  `ELECTRODE`, `DIELECTRIC`, and `ELECTRODE` roles. It does not infer material
+  metallicity or generate a calculation.
+- **Surface + Adsorbate** creates `SUBSTRATE` and `ADSORBATE` regions. The
+  adsorbate is rotated through its existing DeviceRegion transform, XY-centred,
+  given the requested lateral offset, placed above the substrate by an
+  outermost-plane separation, and fitted with user padding/vacuum. It does not
+  search adsorption sites.
+
+All templates reuse Stage 2 placement/alignment/cell-fit/collision helpers and
+Stage 3 interface operations where scientifically appropriate. Collision
+results are warnings in `TemplateBuildResult`; no template silently changes
+geometry to resolve them. Template build is transactional: validation or
+interface failure returns no partial active-Device mutation and records no
+history command.
+
 ## Deferred work
 
 Still deferred: periodic collision checks, interface candidate browsing or
-cancellation, arbitrary non-Z interface orientation, Heterostructure/Moiré
-templates, collision visualization, electrodes, gates, NEGF, transport physics,
+cancellation, arbitrary non-Z interface orientation, additional interface-template workflows,
+collision visualization, electrodes, gates, NEGF, transport physics,
 and Device-specific command coalescing beyond widget `editingFinished` commits.

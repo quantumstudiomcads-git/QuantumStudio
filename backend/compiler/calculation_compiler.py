@@ -32,8 +32,10 @@ class CalculationCompiler:
         tasks = self._public_tasks(graph, parameters)
         if "wannierization" in self.request.selected_calculations:
             tasks = self._expand_wannierization(tasks, parameters)
+        elif "electron_phonon" in self.request.selected_calculations:
+            tasks = self._expand_electron_phonon(tasks, parameters)
         plan = ExecutionPlan(calculation_id=self.request.id, selected_calculations=list(self.request.selected_calculations), resolved_calculations=[task.calculation_id for task in tasks], execution_target=self.request.execution_target, parameters=dict(self.request.parameters), calculation_parameters=parameters, structure=dict(self.request.structure), tasks=tasks)
-        plan.metadata.update({"parameters": parameters, "dependency_graph": ({task.id: list(task.depends_on_task_ids) for task in tasks} if "wannierization" in self.request.selected_calculations else {item: list(graph.dependencies_for(item)) for item in graph.ordered_calculations}), "parameter_precedence": ["schema_defaults", "accuracy_preset", "workflow_dependency_defaults", "structure_derived_defaults", "explicit_request_parameters"], "structure_reference": "request_snapshot"})
+        plan.metadata.update({"parameters": parameters, "dependency_graph": ({task.id: list(task.depends_on_task_ids) for task in tasks} if ({"wannierization", "electron_phonon"} & set(self.request.selected_calculations)) else {item: list(graph.dependencies_for(item)) for item in graph.ordered_calculations}), "parameter_precedence": ["schema_defaults", "accuracy_preset", "workflow_dependency_defaults", "structure_derived_defaults", "explicit_request_parameters"], "structure_reference": "request_snapshot"})
         return plan
 
     def _public_tasks(self, graph, parameters):
@@ -54,6 +56,21 @@ class CalculationCompiler:
         run = PlannedTask(id=f"{self.request.id}:wannier90_run", calculation_id="wannier90_run", semantic_task_type="wannier90_run", engine_id="wannier90", tool_id="wannier90.x", parameter_signature=_signature({"settings": settings, "stage": "run"}), depends_on_task_ids=(pp.id, pw2.id), parameters={"seedname": seed, "wannier": settings}, structure_reference="request_snapshot", artifact_inputs=("wannier_nnkp", "wannier_amn", "wannier_mmn", "wannier_eig"), artifact_outputs=("wannier_hr", "wannier_centres"), metadata={"command": ["wannier90.x", seed]})
         return [task for task in tasks if task is not public] + [nscf, pp, pw2, run]
 
+    def _expand_electron_phonon(self, tasks, parameters):
+        from backend.engines.epw.models import EPWSettings, EPWMeshMismatchError
+        settings = WannierInputSettings.from_parameters(self.request.parameters)
+        epw = EPWSettings.from_parameters(self.request.parameters)
+        if tuple(settings.mp_grid) != epw.nk_coarse:
+            raise EPWMeshMismatchError("Wannier mp_grid must equal EPW nk_coarse.")
+        scf = next(task for task in tasks if task.calculation_id == "scf")
+        public = next(task for task in tasks if task.calculation_id == "electron_phonon")
+        base = self._expand_wannierization([task for task in tasks if task is not public] + [PlannedTask(id=public.id, calculation_id="wannierization", semantic_task_type="wannierization", parameters={})], {**parameters, "wannierization": {}})
+        # The C5A expansion provides the compatible signed NSCF/Wannier chain.
+        nscf = next(task for task in base if task.semantic_task_type == "qe_pw_nscf")
+        run = next(task for task in base if task.semantic_task_type == "wannier90_run")
+        ph = PlannedTask(id=f"{self.request.id}:qe_ph_epw", calculation_id="qe_ph_epw", semantic_task_type="qe_ph_epw", engine_id="quantum_espresso", tool_id="ph.x", parameter_signature=_signature({"q":epw.nq_coarse}), depends_on_task_ids=(scf.id,), parameters={"qmesh":list(epw.nq_coarse)}, structure_reference="request_snapshot", artifact_inputs=("qe_save",), artifact_outputs=("qe_dynamical_matrix","qe_dvscf","qe_qpoint_metadata"), metadata={"purpose":"epw"})
+        task = PlannedTask(id=f"{self.request.id}:epw_run", calculation_id="epw_run", semantic_task_type="epw_run", engine_id="epw", tool_id="epw.x", parameter_signature=_signature({"epw":epw,"nscf":nscf.parameter_signature}), depends_on_task_ids=(run.id,ph.id), parameters={"epw":epw}, structure_reference="request_snapshot", artifact_inputs=("qe_save","qe_wavefunctions","wannier_nnkp","wannier_amn","wannier_mmn","wannier_hr","qe_dynamical_matrix","qe_dvscf"), artifact_outputs=("epw_electron_phonon_data","epw_scattering_rates"), metadata={"external_wannier":True})
+        return base + [ph, task]
     def _shared_dependency_defaults(self, ordered_calculations):
         resolved, origins = {}, {}
         for calculation_id in ordered_calculations:

@@ -256,3 +256,15 @@ edges, artifact contracts, and inputs. Future execution will stage declared
 artifacts between task directories; C5A executes nothing. `wannier_bands` and
 all Berry/topology/Hall public objects remain deferred because no reliable
 k-path or downstream post-processing workflow is represented.
+
+## EPW electron-phonon workflow (C5B)
+
+`electron_phonon` is a supported public intent that expands privately into a
+shared SCF root, compatible Wannier NSCF/localization chain, `qe_ph_epw`, and
+`epw_run`. EPW is a distinct `epw` engine with `epw.x` tool identity. Its typed
+settings distinguish `nk_coarse`, `nq_coarse`, `nk_fine`, and `nq_fine`; the
+Wannier `mp_grid` must equal `nk_coarse`. DFPT uses one bounded `ldisp` q-grid
+task and declares dynamical-matrix/dvscf/q-point artifacts. EPW consumes QE,
+Wannier, and DFPT contracts externally (`wannierize=.false.`), declaring base
+coupling data and future scattering-rate artifacts. Eliashberg and Tc remain
+deferred. No engine or staging operation is executed.

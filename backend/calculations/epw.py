@@ -1,0 +1,3 @@
+from backend.calculations.definition import CalculationDefinition
+from backend.calculations.registry import registry
+registry.register(CalculationDefinition(id='electron_phonon',name='Electron-Phonon Coupling',category='Vibrational Properties',description='EPW electron-phonon coupling workflow.',requires=('scf',),workflow='epw.electron_phonon',engine='epw',tags=('epw','electron_phonon'),parameters=('num_wann','num_bands','projections','mp_grid','nk_coarse','nq_coarse','nk_fine','nq_fine')))

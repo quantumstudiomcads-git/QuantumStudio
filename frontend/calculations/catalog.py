@@ -478,6 +478,7 @@ register(
     "EPW",
     "Calculate coupling between electrons and phonons.",
     ["electron_phonon", "epw"],
+    "ready",
 )
 
 register(

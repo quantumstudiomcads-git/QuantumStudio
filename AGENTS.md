@@ -1344,6 +1344,8 @@ engine/executor until a dedicated milestone explicitly authorizes it.
 
 C5C BoltzTraP2 workflows are configuration-only private task DAGs: a purpose-signed QE transport NSCF declares `ElectronicBandsData`, and BTP2 JSON configuration consumes it without numerical fabrication, API invocation, executable execution, or result parsing. Preserve explicit relaxation-time output semantics (sigma per tau, kappa_e per tau, and power-factor per tau unless positive constant tau is declared); never infer 2D material thickness from vacuum.
 
+C5D NEGF transport must remain a standalone, Qt-free multi-component TransportInput contract until an explicit Device-to-Calculate adapter exists. A single CalculationRequest structure snapshot never represents a generic left/central/right device. NEGF configuration declares Hamiltonian/overlap and principal-layer artifacts only; it must not select an executable, construct numerical matrices, or execute a solver.
+
 Builder and Device Builder development must not destabilize calculation APIs.
 
 ---

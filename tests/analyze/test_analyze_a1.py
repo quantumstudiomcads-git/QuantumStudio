@@ -66,3 +66,17 @@ class AnalyzeA1Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             from pathlib import Path
             export_comparison(model,Path(d)); self.assertTrue((Path(d)/"comparison.json").is_file()); self.assertTrue((Path(d)/"series_01.csv").is_file())
+
+    def test_sampled_gap_direct_indirect_and_unresolved(self):
+        from backend.analyze.electronic import analyze_band_edges
+        p=ResultProvenance("r","e","t","qe","bands.x",(),{},"fixture")
+        r=ScientificResult("BandStructureResult",ResultStatus.VALID,p,arrays={"energies":[[0,4],[1,3]]},metadata={"occupied_band_count":1,"kpoints":[[0,0,0],[.5,0,0]]})
+        a=analyze_band_edges(r); self.assertEqual(a.status,"VALID"); self.assertEqual(a.classification,"DIRECT_SAMPLED_PATH")
+        unknown=ScientificResult("BandStructureResult",ResultStatus.VALID,p,arrays={"energies":[[0,2],[1,3]]})
+        self.assertEqual(analyze_band_edges(unknown).status,"UNRESOLVED_OCCUPANCY")
+
+    def test_effective_mass_requires_cell_and_returns_diagnostic(self):
+        from backend.analyze.electronic import fit_effective_mass, BandEdge
+        p=ResultProvenance("r","e","t","qe","bands.x",(),{},"fixture")
+        r=ScientificResult("BandStructureResult",ResultStatus.VALID,p,arrays={"energies":[[0,1],[.1,1],[.4,1]],"kpoints":[[0,0,0],[.01,0,0],[.02,0,0]]},metadata={"cell":[[10,0,0],[0,10,0],[0,0,10]]})
+        fit=fit_effective_mass(r,BandEdge(.0,0,0),points_each_side=2); self.assertIn(fit.status,{"VALID","INSUFFICIENT_POINTS"})

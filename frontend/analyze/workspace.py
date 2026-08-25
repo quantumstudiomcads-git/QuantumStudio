@@ -7,6 +7,7 @@ from backend.analyze.transforms import result_kind,tabular_data,pdos_channels
 from backend.analyze.comparison import AnalysisSeries, ComparisonModel, provenance_differences, difference_eligible
 from backend.analyze.export import export_comparison
 from backend.analyze.transforms import energy_reference, exact_difference
+from backend.analyze.electronic import analyze_band_edges
 from frontend.analyze.plots.compare import ComparisonPlot
 from frontend.analyze.plots.bands import BandPlot
 from frontend.analyze.plots.dos import DOSPlot
@@ -141,7 +142,9 @@ class AnalyzeWorkspace(QWidget):
         try: self.current_result=self.service.load_result(root,execution,rid)
         except Exception as error: self.empty.setText("Result unavailable.\n"+str(error)); self.views.setCurrentWidget(self.empty); return
         self._populate_pdos_filters()
-        self.navigation.clear(); self.navigation.addItems(["Overview",result_kind(self.current_result),"Data","Provenance"]); self.navigation.setCurrentRow(0); self._show_overview()
+        self.navigation.clear(); items=["Overview",result_kind(self.current_result)]
+        if self.current_result.result_type == "BandStructureResult": items.append("Electronic Analysis")
+        items += ["Data","Provenance"]; self.navigation.addItems(items); self.navigation.setCurrentRow(0); self._show_overview()
     def _populate_pdos_filters(self):
         is_pdos=self.current_result is not None and self.current_result.result_type == "PDOSResult"
         self.pdos_controls.setVisible(is_pdos)
@@ -156,10 +159,12 @@ class AnalyzeWorkspace(QWidget):
 
     def _view_changed(self,row):
         if self.current_result is None:return
-        if row==0:self._show_overview()
-        elif row==1:self._show_plot()
-        elif row==2:self._show_table()
-        elif row==3:self._show_provenance()
+        label=self.navigation.item(row).text() if row >= 0 else ""
+        if label=="Overview":self._show_overview()
+        elif label in {"Band Structure","Density of States","Projected DOS","Phonon DOS"}:self._show_plot()
+        elif label=="Electronic Analysis":self._show_electronic()
+        elif label=="Data":self._show_table()
+        elif label=="Provenance":self._show_provenance()
     def _show_overview(self):
         r=self.current_result; p=r.provenance; lines=[f"Result: {result_kind(r)}",f"Status: {r.status.value}",f"Request: {p.request_id}",f"Execution: {p.execution_id}",f"Engine: {p.engine_id}",f"Tool: {p.tool_id}","", "Summary: "+r.summary()]
         if r.scalars: lines.extend(f"{k}: {v.get('value',v)} {v.get('units','')}" for k,v in r.scalars.items())
@@ -167,6 +172,15 @@ class AnalyzeWorkspace(QWidget):
             structure=r.metadata["final_structure"]; lines.append(f"Final structure available (read-only), atoms: {len(structure.get('atoms',()))}")
         if r.warnings: lines.extend(["","Warnings:"]+r.warnings)
         self.overview.setPlainText("\n".join(lines)); self.views.setCurrentWidget(self.overview)
+    def _show_electronic(self):
+        if not hasattr(self,"electronic_view"): self.electronic_view=QPlainTextEdit(self); self.electronic_view.setReadOnly(True); self.views.addWidget(self.electronic_view)
+        analysis=analyze_band_edges(self.current_result); lines=["Electronic Analysis",f"Status: {analysis.status}",f"Gap scope: {analysis.gap_scope}"]
+        if analysis.gap is not None: lines += [f"Sampled-path band gap: {analysis.gap:.6g} eV",f"Classification: {analysis.classification}"]
+        if analysis.vbm: lines.append(f"VBM: {analysis.vbm.energy:.6g} eV at sample {analysis.vbm.path_sample_index}")
+        if analysis.cbm: lines.append(f"CBM: {analysis.cbm.energy:.6g} eV at sample {analysis.cbm.path_sample_index}")
+        if analysis.warnings: lines += ["", "Warnings:"] + list(analysis.warnings)
+        self.electronic_view.setPlainText("\n".join(lines)); self.views.setCurrentWidget(self.electronic_view)
+
     def _show_plot(self):
         if self.current_result.result_type not in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult"}:
             self.views.setCurrentWidget(self.overview); return

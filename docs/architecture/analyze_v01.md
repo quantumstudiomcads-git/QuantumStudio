@@ -17,3 +17,7 @@ Compare Results uses a metadata-first Calculation → Execution → Result picke
 ## A5 comparison UI
 
 A5 exposes dependent Calculation → Execution → Result picking, session-only series labels/order/visibility, shared energy-reference and range controls, explicit `Difference B - A` mode, and comparison export packages (`comparison.json` plus per-series CSV). Difference mode uses only exact backend transforms with compatible axes/shapes; no interpolation is performed. Status warnings and subtraction direction remain visible. Total-energy interpretation across differing Hamiltonians remains prohibited.
+
+## A6 derived electronic analysis
+
+Band-edge analysis consumes only structured BandStructureResult data and defensible occupation metadata. It returns typed VBM/CBM/gap objects with `sampled_path`, `full_bz`, or `unknown` scope; path extrema are never called fundamental without full-BZ provenance. Directness uses physical k-point equivalence, including repeated reciprocal points. Effective mass uses physical reciprocal distance and local quadratic fits with sample count, curvature, R², range, direction, and quality warnings. Original ScientificResult arrays are immutable; unresolved occupancy, crossings, insufficient samples, and invalid cells return unavailable diagnostics.

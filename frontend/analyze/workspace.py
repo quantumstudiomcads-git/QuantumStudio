@@ -3,7 +3,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,QComboBox,QListWidget,QListWidgetItem,QStackedWidget,QPlainTextEdit,QPushButton,QFileDialog,QSplitter,QTableWidget,QTableWidgetItem,QMessageBox
 from frontend.services.result_service import ResultService
-from backend.analyze.transforms import result_kind,tabular_data
+from backend.analyze.transforms import result_kind,tabular_data,pdos_channels
 from frontend.analyze.plots.bands import BandPlot
 from frontend.analyze.plots.dos import DOSPlot
 from frontend.analyze.plots.base import ScientificPlotWidget
@@ -16,12 +16,19 @@ class AnalyzeWorkspace(QWidget):
         root=QVBoxLayout(self); header=QHBoxLayout(); title=QLabel("Analyze"); title.setStyleSheet("font-size:16px;font-weight:600;"); header.addWidget(title); header.addStretch(); self.attach=QPushButton("Open Results Folder…",self); self.attach.clicked.connect(self._attach_root); header.addWidget(self.attach); root.addLayout(header)
         selectors=QHBoxLayout(); self.calculation=QComboBox(self); self.execution=QComboBox(self); self.result=QComboBox(self); selectors.addWidget(QLabel("Calculation:")); selectors.addWidget(self.calculation,1); selectors.addWidget(QLabel("Execution:")); selectors.addWidget(self.execution,1); selectors.addWidget(QLabel("Result:")); selectors.addWidget(self.result,1); root.addLayout(selectors)
         self.calculation.currentIndexChanged.connect(self._calculation_changed); self.execution.currentIndexChanged.connect(self._execution_changed); self.result.currentIndexChanged.connect(self._result_changed)
+        self.pdos_controls=QWidget(self); pf=QHBoxLayout(self.pdos_controls); pf.setContentsMargins(0,0,0,0); self.pdos_species=QComboBox(self); self.pdos_atom=QComboBox(self); self.pdos_orbital=QComboBox(self); self.pdos_component=QComboBox(self); self.pdos_aggregation=QComboBox(self); self.pdos_aggregation.addItems(["None","By species","By atom","By orbital"]);
+        for label, box in (("Species",self.pdos_species),("Atom",self.pdos_atom),("Orbital",self.pdos_orbital),("Component",self.pdos_component),("Aggregation",self.pdos_aggregation)): pf.addWidget(QLabel(label+":")); pf.addWidget(box)
+        self.pdos_controls.setVisible(False); root.addWidget(self.pdos_controls)
+        for box in (self.pdos_species,self.pdos_atom,self.pdos_orbital,self.pdos_component,self.pdos_aggregation): box.currentIndexChanged.connect(self._refresh_pdos_view)
         split=QSplitter(Qt.Orientation.Horizontal); self.navigation=QListWidget(self); self.navigation.setMaximumWidth(190); self.navigation.currentRowChanged.connect(self._view_changed); self.views=QStackedWidget(self); split.addWidget(self.navigation); split.addWidget(self.views); split.setStretchFactor(1,1); root.addWidget(split,1)
         self.overview=QPlainTextEdit(self); self.overview.setReadOnly(True); self.views.addWidget(self.overview); self.plot=ScientificPlotWidget(self); self.views.addWidget(self.plot); self.table=QTableWidget(self); self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.views.addWidget(self.table); self.provenance=QPlainTextEdit(self); self.provenance.setReadOnly(True); self.views.addWidget(self.provenance)
         self.empty=QLabel("No results to analyze.\n\nRun and parse a calculation in Calculate first.",self); self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter); self.views.addWidget(self.empty); self.views.setCurrentWidget(self.empty); self._populate_calculations()
     def _populate_calculations(self):
         self.calculation.clear()
-        for request in self.project.get_calculations(): self.calculation.addItem(request.name or request.calculation_id,request.id)
+        for request in self.project.get_calculations():
+            self.calculation.addItem(request.name or request.calculation_id, request.id)
+        if hasattr(self.project, "execution_roots"):
+            self.workflow_roots.update({str(k): str(v) for k, v in self.project.execution_roots().items()})
         self._calculation_changed()
     def set_workflow_root(self, request_id, root): self.workflow_roots[str(request_id)]=str(Path(root).resolve()); self._calculation_changed()
     def _attach_root(self):
@@ -46,7 +53,20 @@ class AnalyzeWorkspace(QWidget):
         if not root or not execution or not rid: self.navigation.clear(); self.views.setCurrentWidget(self.empty); return
         try: self.current_result=self.service.load_result(root,execution,rid)
         except Exception as error: self.empty.setText("Result unavailable.\n"+str(error)); self.views.setCurrentWidget(self.empty); return
+        self._populate_pdos_filters()
         self.navigation.clear(); self.navigation.addItems(["Overview",result_kind(self.current_result),"Data","Provenance"]); self.navigation.setCurrentRow(0); self._show_overview()
+    def _populate_pdos_filters(self):
+        is_pdos=self.current_result is not None and self.current_result.result_type == "PDOSResult"
+        self.pdos_controls.setVisible(is_pdos)
+        if not is_pdos:return
+        channels=self.current_result.metadata.get("components",())
+        def fill(box, values): box.blockSignals(True); box.clear(); box.addItem("All"); [box.addItem(str(v)) for v in sorted({str(v) for v in values if v not in (None, "")})]; box.blockSignals(False)
+        fill(self.pdos_species,[c.get("species",c.get("element")) for c in channels]); fill(self.pdos_atom,[c.get("atom",c.get("atom_index")) for c in channels]); fill(self.pdos_orbital,[c.get("orbital",c.get("label")) for c in channels]); fill(self.pdos_component,[c.get("component",c.get("m")) for c in channels])
+    def _refresh_pdos_view(self,*_):
+        if self.current_result is not None and self.current_result.result_type == "PDOSResult":
+            if self.navigation.currentRow() == 1:self._show_plot()
+            elif self.navigation.currentRow() == 2:self._show_table()
+
     def _view_changed(self,row):
         if self.current_result is None:return
         if row==0:self._show_overview()
@@ -56,6 +76,8 @@ class AnalyzeWorkspace(QWidget):
     def _show_overview(self):
         r=self.current_result; p=r.provenance; lines=[f"Result: {result_kind(r)}",f"Status: {r.status.value}",f"Request: {p.request_id}",f"Execution: {p.execution_id}",f"Engine: {p.engine_id}",f"Tool: {p.tool_id}","", "Summary: "+r.summary()]
         if r.scalars: lines.extend(f"{k}: {v.get('value',v)} {v.get('units','')}" for k,v in r.scalars.items())
+        if r.metadata.get("final_structure"):
+            structure=r.metadata["final_structure"]; lines.append(f"Final structure available (read-only), atoms: {len(structure.get('atoms',()))}")
         if r.warnings: lines.extend(["","Warnings:"]+r.warnings)
         self.overview.setPlainText("\n".join(lines)); self.views.setCurrentWidget(self.overview)
     def _show_plot(self):
@@ -66,7 +88,12 @@ class AnalyzeWorkspace(QWidget):
         self.plot = BandPlot(self) if self.current_result.result_type == "BandStructureResult" else DOSPlot(self)
         self.views.insertWidget(1,self.plot); self.plot.set_result(self.current_result); self.views.setCurrentWidget(self.plot)
     def _show_table(self):
-        headers,rows=tabular_data(self.current_result); self.table.clear(); self.table.setColumnCount(len(headers)); self.table.setHorizontalHeaderLabels(headers); self.table.setRowCount(min(len(rows),5000))
+        if self.current_result.result_type == "PDOSResult":
+            channels=pdos_channels(self.current_result, species=self.pdos_species.currentText(), atom=self.pdos_atom.currentText(), orbital=self.pdos_orbital.currentText(), component=self.pdos_component.currentText(), aggregation=self.pdos_aggregation.currentText())
+            energy=list(self.current_result.arrays.get("energy",()))
+            headers=["energy"]+[str(channel.get("label") or channel.get("orbital") or "channel") for channel,_ in channels]; rows=[[energy[i]]+[values[i] for _,values in channels if i<len(values)] for i in range(len(energy))]
+        else: headers,rows=tabular_data(self.current_result)
+        self.table.clear(); self.table.setColumnCount(len(headers)); self.table.setHorizontalHeaderLabels(headers); self.table.setRowCount(min(len(rows),5000))
         for i,row in enumerate(rows[:5000]):
             for j,value in enumerate(row): self.table.setItem(i,j,QTableWidgetItem(str(value)))
         self.views.setCurrentWidget(self.table)

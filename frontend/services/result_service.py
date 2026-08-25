@@ -11,6 +11,7 @@ class ResultService:
  def load_result(self, workflow_root, execution_id, result_id):
   store=ResultStore(workflow_root, execution_id); result=store.load(result_id); result.status=store.validate_sources(result); return result
  def executions(self, workflow_root): return ExecutionStore(workflow_root).list()
+ def execution_record(self, workflow_root, execution_id): return ExecutionStore(workflow_root).load(execution_id)
  def summaries(self, workflow_root, execution_id):
   store=ResultStore(workflow_root,execution_id); rows=[]
   for result_id in store.list():

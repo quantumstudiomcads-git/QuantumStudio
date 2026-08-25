@@ -32,3 +32,23 @@ def tabular_data(result):
         x=_values(result,"frequency"); y=_values(result,"dos")
         return ["frequency","dos"], [[x[i],y[i]] for i in range(min(len(x),len(y)))]
     return [], []
+
+
+def pdos_channels(result, *, species=None, atom=None, orbital=None, component=None, spin=None, aggregation="None"):
+    components=result.metadata.get("components", ())
+    values=result.metadata.get("component_values", ())
+    selected=[]
+    for index, channel in enumerate(components):
+        if species not in (None,"All") and str(channel.get("species", channel.get("element", ""))) != str(species): continue
+        if atom not in (None,"All") and str(channel.get("atom", channel.get("atom_index", ""))) != str(atom): continue
+        if orbital not in (None,"All") and str(channel.get("orbital", channel.get("label", ""))) != str(orbital): continue
+        if component not in (None,"All") and str(channel.get("component", channel.get("m", ""))) != str(component): continue
+        if spin not in (None,"All") and str(channel.get("spin", "")) != str(spin): continue
+        if index < len(values): selected.append((channel, values[index]))
+    if aggregation in (None,"None") or not selected: return selected
+    key={"By species":"species","By atom":"atom","By orbital":"orbital"}.get(aggregation)
+    if key is None: return selected
+    groups={}
+    for channel, data in selected: groups.setdefault(str(channel.get(key, channel.get("element", channel.get("label", "channel")))), []).append(data)
+    import numpy as np
+    return [({"label": label, "aggregated": True}, np.sum(np.asarray(series), axis=0).tolist()) for label, series in sorted(groups.items())]

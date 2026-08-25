@@ -1432,6 +1432,8 @@ class CalculateWorkspace(QWidget):
             return
         try:
             location = self.calculation_service.generate_engine_inputs(self.calculation_request, root)
+            if hasattr(self.project, "register_execution_root"):
+                self.project.register_execution_root(self.calculation_request.id, location)
             self._workflow_generated = True
             self.generate_qe_button.setEnabled(False)
             self.execute_button.setEnabled(True)
@@ -1495,6 +1497,8 @@ class CalculateWorkspace(QWidget):
             return
         try:
             workflow = self.calculation_service.execution_workflow(self.calculation_request, root)
+            if hasattr(self.project, "register_execution_root"):
+                self.project.register_execution_root(self.calculation_request.id, root)
             manager = LocalExecutionManager(self.local_tool_configuration)
             errors = manager.preflight(workflow)
             if errors:

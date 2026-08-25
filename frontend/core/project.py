@@ -295,6 +295,16 @@ class Project:
     # Persistent calculation requests
     # ============================================================
 
+    def register_execution_root(self, request_id, workflow_root):
+        """Persist only a pointer to a C7 workflow root for Analyze discovery."""
+        roots = self.results.setdefault("execution_roots", {})
+        roots[str(request_id)] = str(Path(workflow_root).resolve())
+        self.modified = True
+
+    def execution_roots(self):
+        value = self.results.get("execution_roots", {})
+        return dict(value) if isinstance(value, dict) else {}
+
     def get_calculations(self):
         """Return an immutable view of configured requests owned by this Project."""
         return tuple(self.calculations)

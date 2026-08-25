@@ -10,7 +10,7 @@ The workspace does not modify the structure.
 
 import json
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QVBoxLayout,
     QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QFileDialog,
     QPlainTextEdit,
     QWidget,
@@ -32,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from frontend.calculations.catalog import CALCULATIONS
 from frontend.services.calculation_service import CalculationService
+from backend.execution import LocalExecutionManager, LocalExecutionService, LocalToolConfiguration
 
 
 class CalculateWorkspace(QWidget):
@@ -64,6 +67,9 @@ class CalculateWorkspace(QWidget):
         self.execution_plan = None
         self.calculation_request = None
         self.current_structure_summary = None
+        self._local_execution_service = None
+        self._active_execution = None
+        self.local_tool_configuration = LocalToolConfiguration()
 
         self._build_ui()
         self._apply_style()
@@ -645,6 +651,9 @@ class CalculateWorkspace(QWidget):
         self.generate_qe_button.setEnabled(False)
         self.generate_qe_button.clicked.connect(self._generate_qe_inputs)
         footer.addWidget(self.generate_qe_button)
+        self.configure_tools_button = QPushButton("Local Tools…")
+        self.configure_tools_button.clicked.connect(self._configure_local_tools)
+        footer.addWidget(self.configure_tools_button)
         footer.addWidget(
             self.compile_button
         )
@@ -1251,55 +1260,74 @@ class CalculateWorkspace(QWidget):
     # EXECUTE
     # ============================================================
 
+    def _configure_local_tools(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Local Tool Configuration")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Optional absolute executable paths. Blank entries resolve from PATH."))
+        form = QFormLayout()
+        fields = {}
+        for tool_id in ("pw.x", "ph.x", "pw2wannier90.x", "wannier90.x", "epw.x"):
+            field = QLineEdit(self.local_tool_configuration.tool_paths.get(tool_id, ""), dialog)
+            fields[tool_id] = field
+            form.addRow(tool_id, field)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, dialog)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.local_tool_configuration.tool_paths = {tool_id: field.text().strip() for tool_id, field in fields.items() if field.text().strip()}
+
     def _execute_requested(self):
-
-        if self.execution_plan is None:
-
-            QMessageBox.warning(
-                self,
-                "No Compiled Workflow",
-                "Compile the calculation workflow before "
-                "attempting execution.",
-            )
-
+        if self._active_execution is not None and not self._active_execution.done.is_set():
+            self._active_execution.cancel()
+            self.execution_preview.setPlainText("Cancelling the active local task; dependent tasks will be blocked.")
             return
+        if self.execution_plan is None or self.calculation_request is None:
+            QMessageBox.warning(self, "No Compiled Workflow", "Compile and generate the selected workflow before local execution.")
+            return
+        root = QFileDialog.getExistingDirectory(self, "Choose generated workflow directory")
+        if not root:
+            return
+        try:
+            workflow = self.calculation_service.execution_workflow(self.calculation_request, root)
+            manager = LocalExecutionManager(self.local_tool_configuration)
+            errors = manager.preflight(workflow)
+            if errors:
+                QMessageBox.warning(self, "Local Execution Preflight", "Cannot run this workflow:\n\n" + "\n".join(errors))
+                return
+            if QMessageBox.question(self, "Run Local Workflow", "Preflight passed. Run the generated workflow serially using configured tools/PATH?") != QMessageBox.StandardButton.Yes:
+                return
+            self._local_execution_service = LocalExecutionService(manager)
+            self._active_execution = self._local_execution_service.start(workflow)
+            self.execute_button.setText("Cancel Local Execution")
+            self.execution_preview.setPlainText("Local execution started. The request snapshot and generated inputs are locked for this run.")
+            QTimer.singleShot(100, self._poll_local_execution)
+        except Exception as error:
+            QMessageBox.warning(self, "Local Execution", str(error))
 
-        resolved = self.execution_plan.resolved_calculations
-
-        calculation_map = (
-            self._get_calculation_map()
-        )
-
-        lines = []
-
-        for index, calculation_id in enumerate(
-            resolved,
-            start=1,
-        ):
-
-            calculation = calculation_map.get(
-                calculation_id
-            )
-
-            name = (
-                calculation.name
-                if calculation is not None
-                else calculation_id
-            )
-
-            lines.append(
-                f"{index}. {name}"
-            )
-
-        QMessageBox.information(
-            self,
-            "Execution Plan Ready",
-            "The workflow has been compiled successfully.\n\n"
-            "Execution sequence:\n\n"
-            + "\n".join(lines)
-            + "\n\n"
-              "The workflow compiler is operating locally.\n"
-              "The QE execution backend will be connected "
-              "as a separate execution layer.",
-        )
-
+    def _poll_local_execution(self):
+        handle = self._active_execution
+        if handle is None:
+            return
+        if not handle.done.is_set():
+            QTimer.singleShot(150, self._poll_local_execution)
+            return
+        self.execute_button.setText("Execute Calculation")
+        self._active_execution = None
+        if handle.error is not None:
+            QMessageBox.warning(self, "Local Execution", str(handle.error))
+            return
+        result = handle.result
+        lines = ["Local execution finished: " + result.state.value]
+        for task in result.tasks.values():
+            line = f"{task.task_id}: {task.state.value}"
+            if task.return_code is not None:
+                line += f" (exit {task.return_code})"
+            if task.stdout_path:
+                line += f"\n  stdout: {task.stdout_path}"
+            if task.stderr_path:
+                line += f"\n  stderr: {task.stderr_path}"
+            lines.append(line)
+        self.execution_preview.setPlainText("\n".join(lines))

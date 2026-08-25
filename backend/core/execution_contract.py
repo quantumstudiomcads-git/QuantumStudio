@@ -20,7 +20,7 @@ class CommandSpec:
     environment: dict[str, str] = field(default_factory=dict)
     execution_mode: ExecutionMode = ExecutionMode.SUBPROCESS
     def __post_init__(self):
-        if not self.program or any(any(token in value for token in "|;&><") for value in (self.program,*self.arguments)):
+        if not self.program or any(value in {"|", ";", "&&", ">", "<"} or "`" in value or "$(" in value for value in (self.program, *self.arguments)):
             raise ValueError("CommandSpec requires program/arguments without shell metacharacters.")
     def to_dict(self):
         return {"program":self.program,"arguments":list(self.arguments),"stdin_file":self.stdin_file,"stdout_file":self.stdout_file,"stderr_file":self.stderr_file,"working_directory":self.working_directory,"environment":dict(self.environment),"execution_mode":self.execution_mode.value}

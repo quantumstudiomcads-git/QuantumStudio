@@ -266,6 +266,13 @@ class CalculationService:
             raise TypeError("Expected a PreparedCalculationRequest.")
         return QuantumEspressoAdapter().write_plan(self.compile_request(prepared_request), output_root)
 
+    def execution_workflow(self, prepared_request: PreparedCalculationRequest, workflow_root):
+        """Normalize an already exported workflow for the generic local executor."""
+        from backend.execution import normalize_adapter_tasks
+        if not isinstance(prepared_request, PreparedCalculationRequest):
+            raise TypeError("Expected a PreparedCalculationRequest.")
+        return normalize_adapter_tasks(prepared_request.id, workflow_root, self.preview_engine_inputs(prepared_request))
+
     def workflow_input_available(self, plan) -> bool:
         """Return C4/C5A generation availability for a compiled plan."""
         if "wannierization" in plan.selected_calculations or set(plan.selected_calculations) & {"boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration"}:

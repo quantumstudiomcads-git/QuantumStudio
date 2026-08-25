@@ -1484,3 +1484,5 @@ and:
 prefer the explicit integration boundary.
 
 Quantum Studio should grow through stable interfaces rather than repeated rewrites.
+
+C6 local execution must consume the generic GeneratedWorkflow/CommandSpec boundary with shell=False; it may not branch on scientific calculation or engine names. Keep machine-specific tool paths outside CalculationRequest, and retain process exit status separate from scientific convergence/result parsing.

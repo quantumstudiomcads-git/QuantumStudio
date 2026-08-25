@@ -1,0 +1,20 @@
+from __future__ import annotations
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+class TaskState(str,Enum): PENDING="PENDING"; READY="READY"; RUNNING="RUNNING"; COMPLETED="COMPLETED"; FAILED="FAILED"; CANCELLED="CANCELLED"; BLOCKED="BLOCKED"
+class WorkflowState(str,Enum): PENDING="PENDING"; RUNNING="RUNNING"; COMPLETED="COMPLETED"; FAILED="FAILED"; CANCELLED="CANCELLED"
+def now(): return datetime.now(timezone.utc).isoformat()
+@dataclass
+class TaskExecutionRecord:
+ task_id:str; state:TaskState=TaskState.PENDING; started_at:str|None=None; finished_at:str|None=None; return_code:int|None=None; stdout_path:str|None=None; stderr_path:str|None=None; error_message:str=""
+@dataclass
+class WorkflowExecutionRecord:
+ request_id:str; workflow_root:str; tasks:dict[str,TaskExecutionRecord]; events:list[dict]=field(default_factory=list)
+ @property
+ def state(self):
+  states={x.state for x in self.tasks.values()}
+  if TaskState.RUNNING in states or TaskState.READY in states:return WorkflowState.RUNNING
+  if TaskState.FAILED in states:return WorkflowState.FAILED
+  if TaskState.CANCELLED in states:return WorkflowState.CANCELLED
+  return WorkflowState.COMPLETED if states=={TaskState.COMPLETED} else WorkflowState.PENDING

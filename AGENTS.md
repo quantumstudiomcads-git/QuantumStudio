@@ -1498,3 +1498,5 @@ C8C parser coverage remains artifact-driven and conservative: retain final relax
 C8D parameter forms must remain schema-driven and route persistence/validation through CalculationRequest and C3 resolution; preserve Fast/Intermediate/Precise/Custom semantics and keep machine tool paths out of scientific parameter UI.
 
 Calculate v0.1 scientific architecture is feature frozen after C9. Result browsing in Calculate is metadata/provenance only; do not add plotting or Analyze coupling without an explicit new stage.
+
+C9X functional selection is registry-driven: GGA is a family, never a QE input_dft identifier. HSE06/B3LYP hybrid parameters must be signed/generated explicitly; do not generate hybrid ph.x or semilocal fallback workflows.

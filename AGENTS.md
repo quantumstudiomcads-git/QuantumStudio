@@ -1502,3 +1502,6 @@ Calculate v0.1 scientific architecture is feature frozen after C9. Result browsi
 C9X functional selection is registry-driven: GGA is a family, never a QE input_dft identifier. HSE06/B3LYP hybrid parameters must be signed/generated explicitly; do not generate hybrid ph.x or semilocal fallback workflows.
 
 C9Y pseudopotential rules: retain PP identity (including SHA-256 where a local source is known) in scientific provenance and never let accuracy presets silently replace a pseudo set. Treat functional/PP compatibility and SOC relativity as domain validation; provider indexing is local/explicit and must not scrape or auto-download scientific files.
+
+
+C9P Calculate UI rules: normal scientific input uses typed controls (finite choices as dropdowns, booleans as checkboxes, and meshes as three integer controls); keep JSON only as request serialization.  Calculate band-path recommendations must use the public Brillouin-zone API and the CalculationRequest structure snapshot, never a duplicate path table or mutable Builder state.  Results parsing must remain Qt-free behind a service and execute asynchronously; it is scoped to the selected C7 execution attempt.  Long technical identifiers may be elided only with a full-value tooltip; normal scientific labels must not be clipped.

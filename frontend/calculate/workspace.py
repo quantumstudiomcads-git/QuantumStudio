@@ -37,6 +37,9 @@ from frontend.services.calculation_service import CalculationService
 from frontend.services.result_service import ResultService
 from frontend.calculate.parameter_session import PRESETS, descriptors, parse_value, preset_parameters
 from frontend.calculate.functional_pseudo_dialog import FunctionalPseudoDialog
+from frontend.calculate.band_path_dialog import BandPathDialog
+from frontend.calculate.results_dialog import ResultsDialog
+from frontend.calculate.typed_parameter_controls import control_value, make_control
 from backend.execution import ExecutionStore, LocalExecutionManager, LocalExecutionService, LocalToolConfiguration, RecoveryState
 
 
@@ -462,8 +465,10 @@ class CalculateWorkspace(QWidget):
         selection_layout.addWidget(self.configured_list)
         self.request_name = QLineEdit()
         self.request_name.setPlaceholderText("Calculation name")
+        # Serialized request parameters remain JSON-compatible internally, but are not
+        # part of the normal user flow.  Scientific editing happens in typed controls.
         self.parameters_input = QLineEdit()
-        self.parameters_input.setPlaceholderText('Parameters JSON, e.g. {"accuracy": "high"}')
+        self.parameters_input.setVisible(False)
         request_actions = QHBoxLayout()
         self.save_request_button = QPushButton("Save Parameters")
         self.duplicate_request_button = QPushButton("Duplicate")
@@ -473,7 +478,6 @@ class CalculateWorkspace(QWidget):
             request_actions.addWidget(button)
             button.setEnabled(False)
         selection_layout.addWidget(self.request_name)
-        selection_layout.addWidget(self.parameters_input)
         self.edit_parameters_button = QPushButton("Configure Parameters…")
         self.edit_parameters_button.clicked.connect(self._configure_parameters)
         selection_layout.addWidget(self.edit_parameters_button)
@@ -1077,10 +1081,12 @@ class CalculateWorkspace(QWidget):
     def _configure_parameters(self):
         if not self.selected_ids:
             QMessageBox.information(self, "Parameters", "Select a generation-ready calculation first."); return
-        dialog=QDialog(self); dialog.setWindowTitle("Scientific Parameters"); layout=QVBoxLayout(dialog); preset=QComboBox(dialog)
+        dialog=QDialog(self); dialog.setWindowTitle("Scientific Parameters"); layout=QVBoxLayout(dialog)
+        preset=QComboBox(dialog)
         for mode,label in (("FAST","Fast"),("INTERMEDIATE","Intermediate"),("PRECISE","Precise"),("CUSTOM","Custom")): preset.addItem(label,mode)
-        preset.setCurrentIndex(1); layout.addWidget(QLabel("Accuracy preset")); layout.addWidget(preset); form=QFormLayout(); fields={}
         existing=json.loads(self.parameters_input.text() or "{}")
+        preset.setCurrentIndex(max(0,preset.findData(existing.get("accuracy_preset","INTERMEDIATE"))))
+        layout.addWidget(QLabel("Accuracy preset")); layout.addWidget(preset)
         structure=(self.calculation_request.backend_request.structure if self.calculation_request is not None else self.project.get_structure().to_dict())
         species=tuple(dict.fromkeys(str(atom.get("element", "")) for atom in structure.get("atoms", ()) if atom.get("element")))
         scientific_state={key: existing[key] for key in ("xc_functional", "exx_fraction", "screening_parameter", "exx_q_mesh", "ace", "exxdiv_treatment", "pseudopotentials") if key in existing}
@@ -1089,19 +1095,34 @@ class CalculateWorkspace(QWidget):
             editor=FunctionalPseudoDialog({**existing, **scientific_state}, species, dialog)
             if editor.exec()==QDialog.DialogCode.Accepted: scientific_state.update(editor.values()); refresh()
         configure_science.clicked.connect(edit_science); layout.addWidget(configure_science)
+        form=QFormLayout(); fields={}
         for item in descriptors(self.selected_ids):
-            field=QLineEdit(json.dumps(existing.get(item["key"], item["default"])))
-            field.setToolTip(item["key"]); fields[item["key"]]=field; form.addRow(item["label"]+(f" ({item["unit"]})" if item["unit"] else ""),field)
-        layout.addLayout(form); resolved=QPlainTextEdit(dialog); resolved.setReadOnly(True); layout.addWidget(QLabel("Resolved parameters")); layout.addWidget(resolved)
+            key=item["key"]; value=existing.get(key,item["default"])
+            if key=="kpath":
+                field=QPushButton("Choose Band Path…",dialog); field._band_path=list(value or [])
+                def choose_path(button=field):
+                    editor=BandPathDialog(structure,button._band_path,dialog)
+                    if editor.exec()==QDialog.DialogCode.Accepted: button._band_path=editor.value(); button.setText("Band Path: " + " — ".join(point["label"] for point in button._band_path))
+                field.clicked.connect(choose_path)
+            else: field=make_control(key,value,dialog)
+            field.setToolTip(item["key"]); fields[key]=field; form.addRow(item["label"]+(f" ({item['unit']})" if item["unit"] else ""),field)
+        layout.addLayout(form)
+        resolved=QPlainTextEdit(dialog); resolved.setReadOnly(True); layout.addWidget(QLabel("Resolved parameters")); layout.addWidget(resolved)
+        def values_from_fields():
+            values={}
+            for key,field in fields.items():
+                values[key]=list(field._band_path) if key=="kpath" else control_value(key,field)
+            return values
         def refresh():
-            values=preset_parameters(self.selected_ids,preset.currentData(),{key:parse_value(field.text()) for key,field in fields.items() if field.text()}); values.update(scientific_state)
+            values=preset_parameters(self.selected_ids,preset.currentData(),values_from_fields()); values.update(scientific_state)
             resolved.setPlainText(json.dumps(values,indent=2,sort_keys=True))
-        preset.currentIndexChanged.connect(refresh); refresh(); buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel,dialog); buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject); layout.addWidget(buttons)
+        preset.currentIndexChanged.connect(refresh); refresh()
+        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel,dialog); buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject); layout.addWidget(buttons)
+        dialog.resize(720,620)
         if dialog.exec()==QDialog.DialogCode.Accepted:
-            values={key:parse_value(field.text()) for key,field in fields.items() if field.text()}
-            values.update(scientific_state)
-            values["accuracy"]=PRESETS[preset.currentData()] if preset.currentData()!="CUSTOM" else "standard"
-            values["accuracy_preset"]=preset.currentData(); self.parameters_input.setText(json.dumps(values,sort_keys=True));
+            values=values_from_fields(); values.update(scientific_state)
+            values["accuracy"]=PRESETS[preset.currentData()] if preset.currentData()!="CUSTOM" else "standard"; values["accuracy_preset"]=preset.currentData(); self.parameters_input.setText(json.dumps(values,sort_keys=True))
+
     def _save_selected_request(self):
         request = self.project.get_calculation(self._selected_configured_request_id())
         if request is None:
@@ -1300,17 +1321,8 @@ class CalculateWorkspace(QWidget):
 
     def _view_results(self):
         root=QFileDialog.getExistingDirectory(self, "Choose generated workflow directory")
-        if not root: return
-        try:
-            executions=self.result_service.executions(root)
-            if not executions:
-                QMessageBox.information(self,"Results","No execution attempts are stored for this workflow."); return
-            execution_id=executions[-1]; rows=self.result_service.summaries(root,execution_id)
-            dialog=QDialog(self); dialog.setWindowTitle("Calculation Results"); layout=QVBoxLayout(dialog); layout.addWidget(QLabel("Execution: "+execution_id))
-            detail=QPlainTextEdit(dialog); detail.setReadOnly(True)
-            detail.setPlainText("Results not parsed." if not rows else "\n\n".join(f"{row["type"]} — {row["status"]}\n{row["summary"]}\nParser: {row["provenance"].parser_id if row["provenance"] else "unavailable"}" for row in rows))
-            layout.addWidget(detail); dialog.resize(640,420); dialog.exec()
-        except Exception as error: QMessageBox.warning(self,"Results",str(error))
+        if root:
+            ResultsDialog(self.result_service,root,self).exec()
 
     def _configure_local_tools(self):
         dialog = QDialog(self)

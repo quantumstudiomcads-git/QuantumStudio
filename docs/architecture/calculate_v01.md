@@ -323,3 +323,14 @@ Calculate request pseudo assignments remain backward-compatible element-to-filen
 ## C9Z functional and hybrid-band configuration
 
 Calculate persists functional/hybrid selections and explicit UPF metadata in the normal CalculationRequest parameter mapping. The generated-input preview consequently includes the exact QE functional settings and pseudo provenance. Hybrid Bands specialize to direct EXX `ADDITIONAL_K_POINTS`; normal hybrid NSCF/DOS/PDOS/Wannier/BTP2/EPW and hybrid phonon routes remain blocked.
+
+
+## C9P visible Calculate flow
+
+C9P removes serialized JSON from the normal Calculate flow.  The request remains JSON-compatible internally, but parameter editing uses typed Qt controls: checkboxes for booleans, combo boxes for finite choices, spin boxes for integral meshes, and paired numerical fields where a numeric range is modeled.  The compact parameter dialog keeps the authoritative C3 request resolution/persistence boundary; it does not reimplement scientific validation in Qt.
+
+The public Brillouin-zone package now exposes a snapshot-based path recommendation API.  Bands consumes that API through a structured dialog with ordered segment checkboxes, a live selected-path preview, an expert table-based custom path option, and deliberate rejection of disconnected checkbox choices.  Its typed path is identical for semilocal and direct-hybrid bands.  The recommendation is derived from the CalculationRequest structure snapshot, never the mutable Builder structure.
+
+The Calculate Results dialog is execution-attempt scoped.  It lists stored sidecar metadata immediately, offers Parse Results for completed output and Re-parse for refresh/stale recovery, and delegates parsing to a Qt-free ResultService on a worker thread.  Parsing neither launches engines nor modifies raw artifacts or Builder.  Result source selection uses the current completed task attempt recorded by C7.
+
+Functional controls retain family/function selection and only show hybrid fields for hybrid functionals.  EXX q meshes are structured integer controls (or explicit Auto); the pseudo section remains local/user-library based until a registered local provider is available.  Accuracy presets remain independent of explicit pseudo identity.

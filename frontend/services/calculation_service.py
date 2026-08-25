@@ -21,7 +21,7 @@ from frontend.calculations.reconciliation import (
 )
 
 
-_PERIODIC_WORKFLOWS = frozenset({"bands", "dos", "pdos", "nscf", "phonons", "phonon_dos"})
+_PERIODIC_WORKFLOWS = frozenset({"bands", "dos", "pdos", "nscf", "phonons", "phonon_dos", "boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration"})
 
 
 @dataclass(frozen=True)
@@ -268,13 +268,16 @@ class CalculationService:
 
     def workflow_input_available(self, plan) -> bool:
         """Return C4/C5A generation availability for a compiled plan."""
-        if "wannierization" in plan.selected_calculations:
+        if "wannierization" in plan.selected_calculations or set(plan.selected_calculations) & {"boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration"}:
             return True
         return all(item["available"] for item in self.qe_input_support(plan.resolved_calculations))
 
     def preview_engine_inputs(self, prepared_request: PreparedCalculationRequest):
         """Return all derived task inputs for C4 QE or C5A cross-engine previews."""
         plan = self.compile_request(prepared_request)
+        if set(plan.selected_calculations) & {"boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration"}:
+            from backend.engines.boltztrap2 import BoltzTraP2WorkflowAdapter
+            return BoltzTraP2WorkflowAdapter().compile_plan(plan)[0]
         if "wannierization" in plan.selected_calculations:
             from backend.engines.wannier90 import Wannier90WorkflowAdapter
             return Wannier90WorkflowAdapter().compile_plan(plan)[0]
@@ -284,6 +287,9 @@ class CalculationService:
     def generate_engine_inputs(self, prepared_request: PreparedCalculationRequest, output_root):
         """Explicit derived export only; never discovers or executes an engine."""
         plan = self.compile_request(prepared_request)
+        if set(plan.selected_calculations) & {"boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration"}:
+            from backend.engines.boltztrap2 import BoltzTraP2WorkflowAdapter
+            return BoltzTraP2WorkflowAdapter().write_plan(plan, output_root)
         if "wannierization" in plan.selected_calculations:
             from backend.engines.wannier90 import Wannier90WorkflowAdapter
             return Wannier90WorkflowAdapter().write_plan(plan, output_root)

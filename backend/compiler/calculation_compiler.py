@@ -34,8 +34,11 @@ class CalculationCompiler:
             tasks = self._expand_wannierization(tasks, parameters)
         elif "electron_phonon" in self.request.selected_calculations:
             tasks = self._expand_electron_phonon(tasks, parameters)
+        elif set(self.request.selected_calculations) & {"boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration"}:
+            from backend.compiler.boltztrap2 import expand_boltztrap2
+            tasks = expand_boltztrap2(self.request, tasks, parameters)
         plan = ExecutionPlan(calculation_id=self.request.id, selected_calculations=list(self.request.selected_calculations), resolved_calculations=[task.calculation_id for task in tasks], execution_target=self.request.execution_target, parameters=dict(self.request.parameters), calculation_parameters=parameters, structure=dict(self.request.structure), tasks=tasks)
-        plan.metadata.update({"parameters": parameters, "dependency_graph": ({task.id: list(task.depends_on_task_ids) for task in tasks} if ({"wannierization", "electron_phonon"} & set(self.request.selected_calculations)) else {item: list(graph.dependencies_for(item)) for item in graph.ordered_calculations}), "parameter_precedence": ["schema_defaults", "accuracy_preset", "workflow_dependency_defaults", "structure_derived_defaults", "explicit_request_parameters"], "structure_reference": "request_snapshot"})
+        plan.metadata.update({"parameters": parameters, "dependency_graph": ({task.id: list(task.depends_on_task_ids) for task in tasks} if ({"wannierization", "electron_phonon", "boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration"} & set(self.request.selected_calculations)) else {item: list(graph.dependencies_for(item)) for item in graph.ordered_calculations}), "parameter_precedence": ["schema_defaults", "accuracy_preset", "workflow_dependency_defaults", "structure_derived_defaults", "explicit_request_parameters"], "structure_reference": "request_snapshot"})
         return plan
 
     def _public_tasks(self, graph, parameters):

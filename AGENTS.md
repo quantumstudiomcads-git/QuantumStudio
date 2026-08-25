@@ -1342,6 +1342,8 @@ parameters/projections, and never execute or discover QE/Wannier binaries from
 input generation.
 engine/executor until a dedicated milestone explicitly authorizes it.
 
+C5C BoltzTraP2 workflows are configuration-only private task DAGs: a purpose-signed QE transport NSCF declares `ElectronicBandsData`, and BTP2 JSON configuration consumes it without numerical fabrication, API invocation, executable execution, or result parsing. Preserve explicit relaxation-time output semantics (sigma per tau, kappa_e per tau, and power-factor per tau unless positive constant tau is declared); never infer 2D material thickness from vacuum.
+
 Builder and Device Builder development must not destabilize calculation APIs.
 
 ---

@@ -830,6 +830,7 @@ register(
     "BoltzTraP2",
     "Interpolate electronic bands for transport calculations.",
     ["boltztrap", "bands"],
+    "ready",
 )
 
 register(
@@ -839,6 +840,7 @@ register(
     "BoltzTraP2",
     "Calculate temperature-dependent electrical conductivity.",
     ["transport", "boltztrap"],
+    "ready",
 )
 
 register(
@@ -848,6 +850,7 @@ register(
     "BoltzTraP2",
     "Calculate thermoelectric Seebeck coefficient.",
     ["thermoelectric"],
+    "ready",
 )
 
 register(
@@ -857,6 +860,7 @@ register(
     "BoltzTraP2",
     "Calculate electronic contribution to thermal conductivity.",
     ["thermal", "transport"],
+    "ready",
 )
 
 register(
@@ -866,6 +870,7 @@ register(
     "BoltzTraP2",
     "Calculate thermoelectric power factor.",
     ["thermoelectric"],
+    "ready",
 )
 
 register(
@@ -884,6 +889,7 @@ register(
     "BoltzTraP2",
     "Calculate carrier concentration versus temperature.",
     ["transport"],
+    "ready",
 )
 
 register(

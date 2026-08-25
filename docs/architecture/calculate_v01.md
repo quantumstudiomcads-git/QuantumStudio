@@ -268,3 +268,12 @@ task and declares dynamical-matrix/dvscf/q-point artifacts. EPW consumes QE,
 Wannier, and DFPT contracts externally (`wannierize=.false.`), declaring base
 coupling data and future scattering-rate artifacts. Eliashberg and Tc remain
 deferred. No engine or staging operation is executed.
+
+
+## BoltzTraP2 transport workflow (C5C)
+
+C5C adds deterministic configuration-only BoltzTraP2 workflows for Boltzmann bands, Seebeck, electrical conductivity, electronic thermal conductivity, carrier concentration, and power factor. Public intents expand to private `scf -> qe_pw_nscf_btp2 -> btp2_interpolate -> btp2_transport` stages; bands stop at interpolation. The signed QE transport NSCF uses explicit dense uniform transport mesh and num_bands, is incompatible with Wannier, EPW, DOS, and optical NSCF signatures, and declares `ElectronicBandsData` for future k-points, eigenvalues, reference energy, direct and reciprocal cells, occupations/electron count, and spin information. No numerical arrays are fabricated.
+
+The cross-engine exporter emits deterministic Quantum Studio-owned `btp2_config.json` and `btp2_transport.json` plus future Python API metadata. It neither invokes BoltzTraP2 nor parses results. Typed settings retain independent temperature (K), chemical-potential (eV), and carrier-concentration (cm^-3) grids, interpolation controls, spin/SOC, relaxation-time model, and optional 2D effective thickness. Unspecified tau yields `SIGMA_OVER_TAU`, `KAPPA_E_OVER_TAU`, and `POWER_FACTOR_OVER_TAU`; positive constant tau yields `SIGMA`, `KAPPA_E`, and `POWER_FACTOR`. EPW scattering time is reserved.
+
+For [True, True, False], kz must be one and vacuum is never inferred as material thickness. Absolute 2D conductivity-type coefficients require explicit effective thickness; raw quantities retain normalization metadata. ZT remains deferred pending lattice thermal conductivity, and mobility remains deferred pending a physical scattering-time source such as future EPW lifetimes.

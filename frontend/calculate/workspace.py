@@ -1175,6 +1175,7 @@ class CalculateWorkspace(QWidget):
             "", "Resolved execution sequence:", "",
         ]
         task_by_id = {task.id: task for task in self.execution_plan.tasks}
+        private_labels = {"qe_pw_nscf_btp2": "QE NSCF [BTP2 transport mesh]", "btp2_interpolate": "BTP2 interpolation", "btp2_transport": "BTP2 transport integration"}
         for index, calculation_id in enumerate(resolved, start=1):
             calculation = calculation_map.get(calculation_id)
             task = self.execution_plan.task_for_calculation(calculation_id)
@@ -1182,9 +1183,19 @@ class CalculateWorkspace(QWidget):
                 task_by_id[task_id].calculation_id for task_id in task.depends_on_task_ids
             ) or "none"
             lines.append(
-                f"{index}. {calculation.name if calculation is not None else calculation_id}"
+                f"{index}. {calculation.name if calculation is not None else private_labels.get(calculation_id, calculation_id)}"
                 f"   depends on: {dependencies}"
             )
+        btp2_tasks = [task for task in self.execution_plan.tasks if task.engine_id == "boltztrap2"]
+        if btp2_tasks:
+            settings = btp2_tasks[0].parameters.get("btp2")
+            if settings is not None:
+                values = settings.to_dict()
+                lines.extend(["", "BTP2 physical settings:", f"* transport k mesh: {values['transport_k_mesh']}", f"* temperatures (K): {values['temperatures_kelvin']}", f"* chemical potential (eV): {values['chemical_potentials_ev'] or values['chemical_potential_range_ev']}", f"* carrier concentration (cm^-3): {values['carrier_concentrations_cm3'] or values['carrier_concentration_range_cm3']}", f"* relaxation-time mode: {values['relaxation_time_model']}"])
+                if values["relaxation_time_seconds"] is not None: lines.append(f"* tau (s): {values['relaxation_time_seconds']}")
+                if any(item in btp2_tasks[-1].artifact_outputs for item in ("SIGMA_OVER_TAU", "KAPPA_E_OVER_TAU", "POWER_FACTOR_OVER_TAU")): lines.append(f"* outputs use explicit {chr(0x03c3)}/{chr(0x03c4)}, {chr(0x03ba)}e/{chr(0x03c4)}, and/or PF/{chr(0x03c4)} semantics")
+                warning = btp2_tasks[0].metadata.get("normalization_warning")
+                if warning: lines.append("* 2D normalization warning: " + warning)
         if self.calculation_service.workflow_input_available(self.execution_plan):
             lines.append("✓ Engine input generation available")
         else:

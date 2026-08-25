@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib, json
 from backend.compiler.execution_plan import PlannedTask
 from backend.engines.qe.models import InvalidQEParameterError
+from backend.dft.functionals import resolve
+from dataclasses import replace
+from backend.engines.qe.hybrid_bands import hybrid_band_contract
 
 def _sig(value): return hashlib.sha256(json.dumps(value,sort_keys=True,default=str).encode()).hexdigest()[:16]
 
@@ -24,8 +27,18 @@ def expand(request, tasks, parameters):
         signature=_sig({"semantic":semantic,"parameters":params}); task=PlannedTask(id=f"{request.id}:{semantic}:{signature}",calculation_id=name,semantic_task_type=semantic,engine_id="quantum_espresso",tool_id=tool,parameter_signature=signature,depends_on_task_ids=tuple(dep.id for dep in deps),parameters=params,structure_reference="request_snapshot",artifact_inputs=tuple(inputs),artifact_outputs=tuple(outputs),metadata=metadata or {}); result.append(task); return task
     if "bands" in selected:
         values=dict(parameters["bands"]); path=_path(values.get("kpath"),"Band structure")
-        pw=add("qe_pw_bands","qe_pw_bands","pw.x",[scf],{**values,"band_path":path},["qe_save"],["qe_band_eigenvalues"],{"purpose":"bands"})
-        add("qe_bands","qe_bands","bands.x",[pw],{"filband":"bands.dat"},["qe_save","qe_band_eigenvalues"],["BAND_STRUCTURE_RAW_DATA"])
+        functional=resolve(request.parameters.get("xc_functional", request.parameters.get("functional", values.get("functional", "pbe"))))
+        if functional.hybrid:
+            scf_parameters=dict(scf.parameters); scf_parameters.update({"xc_functional": functional.id, "hybrid_band_path": path})
+            mesh=scf_parameters.get("exx_q_mesh") or scf_parameters.get("kpoints", [1,1,1])
+            contract=hybrid_band_contract(path, mesh, request.structure.get("periodic"))
+            scf_parameters["hybrid_band_contract"]=contract
+            scf=replace(scf, parameters=scf_parameters, parameter_signature=_sig({"semantic":"hybrid_scf_bands","parameters":scf_parameters}), artifact_outputs=tuple(sorted(set(scf.artifact_outputs+("qe_band_eigenvalues",)))), metadata={**scf.metadata, "hybrid_band":contract})
+            result=[scf if task.calculation_id=="scf" else task for task in result]
+            add("qe_bands","qe_bands","bands.x",[scf],{"filband":"bands.dat","hybrid_band_method":contract["method"]},["qe_save","qe_band_eigenvalues"],["BAND_STRUCTURE_RAW_DATA"],{"purpose":"hybrid_bands", "hybrid_band":contract})
+        else:
+            pw=add("qe_pw_bands","qe_pw_bands","pw.x",[scf],{**values,"band_path":path},["qe_save"],["qe_band_eigenvalues"],{"purpose":"bands"})
+            add("qe_bands","qe_bands","bands.x",[pw],{"filband":"bands.dat"},["qe_save","qe_band_eigenvalues"],["BAND_STRUCTURE_RAW_DATA"])
     for public, terminal, tool, output in (("dos","qe_dos","dos.x","DOS_RAW_DATA"),("pdos","qe_projwfc","projwfc.x","PDOS_RAW_DATA")):
         if public in selected:
             values=dict(parameters[public]); mesh=values.get("dense_kpoints");

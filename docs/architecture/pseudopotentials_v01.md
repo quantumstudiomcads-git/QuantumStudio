@@ -12,3 +12,7 @@ Compatibility is explicit: PBE/PBE, PZ/PZ, PW91/PW91 and BLYP/BLYP are direct ma
 
 Cutoff recommendations are maxima across selected species and never silently alter a request. Pseudopotential selection is independent from Fast/Intermediate/Precise numerical presets. Existing element-to-path mappings remain valid; when a local UPF source is known its metadata and SHA are added to deterministic task/manifest provenance. Generic preflight verifies any manifest SHA/source pair before starting a process.
 Provider folders may optionally be indexed through a bounded local JSON manifest. Manifest entries are constrained to the registered root; declared checksum values are verified against the installed UPF, and declared cutoff recommendations are retained. This supports locally installed SSSP Efficiency/Precision packs without network access.
+
+## C9Z Calculate configuration
+
+The Calculate parameter dialog includes an Exchange–Correlation and Pseudopotentials action. It derives species from the request snapshot, uses the C9Y UPF parser for explicit import, displays XC/type/relativity compatibility, retains SHA/source metadata, and offers an explicit recommended-cutoff action. Library downloads and broad pseudo-manager polish remain out of scope.

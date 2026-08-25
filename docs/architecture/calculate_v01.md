@@ -319,3 +319,7 @@ Calculate v0.1 is feature frozen after C9: workflow, execution, and Result archi
 ## C9Y pseudopotential integration
 
 Calculate request pseudo assignments remain backward-compatible element-to-filename mappings. Rich optional assignment metadata records library/version, normalized XC, type, relativity and SHA-256 without changing the project format. QE task signatures include that request identity; generated manifests retain provenance and generic preflight validates any source/checksum pair. C9Y is backend-only: provider indexing and compatibility APIs are available for a later dedicated pseudo selector, with no automatic download or substitution.
+
+## C9Z functional and hybrid-band configuration
+
+Calculate persists functional/hybrid selections and explicit UPF metadata in the normal CalculationRequest parameter mapping. The generated-input preview consequently includes the exact QE functional settings and pseudo provenance. Hybrid Bands specialize to direct EXX `ADDITIONAL_K_POINTS`; normal hybrid NSCF/DOS/PDOS/Wannier/BTP2/EPW and hybrid phonon routes remain blocked.

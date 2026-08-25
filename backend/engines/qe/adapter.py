@@ -188,7 +188,7 @@ class QuantumEspressoAdapter(EngineAdapter):
                 input_filename=input_filename, output_filename=input_filename.removesuffix(".in") + ".out",
                 working_directory=directory, input_text=input_text,
                 depends_on_task_ids=tuple(task.depends_on_task_ids),
-                metadata={"engine_id":task.engine_id,"semantic_task_type":task.semantic_task_type,"parameter_signature":task.parameter_signature,"artifact_inputs":list(task.artifact_inputs),"artifact_outputs":list(task.artifact_outputs),"qe_prefix": context.prefix, "qe_outdir": context.outdir, "structure_fingerprint": structure_fingerprint(plan.structure), "pseudopotentials": pseudo_provenance},
+                metadata={"engine_id":task.engine_id,"semantic_task_type":task.semantic_task_type,"parameter_signature":task.parameter_signature,"artifact_inputs":list(task.artifact_inputs),"artifact_outputs":list(task.artifact_outputs),"qe_prefix": context.prefix, "qe_outdir": context.outdir, "structure_fingerprint": structure_fingerprint(plan.structure), "pseudopotentials": pseudo_provenance, "task_metadata": task.metadata},
             ))
         manifest = {
             "engine_id": self.engine_id,
@@ -197,7 +197,7 @@ class QuantumEspressoAdapter(EngineAdapter):
             "workflow_context": {"prefix": context.prefix, "outdir": context.outdir, "pseudo_dir": context.pseudo_dir},
             "pseudopotentials": pseudo_provenance,
             "tasks": [
-                {"task_id": task.task_id, "calculation_id": task.calculation_id, "dependencies": list(task.depends_on_task_ids), "executable": task.executable, "input_filename": task.input_filename, "output_filename": task.output_filename, "working_directory": task.working_directory}
+                {"task_id": task.task_id, "calculation_id": task.calculation_id, "dependencies": list(task.depends_on_task_ids), "executable": task.executable, "input_filename": task.input_filename, "output_filename": task.output_filename, "working_directory": task.working_directory, "metadata": task.metadata}
                 for task in qe_tasks
             ],
         }

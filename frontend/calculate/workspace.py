@@ -36,6 +36,7 @@ from frontend.calculations.catalog import CALCULATIONS
 from frontend.services.calculation_service import CalculationService
 from frontend.services.result_service import ResultService
 from frontend.calculate.parameter_session import PRESETS, descriptors, parse_value, preset_parameters
+from frontend.calculate.functional_pseudo_dialog import FunctionalPseudoDialog
 from backend.execution import ExecutionStore, LocalExecutionManager, LocalExecutionService, LocalToolConfiguration, RecoveryState
 
 
@@ -1080,16 +1081,25 @@ class CalculateWorkspace(QWidget):
         for mode,label in (("FAST","Fast"),("INTERMEDIATE","Intermediate"),("PRECISE","Precise"),("CUSTOM","Custom")): preset.addItem(label,mode)
         preset.setCurrentIndex(1); layout.addWidget(QLabel("Accuracy preset")); layout.addWidget(preset); form=QFormLayout(); fields={}
         existing=json.loads(self.parameters_input.text() or "{}")
+        structure=(self.calculation_request.backend_request.structure if self.calculation_request is not None else self.project.get_structure().to_dict())
+        species=tuple(dict.fromkeys(str(atom.get("element", "")) for atom in structure.get("atoms", ()) if atom.get("element")))
+        scientific_state={key: existing[key] for key in ("xc_functional", "exx_fraction", "screening_parameter", "exx_q_mesh", "ace", "exxdiv_treatment", "pseudopotentials") if key in existing}
+        configure_science=QPushButton("Exchange–Correlation & Pseudopotentials…", dialog)
+        def edit_science():
+            editor=FunctionalPseudoDialog({**existing, **scientific_state}, species, dialog)
+            if editor.exec()==QDialog.DialogCode.Accepted: scientific_state.update(editor.values()); refresh()
+        configure_science.clicked.connect(edit_science); layout.addWidget(configure_science)
         for item in descriptors(self.selected_ids):
             field=QLineEdit(json.dumps(existing.get(item["key"], item["default"])))
             field.setToolTip(item["key"]); fields[item["key"]]=field; form.addRow(item["label"]+(f" ({item["unit"]})" if item["unit"] else ""),field)
         layout.addLayout(form); resolved=QPlainTextEdit(dialog); resolved.setReadOnly(True); layout.addWidget(QLabel("Resolved parameters")); layout.addWidget(resolved)
         def refresh():
-            values=preset_parameters(self.selected_ids,preset.currentData(),{key:parse_value(field.text()) for key,field in fields.items() if field.text()})
+            values=preset_parameters(self.selected_ids,preset.currentData(),{key:parse_value(field.text()) for key,field in fields.items() if field.text()}); values.update(scientific_state)
             resolved.setPlainText(json.dumps(values,indent=2,sort_keys=True))
         preset.currentIndexChanged.connect(refresh); refresh(); buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel,dialog); buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject); layout.addWidget(buttons)
         if dialog.exec()==QDialog.DialogCode.Accepted:
             values={key:parse_value(field.text()) for key,field in fields.items() if field.text()}
+            values.update(scientific_state)
             values["accuracy"]=PRESETS[preset.currentData()] if preset.currentData()!="CUSTOM" else "standard"
             values["accuracy_preset"]=preset.currentData(); self.parameters_input.setText(json.dumps(values,sort_keys=True));
     def _save_selected_request(self):

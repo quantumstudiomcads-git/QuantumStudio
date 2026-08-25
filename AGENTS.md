@@ -1511,3 +1511,5 @@ C9Q pseudopotential provisioning rules: automatic provisioning is cache-first an
 
 
 C9R execution-resource rule: local CPU ranks, MPI launcher selection, and OpenMP threads are session-local machine configuration, never CalculationRequest scientific state, task signatures, fingerprints, or generated manifest science. Apply MPI only through structured shell-free argv for explicitly MPI-capable tools; preserve per-process-group cancellation and generic C6 scheduling.
+
+Analyze A1 rules: Analyze consumes ScientificResult/CalculationResultBundle through ResultStore and never raw engine output, compilers, executors, or scientific programs. Historical result provenance/structure snapshots are authoritative rather than current Builder state. Visualization is engine-neutral, typed controls preserve units, stale/unverified status remains visible, and dark-theme plots/exports belong to Analyze while computation remains in Calculate.

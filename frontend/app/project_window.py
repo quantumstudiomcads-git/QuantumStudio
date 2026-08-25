@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from frontend.core.project import Project
 from frontend.builder import Builder
 from frontend.calculate import CalculateWorkspace
+from frontend.analyze import AnalyzeWorkspace
 from frontend.device_builder import DeviceBuilderWorkspace
 
 
@@ -267,12 +268,7 @@ class ProjectWindow(QMainWindow):
             self.project
         )
 
-        self.analyzer = (
-            WorkspacePlaceholder(
-                "Analyze",
-                "Result analysis and plotting.",
-            )
-        )
+        self.analyzer = AnalyzeWorkspace(self.project)
 
         self.workspace.addWidget(
             self.builder

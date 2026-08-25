@@ -1524,3 +1524,6 @@ Analyze A6 rules: derived band edges require defensible occupation metadata; sam
 
 
 Analyze A7 rules: edge markers derive exclusively from validated BandGapAnalysis candidates. VBM alignment requires a validated VBM and must be a non-mutating display transform. Effective-mass users select the edge, one physical direction, and fit window; every value retains fit diagnostics and no fit crosses a path corner or band branch. Derived gap differences require matching scope; strain trends use explicit strain metadata only, never inferred cell strain or interpolation. A7 remains Result-only and may not import Builder private viewers merely to display a relaxed structure.
+
+
+Analyze v0.1 is feature-frozen after A8. During full-application QA, restrict Analyze changes to defects, scientific-correctness fixes, performance, accessibility/usability, and release blockers; do not casually add scientific features, raw-file parsing, engine execution, interpolation, or private Builder/Calculate coupling.

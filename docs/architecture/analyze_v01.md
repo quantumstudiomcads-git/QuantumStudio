@@ -32,3 +32,10 @@ Effective mass remains a user-reviewed local fit. The user selects CBM/VBM, a re
 Compare mode can display a derived electronic table and `B - A` sampled-gap delta only when both edges are valid and have the same scope. Metallic and unresolved series remain visible but have no gap delta. Gap-vs-strain trends accept only explicit numeric strain metadata, sort it numerically, retain provenance in CSV export, reject mixed scopes, and do not interpolate or predict a trend. Derived JSON exports contain scalar analysis/provenance/fit diagnostics, never large raw band arrays.
 
 A read-only final-structure preview remains deferred: Analyze has no clean public structure-renderer boundary at this stage, and it must not import Builder private controllers or mutate Project.structure.
+
+
+## A8 polish and feature freeze
+
+A8 completes Analyze v0.1 usability and QA without adding scientific analysis. The workspace distinguishes empty projects, unparsed calculations, unavailable result roots, and per-result errors; Result refresh remains metadata-first. The Data tab now uses a lightweight Qt model/view rather than allocating item widgets for every numeric cell, and replaced Matplotlib canvases clear their figures before deferred deletion. Exports normalize missing extensions and show contextual failures.
+
+Analyze v0.1 feature set is **frozen after A8**. Post-freeze work is limited to defect fixes, scientific-correctness fixes, performance, accessibility/usability work, and release blockers. Deferred scope includes a public read-only relaxed-structure renderer, volumetric fields, transport/optics without structured Results, full-BZ extrema/gap search, advanced interpolation, and persisted comparison sessions.

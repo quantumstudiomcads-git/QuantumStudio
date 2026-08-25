@@ -125,3 +125,33 @@ class AnalyzeA1Tests(unittest.TestCase):
         result=ScientificResult("BandStructureResult",ResultStatus.VALID,p,arrays={"path_coordinate":[0,1],"energies":[[0,2],[0,3]],"kpoints":[[0,0,0],[.5,0,0]]},metadata={"occupied_band_count":1})
         plot=BandPlot(); analysis=analyze_band_edges(result); plot.configure_electronic_analysis(analysis,show_edges=True); plot.set_result(result); app.processEvents()
         self.assertGreaterEqual(len(plot.axes.collections),len(analysis.degenerate_vbm)+len(analysis.degenerate_cbm)); plot.close()
+
+
+    def test_a8_table_model_is_lazy_for_large_rows(self):
+        from frontend.analyze.table_model import ScientificTableModel
+        rows=[(index, index * 2) for index in range(10000)]
+        model=ScientificTableModel(["energy_eV","dos"], rows)
+        model.set_data(["energy_eV","dos"],rows)
+        self.assertEqual(model.rowCount(),10000); self.assertEqual(model.data(model.index(9999,1)),"19998")
+
+    def test_a8_pdos_empty_filter_has_explanation(self):
+        app=QApplication.instance() or QApplication([])
+        p=ResultProvenance("r","e","t","qe","projwfc.x",(),{},"fixture")
+        result=ScientificResult("PDOSResult",ResultStatus.VALID,p,arrays={"energy":[0,1]},metadata={"components":[{"species":"Si","atom":1,"orbital":"p"}],"component_values":[[1,2]]})
+        workspace=AnalyzeWorkspace(Project("A8")); workspace.current_result=result; workspace._populate_pdos_filters(); workspace.pdos_species.addItem("No match"); workspace.pdos_species.setCurrentText("No match"); workspace._show_plot(); app.processEvents()
+        self.assertIn("No PDOS channels",workspace.empty.text()); workspace.close()
+
+    def test_a8_effective_mass_settings_invalidate_prior_fit(self):
+        app=QApplication.instance() or QApplication([])
+        p=ResultProvenance("r","e","t","qe","bands.x",(),{},"fixture")
+        result=ScientificResult("BandStructureResult",ResultStatus.VALID,p,arrays={"energies":[[0,1],[.1,1.2],[.4,1.8],[.9,2.6],[1.6,3.6],[2.5,4.8]],"kpoints":[[0,0,0],[.01,0,0],[.02,0,0],[.03,0,0],[.04,0,0],[.05,0,0]]},metadata={"occupied_band_count":1,"cell":[[10,0,0],[0,10,0],[0,0,10]]})
+        workspace=AnalyzeWorkspace(Project("A8")); workspace.current_result=result; workspace._show_electronic(); workspace._last_fit=object()
+        spin=workspace.electronic_view.findChild(__import__('PySide6.QtWidgets',fromlist=['QSpinBox']).QSpinBox)
+        spin.setValue(spin.minimum()); app.processEvents(); self.assertIsNone(workspace._last_fit); workspace.close()
+
+    def test_a8_mode_and_resize_smoke(self):
+        app=QApplication.instance() or QApplication([]); workspace=AnalyzeWorkspace(Project("A8"))
+        for width,height in ((1280,720),(1366,768),(1920,1080),(1280,720)):
+            workspace.resize(width,height); workspace.show(); app.processEvents(); self.assertGreater(workspace.width(),0)
+        for _ in range(3): workspace.mode.setCurrentText("Compare Results"); app.processEvents(); workspace.mode.setCurrentText("Single Result"); app.processEvents()
+        workspace.showMaximized(); app.processEvents(); workspace.showNormal(); app.processEvents(); workspace.close()

@@ -23,8 +23,8 @@ Executables resolve in this order: an explicit local tool path, an engine-specif
 directory, then `PATH`.  Machine-specific paths live in `LocalToolConfiguration`,
 not in a `CalculationRequest`.  Preflight validates the manifest, task DAG, working
 and input paths, executable/backend availability, and declared external artifacts.
-No shell redirection, shell substitutions, MPI, scheduler, SSH, or arbitrary Python
-source is accepted.
+No shell redirection, shell substitutions, scheduler, SSH, or arbitrary Python
+source is accepted. Local MPI is only the explicit C9R structured runtime wrapper.
 
 QE (`pw.x`, `ph.x`, `pw2wannier90.x`), Wannier90, and EPW are represented as generic
 subprocess commands when their adapters provide command specifications.  BoltzTraP2
@@ -45,3 +45,10 @@ visualization and interpretation workspace.
 Execution runtime state is versioned separately from `.qs` and is written atomically below `<workflow>/executions/<execution-id>/execution.json`. A CalculationRequest remains the stable scientific snapshot; each run has a distinct ExecutionAttempt ID, workflow/manifest/input fingerprints, resolved tool path provenance, timestamps, and per-task attempts. Logs remain task-local and persistent attempts use suffixes such as `.attempt001`, never overwriting prior failure logs.
 
 On recovery, missing sidecars mean never run; corrupt sidecars are contained diagnostics. A stale RUNNING task becomes retryable INTERRUPTED without attaching to any old PID. Resume retains validated completed prerequisites and reruns the first retryable task plus downstream work. Restarting a task invalidates all transitive descendants; Restart Workflow creates an independent new execution ID. Modified inputs or manifest/request mismatch prohibit automatic resume. There is no automatic process restart, engine-native checkpoint handling, scientific parsing, or runtime state in `.qs`.
+
+
+## C9R local resource allocation
+
+C9R adds session-local runtime resources to `LocalToolConfiguration`: CPU cores (MPI ranks), OpenMP threads, and an Auto or explicit MPI launcher. They are machine configuration only: they never enter CalculationRequest parameters, scientific fingerprints, task signatures, or generated scientific manifests. CPU availability prefers process affinity and falls back to `os.cpu_count`, with a minimum of one.
+
+For one core, subprocess tasks remain direct. For more than one core, only tools explicitly marked MPI-capable receive structured `mpirun -np N` or `mpiexec -n N` argv; shell execution remains disabled. Every subprocess receives `OMP_NUM_THREADS`. Preflight resolves the launcher before execution for MPI-capable tasks, and existing process-group cancellation owns the launcher and its children without global process matching.

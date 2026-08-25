@@ -33,6 +33,8 @@ class LocalExecutionManager:
     source = pseudo.get("source")
     if not source or not Path(str(source)).is_file(): errors.append(f"Pseudopotential {element!r}: provenance source is missing.")
     elif sha256(source) != pseudo["sha256"]: errors.append(f"Pseudopotential {element!r}: SHA-256 no longer matches generated provenance.")
+  if int(self.tools.cpu_cores) < 1: errors.append("Local CPU cores must be at least 1.")
+  if int(self.tools.omp_threads) < 1: errors.append("OpenMP threads must be at least 1.")
   for task in workflow.tasks:
    if any(dep not in task_map for dep in task.dependencies): errors.append(f"{task.task_id}: unknown dependency.")
    directory=self._safe(root,"",task.working_directory)
@@ -64,6 +66,9 @@ class LocalExecutionManager:
  def _run_task(self,workflow,task,record):
   root=Path(workflow.root).resolve(); runtime=record.tasks[task.task_id]; runtime.attempt_count += 1; runtime.state=TaskState.RUNNING; runtime.started_at=now(); runtime.timeout_seconds=task.timeout_seconds; self._emit(record,task.task_id,runtime.state)
   directory=self._safe(root,"",task.working_directory); command=task.command; executable=self.tools.resolve(task.tool_id,command.program,task.engine_id); runtime.resolved_executable=str(executable)
+  argv=[str(executable),*command.arguments]
+  if int(self.tools.cpu_cores)>1 and self.tools.mpi_capable(task.tool_id):
+   launcher=self.tools.resolved_mpi_launcher(); flag,count=self.tools.mpi_arguments(launcher,self.tools.cpu_cores); argv=[str(launcher),flag,count,*argv]
   stdin=self._safe(root,task.working_directory,command.stdin_file).open("rb") if command.stdin_file else None
   stdout_name=command.stdout_file or "stdout.log"; stderr_name=command.stderr_file or "stderr.log"
   if record.execution_id:
@@ -71,8 +76,8 @@ class LocalExecutionManager:
   stdout_path=self._safe(root,task.working_directory,stdout_name); stderr_path=self._safe(root,task.working_directory,stderr_name); runtime.stdout_path=str(stdout_path); runtime.stderr_path=str(stderr_path)
   try:
    with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-    env=os.environ.copy(); env.update(self.tools.environment); env.update(command.environment)
-    process=subprocess.Popen([str(executable),*command.arguments],cwd=directory,stdin=stdin,stdout=stdout,stderr=stderr,env=env,shell=False,start_new_session=(os.name=="posix"))
+    env=os.environ.copy(); env.update(self.tools.environment); env.update(command.environment); env["OMP_NUM_THREADS"]=str(int(self.tools.omp_threads))
+    process=subprocess.Popen(argv,cwd=directory,stdin=stdin,stdout=stdout,stderr=stderr,env=env,shell=False,start_new_session=(os.name=="posix"))
     with self._lock:self._process=process
     started=time.monotonic()
     while process.poll() is None:

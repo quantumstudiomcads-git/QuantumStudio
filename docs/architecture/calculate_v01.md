@@ -334,3 +334,15 @@ The public Brillouin-zone package now exposes a snapshot-based path recommendati
 The Calculate Results dialog is execution-attempt scoped.  It lists stored sidecar metadata immediately, offers Parse Results for completed output and Re-parse for refresh/stale recovery, and delegates parsing to a Qt-free ResultService on a worker thread.  Parsing neither launches engines nor modifies raw artifacts or Builder.  Result source selection uses the current completed task attempt recorded by C7.
 
 Functional controls retain family/function selection and only show hybrid fields for hybrid functionals.  EXX q meshes are structured integer controls (or explicit Auto); the pseudo section remains local/user-library based until a registered local provider is available.  Accuracy presets remain independent of explicit pseudo identity.
+
+
+## C9Q automatic pseudo and action hierarchy
+
+New pseudo dialogs default to **Auto (Recommended)** when no explicit assignment exists. Automatic resolution runs through the background provisioner, exposes compact `N / N ready` or failure state, and persists provider/version/path/XC/relativity/SHA in the existing request mapping after the user saves. Manual import remains explicit. Any accepted functional or pseudopotential change remains ordinary request state, so generated workflows must be regenerated before execution.
+
+The Calculate footer is intentionally compact: a concise status, **More**, **Generate**, and **Run**. Create, Compile, input preview, Local Tools, and Results remain available from More rather than occupying the persistent progression bar. During execution, Run changes to contextual Cancel.
+
+
+## C9R local execution resources
+
+Calculate exposes a compact Local Machine execution panel beside the execution preview. CPU cores is a bounded spin box; advanced settings, collapsed by default, contain OpenMP threads and an Auto/explicit MPI launcher. The footer remains status, More, Generate, and Run; active execution status includes the selected core count and Run becomes Cancel. Local Tools also exposes the MPI launcher alongside executable paths.

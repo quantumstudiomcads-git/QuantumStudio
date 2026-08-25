@@ -3,8 +3,8 @@ from .generated import GeneratedTask, GeneratedWorkflow
 from .local import LocalExecutionManager
 from .models import TaskState, WorkflowState
 from .normalize import normalize_adapter_tasks
-from .tools import LocalToolConfiguration
-__all__=["GeneratedTask","GeneratedWorkflow","LocalExecutionManager","LocalToolConfiguration","TaskState","WorkflowState"]
+from .tools import LocalToolConfiguration, available_logical_cpus
+__all__=["GeneratedTask","GeneratedWorkflow","LocalExecutionManager","LocalToolConfiguration","available_logical_cpus","TaskState","WorkflowState"]
 
 from .service import LocalExecutionService, LocalExecutionHandle
 

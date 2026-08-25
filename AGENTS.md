@@ -1505,3 +1505,9 @@ C9Y pseudopotential rules: retain PP identity (including SHA-256 where a local s
 
 
 C9P Calculate UI rules: normal scientific input uses typed controls (finite choices as dropdowns, booleans as checkboxes, and meshes as three integer controls); keep JSON only as request serialization.  Calculate band-path recommendations must use the public Brillouin-zone API and the CalculationRequest structure snapshot, never a duplicate path table or mutable Builder state.  Results parsing must remain Qt-free behind a service and execute asynchronously; it is scoped to the selected C7 execution attempt.  Long technical identifiers may be elided only with a full-value tooltip; normal scientific labels must not be clipped.
+
+
+C9Q pseudopotential provisioning rules: automatic provisioning is cache-first and Qt-free behind trusted HTTPS provider contracts. Verify provider checksum when available, UPF metadata, functional/SOC compatibility, and per-file SHA before atomic managed-cache installation; never scrape, infer arbitrary URLs, silently substitute incompatible XC, or make tests depend on the network. Existing explicit pseudopotentials remain Manual; numerical accuracy presets must not replace pseudo identity. Keep Calculate's persistent action bar limited to workflow progression; place infrequent actions in contextual controls.
+
+
+C9R execution-resource rule: local CPU ranks, MPI launcher selection, and OpenMP threads are session-local machine configuration, never CalculationRequest scientific state, task signatures, fingerprints, or generated manifest science. Apply MPI only through structured shell-free argv for explicitly MPI-capable tools; preserve per-process-group cancellation and generic C6 scheduling.

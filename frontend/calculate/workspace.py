@@ -969,7 +969,7 @@ class CalculateWorkspace(QWidget):
             qe_available = bool(self.execution_plan and self.calculation_request)
             if qe_available:
                 support = self.calculation_service.qe_input_support(self.execution_plan.resolved_calculations)
-                qe_available = all(item["available"] for item in support)
+                qe_available = self.calculation_service.workflow_input_available(self.execution_plan)
             self.preview_qe_button.setEnabled(qe_available)
             self.generate_qe_button.setEnabled(qe_available)
 
@@ -1185,12 +1185,12 @@ class CalculateWorkspace(QWidget):
                 f"{index}. {calculation.name if calculation is not None else calculation_id}"
                 f"   depends on: {dependencies}"
             )
-        support = self.calculation_service.qe_input_support(resolved)
-        if all(item["available"] for item in support):
-            lines.append("✓ QE input generation available")
+        if self.calculation_service.workflow_input_available(self.execution_plan):
+            lines.append("✓ Engine input generation available")
         else:
+            support = self.calculation_service.qe_input_support(resolved)
             lines.extend((
-                "", "QE input generation deferred:",
+                "", "Engine input generation deferred:",
                 *[f"• {item['calculation_id']}: {item['reason']}" for item in support if not item["available"]],
             ))
         lines.extend(["", "✓ Workflow compiled", "✓ Dependencies resolved", "✓ Structure snapshot captured", "✓ Ready for QE input generation"])
@@ -1201,7 +1201,7 @@ class CalculateWorkspace(QWidget):
         if self.calculation_request is None:
             return
         try:
-            generation = self.calculation_service.preview_qe_inputs(self.calculation_request)
+            generation = self.calculation_service.preview_engine_inputs(self.calculation_request)
             dialog = QDialog(self)
             dialog.setWindowTitle("Quantum ESPRESSO Input Preview")
             layout = QVBoxLayout(dialog)
@@ -1211,7 +1211,7 @@ class CalculateWorkspace(QWidget):
             preview.setStyleSheet("font-family: monospace;")
             preview.setPlainText("\n\n".join(
                 f"# {task.working_directory}/{task.input_filename} ({task.executable})\n\n{task.input_text}"
-                for task in generation.tasks
+                for task in generation
             ))
             layout.addWidget(preview)
             dialog.resize(840, 680)
@@ -1228,7 +1228,7 @@ class CalculateWorkspace(QWidget):
         if not root:
             return
         try:
-            location = self.calculation_service.generate_qe_inputs(self.calculation_request, root)
+            location = self.calculation_service.generate_engine_inputs(self.calculation_request, root)
             QMessageBox.information(
                 self, "QE Inputs Generated",
                 f"QE inputs were generated at:\n{location}\n\nNo calculation was executed.",

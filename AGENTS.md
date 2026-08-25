@@ -1331,6 +1331,15 @@ per-element pseudopotential assignments, stable workflow prefix/outdir context,
 and transactional exports into user-selected directories. Never guess/download
 pseudopotentials or execute an engine from input generation.
 Keep task scope narrow. Do not connect Device Builder to Calculate or invoke an
+
+Public calculation catalog IDs describe scientific intent, not every executable
+stage. Cross-engine workflows may expand an ExecutionPlan into private signed
+PlannedTasks with explicit artifact contracts; these task types must not become
+new public catalog objects. `wannierization` uses a QE SCF/NSCF plus Wannier90
+preprocess, pw2wannier90, and main-run task DAG. Maintain one stable engine ID
+per engine, preserve request-snapshot geometry, require explicit Wannier
+parameters/projections, and never execute or discover QE/Wannier binaries from
+input generation.
 engine/executor until a dedicated milestone explicitly authorizes it.
 
 Builder and Device Builder development must not destabilize calculation APIs.

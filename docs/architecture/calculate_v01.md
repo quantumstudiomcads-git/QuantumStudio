@@ -221,3 +221,38 @@ Calculate offers read-only monospaced QE input previews and an explicit
 **Generate QE Inputs** action for a selected saved request. Export neither
 executes nor discovers `pw.x`, `ph.x`, MPI, schedulers, SSH, or any engine
 binary. Those concerns remain C5 work.
+
+## Internal workflow tasks and Wannier90 (C5A)
+
+The 147 catalog entries remain public scientific intents. A public entry may
+expand to private `PlannedTask` stages; those IDs are never added to the
+catalog. Tasks now carry semantic task type, engine ID, tool ID, deterministic
+parameter signature, explicit task edges, structure reference, and declared
+artifact inputs/outputs. Signatures include resolved scientific parameters, so
+an NSCF for a Wannier uniform mesh cannot be deduplicated with an incompatible
+NSCF purpose or mesh.
+
+`wannierization` is now the thirteenth backend-executable public definition. It
+compiles into `scf -> qe_pw_nscf -> wannier90_preprocess -> qe_pw2wannier90 ->
+wannier90_run`. The signed private NSCF task uses `pw.x`, `calculation='nscf'`,
+the explicit uniform `mp_grid`, `nbnd=num_bands`, and the same QE prefix/outdir
+as SCF. It declares wavefunction/eigenvalue outputs. Wannier preprocessing
+uses `wannier90.x -pp <seed>` and declares `.nnkp`; pw2wannier90 declares
+`.amn`, `.mmn`, and `.eig`; the main Wannier task declares `<seed>_hr.dat` and
+centres. These are contracts for a future executor, not verified files.
+
+`wannier90` is the stable second engine ID. Typed `WannierInputSettings`
+requires `num_wann`, `num_bands`, explicit projections, and `mp_grid`, and
+validates energy windows and iteration counts. The deterministic `.win` writer
+preserves request geometry in angstrom `unit_cell_cart`/`atoms_cart`, writes the
+same unshifted uniform grid represented by QE `K_POINTS automatic`, and emits
+projections and optional spinor/disentanglement settings. `pw2wannier90.x`
+input shares QE prefix/outdir and writes AMN/MMN. Preprocess/main command forms
+are derived metadata only.
+
+C5A exports all task directories through the existing transactional manifest
+workflow. The manifest is multi-engine and records engine/tool/type, task IDs,
+edges, artifact contracts, and inputs. Future execution will stage declared
+artifacts between task directories; C5A executes nothing. `wannier_bands` and
+all Berry/topology/Hall public objects remain deferred because no reliable
+k-path or downstream post-processing workflow is represented.

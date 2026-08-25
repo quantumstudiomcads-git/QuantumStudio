@@ -688,6 +688,7 @@ register(
     "Wannier90",
     "Construct maximally localized Wannier functions.",
     ["wannier"],
+    "ready",
 )
 
 register(

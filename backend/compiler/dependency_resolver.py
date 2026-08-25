@@ -1,240 +1,100 @@
-"""
-Quantum Studio Dependency Resolver
+"""Deterministic direct-ID dependency DAG resolver for calculation planning."""
 
-Resolves the complete execution sequence required for a set
-of user-selected calculations.
+from __future__ import annotations
 
-A calculation dependency may refer to:
+from dataclasses import dataclass
 
-1. Another calculation ID
-
-Example:
-
-    bands.requires = ("scf",)
-
-2. An artifact produced by another calculation
-
-Example:
-
-    bands.requires = ("scf_result",)
-
-3. An external project input
-
-Example:
-
-    scf.requires = ("structure",)
-
-External inputs do not need another calculation to produce them.
-"""
+from backend.calculations.registry import CalculationRegistry, RegistryValidationError, registry
 
 
-from backend.calculations.registry import registry
+class DependencyResolutionError(RuntimeError):
+    """Raised when a selected calculation cannot be expanded into a valid DAG."""
+
+
+@dataclass(frozen=True)
+class ResolvedDependencyGraph:
+    selected_calculations: tuple[str, ...]
+    ordered_calculations: tuple[str, ...]
+    dependencies: tuple[tuple[str, tuple[str, ...]], ...]
+    levels: tuple[tuple[str, int], ...]
+
+    def dependencies_for(self, calculation_id: str) -> tuple[str, ...]:
+        return dict(self.dependencies).get(calculation_id, ())
+
+    def level_for(self, calculation_id: str) -> int:
+        return dict(self.levels)[calculation_id]
 
 
 class DependencyResolver:
+    """Build one shared-prerequisite DAG from selected executable calculations."""
 
-    # ---------------------------------------------------------
-    # External inputs
-    #
-    # These are supplied directly by the Quantum Studio project
-    # and therefore do not require another calculation.
-    # ---------------------------------------------------------
-
-    EXTERNAL_INPUTS = {
-
-        "structure",
-
-        "initial_structure",
-
-        "device_structure",
-
-        "transport_structure",
-
-    }
-
-
-    def __init__(
-        self,
-        selected_calculations: list[str],
-    ):
-
-        self.selected_calculations = (
-            selected_calculations
-        )
-
-        self.resolved = []
-
-        self.resolving = set()
-
-
-    # ---------------------------------------------------------
-    # Public API
-    # ---------------------------------------------------------
+    def __init__(self, selected_calculations: list[str], registry_instance: CalculationRegistry | None = None):
+        self.selected_calculations = tuple(str(item) for item in selected_calculations)
+        self.registry = registry if registry_instance is None else registry_instance
 
     def resolve(self) -> list[str]:
+        return list(self.build().ordered_calculations)
 
-        for calculation_id in (
-            self.selected_calculations
-        ):
-
-            calculation = registry.get(
-                calculation_id
-            )
-
-            self._resolve_calculation(
-                calculation
-            )
-
-        return self.resolved
-
-
-    # ---------------------------------------------------------
-    # Recursive dependency resolution
-    # ---------------------------------------------------------
-
-    def _resolve_calculation(
-        self,
-        calculation,
-    ):
-
-        # Already resolved
-        if calculation.id in self.resolved:
-
-            return
-
-
-        # Detect circular dependencies
-        if calculation.id in self.resolving:
-
-            raise RuntimeError(
-                "Circular dependency detected involving "
-                f"'{calculation.id}'"
-            )
-
-
-        self.resolving.add(
-            calculation.id
-        )
-
-
-        # -----------------------------------------------------
-        # Resolve all requirements first
-        # -----------------------------------------------------
-
-        for requirement in (
-            calculation.requires
-        ):
-
-            dependency = (
-                self._find_dependency(
-                    requirement
-                )
-            )
-
-
-            # External input
-            #
-            # Example:
-            #
-            # structure
-            #
-            # No calculation needs to be inserted.
-            if dependency is None:
-
-                continue
-
-
-            self._resolve_calculation(
-                dependency
-            )
-
-
-        # -----------------------------------------------------
-        # All dependencies are resolved.
-        #
-        # Remove this calculation from the active recursion
-        # stack and add it to the execution sequence.
-        # -----------------------------------------------------
-
-        self.resolving.remove(
-            calculation.id
-        )
-
-        self.resolved.append(
-            calculation.id
-        )
-
-
-    # ---------------------------------------------------------
-    # Dependency lookup
-    #
-    # Resolution order:
-    #
-    # 1. External input
-    # 2. Calculation ID
-    # 3. Produced artifact
-    # ---------------------------------------------------------
-
-    def _find_dependency(
-        self,
-        requirement: str,
-    ):
-
-        # -----------------------------------------------------
-        # External input
-        # -----------------------------------------------------
-
-        if requirement in self.EXTERNAL_INPUTS:
-
-            return None
-
-
-        # -----------------------------------------------------
-        # Direct calculation dependency
-        #
-        # Example:
-        #
-        # requires = ("scf",)
-        # -----------------------------------------------------
-
+    def build(self) -> ResolvedDependencyGraph:
         try:
+            self.registry.validate()
+        except RegistryValidationError as error:
+            raise DependencyResolutionError(str(error)) from error
+        if not self.selected_calculations:
+            raise DependencyResolutionError("Select at least one calculation before compiling a plan.")
 
-            return registry.get(
-                requirement
-            )
+        registry_order = {calculation.id: index for index, calculation in enumerate(self.registry.all())}
+        selected = tuple(sorted(set(self.selected_calculations), key=lambda item: (registry_order.get(item, len(registry_order)), item)))
+        for calculation_id in selected:
+            if not self.registry.exists(calculation_id):
+                raise DependencyResolutionError(f"Unknown calculation: {calculation_id}")
 
-        except KeyError:
+        dependencies: dict[str, tuple[str, ...]] = {}
+        visiting: list[str] = []
 
-            pass
+        def collect(calculation_id: str) -> None:
+            if calculation_id in dependencies:
+                return
+            if calculation_id in visiting:
+                cycle = visiting[visiting.index(calculation_id):] + [calculation_id]
+                raise DependencyResolutionError("Dependency cycle detected: " + " -> ".join(cycle))
+            visiting.append(calculation_id)
+            direct = tuple(self.registry.get(calculation_id).requires)
+            dependencies[calculation_id] = direct
+            for dependency_id in direct:
+                collect(dependency_id)
+            visiting.pop()
 
+        for calculation_id in selected:
+            collect(calculation_id)
 
-        # -----------------------------------------------------
-        # Artifact dependency
-        #
-        # Example:
-        #
-        # requires = ("scf_result",)
-        #
-        # Find the calculation that produces:
-        #
-        # produces = ("scf_result",)
-        # -----------------------------------------------------
+        levels: dict[str, int] = {}
+        def level(calculation_id: str) -> int:
+            if calculation_id not in levels:
+                direct = dependencies[calculation_id]
+                levels[calculation_id] = 0 if not direct else 1 + max(level(item) for item in direct)
+            return levels[calculation_id]
 
-        for calculation in registry.all():
+        for calculation_id in dependencies:
+            level(calculation_id)
 
-            if requirement in calculation.produces:
+        remaining = set(dependencies)
+        ordered: list[str] = []
+        while remaining:
+            ready = [
+                calculation_id for calculation_id in remaining
+                if all(dependency in ordered for dependency in dependencies[calculation_id])
+            ]
+            if not ready:
+                raise DependencyResolutionError("Dependency graph has no valid topological order.")
+            ready.sort(key=lambda item: (levels[item], registry_order[item], item))
+            calculation_id = ready[0]
+            ordered.append(calculation_id)
+            remaining.remove(calculation_id)
 
-                return calculation
-
-
-        # -----------------------------------------------------
-        # Nothing can satisfy this requirement
-        # -----------------------------------------------------
-
-        raise RuntimeError(
-            f"Unable to resolve dependency "
-            f"'{requirement}'. "
-            f"No calculation with this ID exists and "
-            f"no registered calculation produces this "
-            f"artifact."
+        return ResolvedDependencyGraph(
+            selected_calculations=selected,
+            ordered_calculations=tuple(ordered),
+            dependencies=tuple((item, dependencies[item]) for item in ordered),
+            levels=tuple((item, levels[item]) for item in ordered),
         )

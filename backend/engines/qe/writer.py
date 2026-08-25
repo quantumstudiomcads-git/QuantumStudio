@@ -134,11 +134,11 @@ def k_points_card(parameters: Mapping[str, Any], periodic: object) -> str:
 
 def pw_input(calculation_id: str, parameters: Mapping[str, Any], structure: Mapping[str, Any], context, pseudopotentials: Mapping[str, object]) -> str:
     """Build a valid C4 pw.x input for SCF, relax, or vc-relax."""
-    qe_calculation = {"scf": "scf", "relax": "relax", "vc_relax": "vc-relax"}[calculation_id]
+    qe_calculation = {"scf": "scf", "nscf": "nscf", "qe_pw_nscf": "nscf", "relax": "relax", "vc_relax": "vc-relax"}[calculation_id]
     atoms = structure.get("atoms", [])
     species_count = len({str(atom.get("element", "")) for atom in atoms if isinstance(atom, Mapping)})
     control = {"calculation": qe_calculation, "prefix": context.prefix, "outdir": context.outdir, "pseudo_dir": context.pseudo_dir}
-    system = {"ibrav": 0, "nat": len(atoms), "ntyp": species_count, "ecutwfc": parameters.get("ecutwfc"), "ecutrho": parameters.get("ecutrho"), "input_dft": parameters.get("functional"), "nspin": 2 if parameters.get("spin") else None, "lspinorb": True if parameters.get("soc") else None, "noncolin": True if parameters.get("soc") else None, "occupations": parameters.get("occupations"), "smearing": parameters.get("smearing"), "degauss": parameters.get("degauss")}
+    system = {"ibrav": 0, "nat": len(atoms), "ntyp": species_count, "nbnd": parameters.get("nbnd"), "ecutwfc": parameters.get("ecutwfc"), "ecutrho": parameters.get("ecutrho"), "input_dft": parameters.get("functional"), "nspin": 2 if parameters.get("spin") else None, "lspinorb": True if parameters.get("soc") else None, "noncolin": True if parameters.get("soc") else None, "occupations": parameters.get("occupations"), "smearing": parameters.get("smearing"), "degauss": parameters.get("degauss")}
     electrons = {"conv_thr": parameters.get("conv_thr")}
     sections = [serialize_namelist("CONTROL", control), serialize_namelist("SYSTEM", system), serialize_namelist("ELECTRONS", electrons)]
     if calculation_id in {"relax", "vc_relax"}:

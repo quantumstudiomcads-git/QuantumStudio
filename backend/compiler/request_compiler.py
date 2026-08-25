@@ -52,15 +52,7 @@ class RequestCompiler:
         # execution sequence.
         # -----------------------------------------------------
 
-        parameter_resolver = ParameterResolver(
-            self.request.parameters
-        )
-
-        resolved_parameters = (
-            parameter_resolver.resolve(
-                plan.resolved_calculations
-            )
-        )
+        resolved_parameters = plan.calculation_parameters
 
 
         # -----------------------------------------------------

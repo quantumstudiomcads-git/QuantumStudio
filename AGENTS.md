@@ -1490,3 +1490,5 @@ C6 local execution must consume the generic GeneratedWorkflow/CommandSpec bounda
 C7 runtime state belongs in atomic, versioned execution-workspace sidecars, never CalculationRequest or .qs logs. Treat stale RUNNING as retryable INTERRUPTED; never attach old PIDs or automatically resume processes. Preserve attempts/logs and use workflow/input fingerprints to reject incompatible resumes.
 
 C8A QE post-processors are Calculate tasks that generate raw artifacts only. Require explicit band/phonon paths where applicable, preserve purpose-signed NSCF separation, and never infer high-symmetry paths or parse scientific output before C8B.
+
+C8B Results must be Qt-free, artifact-driven, source-hashed, and stored under execution history rather than .qs. Keep execution/process state separate from scientific result validity; parsers must never shift raw references, mutate Builder, or create visualizations.

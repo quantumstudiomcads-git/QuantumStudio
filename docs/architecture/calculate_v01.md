@@ -303,3 +303,7 @@ C7 stores versioned execution-attempt sidecars atomically beneath generated work
 ## C8A computational post-processing
 
 C8A adds private QE post-processing stages for explicit bands (`pw.x` bands plus `bands.x`), DOS (`pw.x` dense signed NSCF plus `dos.x`), PDOS (`projwfc.x`), pp.x charge/spin raw grids, and phonon DOS (`ph.x -> q2r.x -> matdyn.x`). They remain Calculate workflow tasks and produce raw semantic artifacts only; C8B will parse them. Band paths are explicit fractional request data and are never inferred. Uniform NSCF tasks carry purpose signatures, preventing accidental sharing with Wannier, EPW, or BTP2. QE postprocessors retain the shared prefix/outdir and normalize to generic CommandSpec tasks; C6/C7 dispatch/recovery needs no engine-specific branch.
+
+## C8B scientific result parsing
+
+C8B adds a Qt-free engine-neutral Result model and sidecar ResultStore. Parsers consume declared raw artifacts, retain source hashes/provenance and distinguish scientific validity from process state. Current conservative parsing supports QE SCF stdout, bands, DOS, and matdyn phonon-DOS raw rows. No parser shifts energy references, mutates Builder, renders plots, or treats BTP2/NEGF configuration as numerical results.

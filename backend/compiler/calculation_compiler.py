@@ -29,6 +29,11 @@ class CalculationCompiler:
         graph = DependencyResolver(self.request.selected_calculations, self.registry).build()
         defaults = self._shared_dependency_defaults(graph.ordered_calculations)
         parameters = ParameterResolver(self.request.parameters, self.registry).resolve(list(graph.ordered_calculations), defaults, self.request.structure)
+        from backend.dft.functionals import hybrid_capability
+        capability = hybrid_capability(self.request.parameters.get("xc_functional", "pbe"), self.request.selected_calculations)
+        if capability != "SUPPORTED":
+            if capability == "UNSUPPORTED_BY_QE_PHONON": raise ValueError("Quantum ESPRESSO ph.x does not support hybrid functionals for this workflow.")
+            raise ValueError("Current hybrid NSCF-dependent workflow is not yet implemented in Quantum Studio.")
         tasks = self._public_tasks(graph, parameters)
         if "wannierization" in self.request.selected_calculations:
             tasks = self._expand_wannierization(tasks, parameters)
@@ -44,9 +49,15 @@ class CalculationCompiler:
         plan.metadata.update({"parameters": parameters, "dependency_graph": ({task.id: list(task.depends_on_task_ids) for task in tasks} if ({"wannierization", "electron_phonon", "boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration"} & set(self.request.selected_calculations)) else {item: list(graph.dependencies_for(item)) for item in graph.ordered_calculations}), "parameter_precedence": ["schema_defaults", "accuracy_preset", "workflow_dependency_defaults", "structure_derived_defaults", "explicit_request_parameters"], "structure_reference": "request_snapshot"})
         return plan
 
+    def _pseudopotential_identity(self):
+        values = self.request.parameters.get("pseudopotentials", {})
+        if not isinstance(values, dict): return {}
+        return {str(element): ({"sha256": value.get("sha256"), "filename": value.get("filename")} if isinstance(value, dict) else {"legacy_assignment": str(value)}) for element, value in sorted(values.items())}
+
     def _public_tasks(self, graph, parameters):
         ids = {item: f"{self.request.id}:{item}" for item in graph.ordered_calculations}
-        return [PlannedTask(id=ids[item], calculation_id=item, semantic_task_type=item, engine_id=self.registry.get(item).engine, tool_id=None, parameter_signature=_signature(parameters[item]), depends_on_task_ids=tuple(ids[dep] for dep in graph.dependencies_for(item)), parameters=dict(parameters[item]), structure_reference="request_snapshot", artifact_outputs=("qe_charge_density", "qe_save") if item == "scf" else (), metadata={"workflow": self.registry.get(item).workflow, "dependency_level": graph.level_for(item)}) for item in graph.ordered_calculations]
+        pseudo_identity = self._pseudopotential_identity()
+        return [PlannedTask(id=ids[item], calculation_id=item, semantic_task_type=item, engine_id=self.registry.get(item).engine, tool_id=None, parameter_signature=_signature({"parameters": parameters[item], "pseudopotentials": pseudo_identity} if self.registry.get(item).engine == "quantum_espresso" else parameters[item]), depends_on_task_ids=tuple(ids[dep] for dep in graph.dependencies_for(item)), parameters=dict(parameters[item]), structure_reference="request_snapshot", artifact_outputs=("qe_charge_density", "qe_save") if item == "scf" else (), metadata={"workflow": self.registry.get(item).workflow, "dependency_level": graph.level_for(item)}) for item in graph.ordered_calculations]
 
     def _expand_wannierization(self, tasks, parameters):
         settings = WannierInputSettings.from_parameters(self.request.parameters)

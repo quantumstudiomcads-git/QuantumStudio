@@ -1500,3 +1500,5 @@ C8D parameter forms must remain schema-driven and route persistence/validation t
 Calculate v0.1 scientific architecture is feature frozen after C9. Result browsing in Calculate is metadata/provenance only; do not add plotting or Analyze coupling without an explicit new stage.
 
 C9X functional selection is registry-driven: GGA is a family, never a QE input_dft identifier. HSE06/B3LYP hybrid parameters must be signed/generated explicitly; do not generate hybrid ph.x or semilocal fallback workflows.
+
+C9Y pseudopotential rules: retain PP identity (including SHA-256 where a local source is known) in scientific provenance and never let accuracy presets silently replace a pseudo set. Treat functional/PP compatibility and SOC relativity as domain validation; provider indexing is local/explicit and must not scrape or auto-download scientific files.

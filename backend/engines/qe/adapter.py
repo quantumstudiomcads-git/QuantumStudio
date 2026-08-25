@@ -25,6 +25,7 @@ from backend.engines.qe.models import (
 )
 from backend.engines.qe.writer import phonon_input, pw_input
 from backend.engines.qe.postprocessing import post_input, pw_bands_input
+from backend.pseudopotentials import PseudoSet, Relativity, inspect_upf, validate_pseudo_set
 
 
 ENGINE_ID = "quantum_espresso"
@@ -115,6 +116,36 @@ class QuantumEspressoAdapter(EngineAdapter):
             selections[element] = selection
         return selections
 
+    def _pseudo_provenance(self, pseudos):
+        provenance = {}
+        records = {}
+        for element, selection in pseudos.items():
+            entry = selection.provenance()
+            candidate = Path(selection.source) if selection.source else Path(selection.filename)
+            if not candidate.is_file():
+                configured = Path(self.pseudo_dir) / selection.filename
+                if configured.is_file(): candidate = configured
+            if candidate.is_file():
+                record = inspect_upf(candidate, selection.library_id or "local", selection.library_version or "")
+                records[element] = record
+                entry.update({"source": record.path, "sha256": record.sha256, "xc_functional": record.xc_functional, "pseudo_type": record.pseudo_type.value, "relativity": record.relativity.value})
+            provenance[element] = entry
+        return provenance, records
+
+    def _validate_pseudo_compatibility(self, plan, pseudos):
+        provenance, records = self._pseudo_provenance(pseudos)
+        if records:
+            functional = plan.parameters.get("xc_functional", plan.parameters.get("functional", "pbe"))
+            spin = plan.parameters.get("spin", {}) if isinstance(plan.parameters, Mapping) else {}
+            soc = bool(plan.parameters.get("soc", False) or (isinstance(spin, Mapping) and spin.get("soc", False)))
+            missing, findings = validate_pseudo_set(functional, soc, records.keys(), PseudoSet(records))
+            if missing: raise MissingPseudopotentialError("Missing pseudopotential metadata for: " + ", ".join(missing))
+            mismatches = [element for element, finding in findings.items() if finding.state.value == "WARNING_XC_MISMATCH"]
+            if mismatches: raise InvalidQEParameterError("Selected pseudopotential XC is incompatible for: " + ", ".join(mismatches))
+            if soc and not any(record.relativity is Relativity.FULLY_RELATIVISTIC for record in records.values()):
+                raise InvalidQEParameterError("SOC requires at least one fully relativistic pseudopotential with spin-orbit information.")
+        return provenance
+
     def validate_plan(self, plan) -> None:
         if not hasattr(plan, "tasks") or not hasattr(plan, "structure"):
             raise InvalidQEParameterError("QuantumEspressoAdapter requires an ExecutionPlan.")
@@ -124,12 +155,14 @@ class QuantumEspressoAdapter(EngineAdapter):
         if unsupported:
             details = "; ".join(f"{item}: {self.support_reason(item)}" for item in unsupported)
             raise UnsupportedQECalculationError("QE input generation is deferred: " + details)
-        self._pseudopotentials_for(plan.structure, plan)
+        pseudos = self._pseudopotentials_for(plan.structure, plan)
+        self._validate_pseudo_compatibility(plan, pseudos)
 
     def compile_plan(self, plan) -> QEGeneration:
         self.validate_plan(plan)
         context = self._context_for(plan)
         pseudos = self._pseudopotentials_for(plan.structure, plan)
+        pseudo_provenance = self._validate_pseudo_compatibility(plan, pseudos)
         qe_tasks: list[QETaskInput] = []
         for index, task in enumerate(plan.tasks, start=1):
             parameters = dict(task.parameters)
@@ -155,13 +188,14 @@ class QuantumEspressoAdapter(EngineAdapter):
                 input_filename=input_filename, output_filename=input_filename.removesuffix(".in") + ".out",
                 working_directory=directory, input_text=input_text,
                 depends_on_task_ids=tuple(task.depends_on_task_ids),
-                metadata={"engine_id":task.engine_id,"semantic_task_type":task.semantic_task_type,"parameter_signature":task.parameter_signature,"artifact_inputs":list(task.artifact_inputs),"artifact_outputs":list(task.artifact_outputs),"qe_prefix": context.prefix, "qe_outdir": context.outdir, "structure_fingerprint": structure_fingerprint(plan.structure)},
+                metadata={"engine_id":task.engine_id,"semantic_task_type":task.semantic_task_type,"parameter_signature":task.parameter_signature,"artifact_inputs":list(task.artifact_inputs),"artifact_outputs":list(task.artifact_outputs),"qe_prefix": context.prefix, "qe_outdir": context.outdir, "structure_fingerprint": structure_fingerprint(plan.structure), "pseudopotentials": pseudo_provenance},
             ))
         manifest = {
             "engine_id": self.engine_id,
             "request_id": plan.calculation_id,
             "structure_fingerprint": structure_fingerprint(plan.structure),
             "workflow_context": {"prefix": context.prefix, "outdir": context.outdir, "pseudo_dir": context.pseudo_dir},
+            "pseudopotentials": pseudo_provenance,
             "tasks": [
                 {"task_id": task.task_id, "calculation_id": task.calculation_id, "dependencies": list(task.depends_on_task_ids), "executable": task.executable, "input_filename": task.input_filename, "output_filename": task.output_filename, "working_directory": task.working_directory}
                 for task in qe_tasks

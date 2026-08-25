@@ -3,6 +3,7 @@ from __future__ import annotations
 import json, os, signal, subprocess, threading, time
 from pathlib import Path
 from backend.core.execution_contract import ArtifactLocality, ExecutionMode
+from backend.pseudopotentials.models import sha256
 from .errors import ArtifactUnavailableError, ExecutionPreflightError, UnsupportedExecutionModeError
 from .models import TaskExecutionRecord, TaskState, WorkflowExecutionRecord, now
 from .tools import LocalToolConfiguration
@@ -26,6 +27,12 @@ class LocalExecutionManager:
    if not isinstance(data,dict): errors.append("Generated workflow manifest is invalid.")
    elif data.get("request_id") not in (None, workflow.request_id): errors.append("Generated workflow manifest does not match the selected request.")
   except Exception: errors.append("Generated workflow manifest is missing or invalid.")
+  else:
+   for element, pseudo in (data.get("pseudopotentials", {}) or {}).items():
+    if not isinstance(pseudo, dict) or not pseudo.get("sha256"): continue
+    source = pseudo.get("source")
+    if not source or not Path(str(source)).is_file(): errors.append(f"Pseudopotential {element!r}: provenance source is missing.")
+    elif sha256(source) != pseudo["sha256"]: errors.append(f"Pseudopotential {element!r}: SHA-256 no longer matches generated provenance.")
   for task in workflow.tasks:
    if any(dep not in task_map for dep in task.dependencies): errors.append(f"{task.task_id}: unknown dependency.")
    directory=self._safe(root,"",task.working_directory)

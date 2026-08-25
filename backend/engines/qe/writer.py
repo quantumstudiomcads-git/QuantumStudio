@@ -9,6 +9,7 @@ from typing import Any
 from ase.data import atomic_masses, atomic_numbers
 
 from backend.engines.qe.models import InvalidQEParameterError, MissingPseudopotentialError
+from backend.dft.functionals import resolve
 
 
 def format_number(value: int | float) -> str:
@@ -135,10 +136,11 @@ def k_points_card(parameters: Mapping[str, Any], periodic: object) -> str:
 def pw_input(calculation_id: str, parameters: Mapping[str, Any], structure: Mapping[str, Any], context, pseudopotentials: Mapping[str, object]) -> str:
     """Build a valid C4 pw.x input for SCF, relax, or vc-relax."""
     qe_calculation = {"scf": "scf", "nscf": "nscf", "qe_pw_nscf": "nscf", "relax": "relax", "vc_relax": "vc-relax"}[calculation_id]
+    functional = resolve(parameters.get("xc_functional", parameters.get("functional", "pbe")))
     atoms = structure.get("atoms", [])
     species_count = len({str(atom.get("element", "")) for atom in atoms if isinstance(atom, Mapping)})
     control = {"calculation": qe_calculation, "prefix": context.prefix, "outdir": context.outdir, "pseudo_dir": context.pseudo_dir}
-    system = {"ibrav": 0, "nat": len(atoms), "ntyp": species_count, "nbnd": parameters.get("nbnd"), "ecutwfc": parameters.get("ecutwfc"), "ecutrho": parameters.get("ecutrho"), "input_dft": parameters.get("functional"), "nspin": 2 if parameters.get("spin") else None, "lspinorb": True if parameters.get("soc") else None, "noncolin": True if parameters.get("soc") else None, "occupations": parameters.get("occupations"), "smearing": parameters.get("smearing"), "degauss": parameters.get("degauss")}
+    system = {"ibrav": 0, "nat": len(atoms), "ntyp": species_count, "nbnd": parameters.get("nbnd"), "ecutwfc": parameters.get("ecutwfc"), "ecutrho": parameters.get("ecutrho"), "input_dft": functional.qe_input_dft, "exx_fraction": parameters.get("exx_fraction", functional.exx_fraction) if functional.hybrid else None, "screening_parameter": parameters.get("screening_parameter", functional.screening) if functional.screening is not None else None, "ace": parameters.get("ace", True) if functional.hybrid else None, "nqx1": (parameters.get("exx_q_mesh") or parameters.get("kpoints",{}).get("mesh",[1,1,1]))[0] if functional.hybrid else None, "nqx2": (parameters.get("exx_q_mesh") or parameters.get("kpoints",{}).get("mesh",[1,1,1]))[1] if functional.hybrid else None, "nqx3": (parameters.get("exx_q_mesh") or parameters.get("kpoints",{}).get("mesh",[1,1,1]))[2] if functional.hybrid else None, "exxdiv_treatment": parameters.get("exxdiv_treatment", "gygi-baldereschi") if functional.hybrid else None, "nspin": 2 if parameters.get("spin") else None, "lspinorb": True if parameters.get("soc") else None, "noncolin": True if parameters.get("soc") else None, "occupations": parameters.get("occupations"), "smearing": parameters.get("smearing"), "degauss": parameters.get("degauss")}
     electrons = {"conv_thr": parameters.get("conv_thr")}
     sections = [serialize_namelist("CONTROL", control), serialize_namelist("SYSTEM", system), serialize_namelist("ELECTRONS", electrons)]
     if calculation_id in {"relax", "vc_relax"}:

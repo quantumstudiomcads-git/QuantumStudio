@@ -315,3 +315,7 @@ Calculate exposes a schema-driven parameter dialog over the C3 resolver with Fas
 ## C9 integration and freeze
 
 Calculate v0.1 is feature frozen after C9: workflow, execution, and Result architecture changes require a new explicit stage. The Calculate Results browser reads C8 sidecar metadata by execution attempt and shows summaries/provenance only; Analyze remains responsible for future visualization. Post-freeze work is limited to GUI presentation/usability polish and narrow bug fixes.
+
+## C9Y pseudopotential integration
+
+Calculate request pseudo assignments remain backward-compatible element-to-filename mappings. Rich optional assignment metadata records library/version, normalized XC, type, relativity and SHA-256 without changing the project format. QE task signatures include that request identity; generated manifests retain provenance and generic preflight validates any source/checksum pair. C9Y is backend-only: provider indexing and compatibility APIs are available for a later dedicated pseudo selector, with no automatic download or substitution.

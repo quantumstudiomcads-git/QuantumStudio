@@ -311,3 +311,7 @@ C8B adds a Qt-free engine-neutral Result model and sidecar ResultStore. Parsers 
 ## C8D Calculate operation
 
 Calculate exposes a schema-driven parameter dialog over the C3 resolver with Fast, Intermediate, Precise, and Custom modes. It presents user-facing labels/units, retains explicit Custom values, and shows resolved parameter JSON before saving a request. Machine executable paths remain in Local Tools, not scientific forms. C8D adds no plotting or Analyze behavior.
+
+## C9 integration and freeze
+
+Calculate v0.1 is feature frozen after C9: workflow, execution, and Result architecture changes require a new explicit stage. The Calculate Results browser reads C8 sidecar metadata by execution attempt and shows summaries/provenance only; Analyze remains responsible for future visualization. Post-freeze work is limited to GUI presentation/usability polish and narrow bug fixes.

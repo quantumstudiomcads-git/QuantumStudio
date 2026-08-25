@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from frontend.calculations.catalog import CALCULATIONS
 from frontend.services.calculation_service import CalculationService
+from frontend.services.result_service import ResultService
 from frontend.calculate.parameter_session import PRESETS, descriptors, parse_value, preset_parameters
 from backend.execution import ExecutionStore, LocalExecutionManager, LocalExecutionService, LocalToolConfiguration, RecoveryState
 
@@ -71,6 +72,7 @@ class CalculateWorkspace(QWidget):
         self._local_execution_service = None
         self._active_execution = None
         self.local_tool_configuration = LocalToolConfiguration()
+        self.result_service = ResultService()
 
         self._build_ui()
         self._apply_style()
@@ -658,6 +660,9 @@ class CalculateWorkspace(QWidget):
         self.configure_tools_button = QPushButton("Local Tools…")
         self.configure_tools_button.clicked.connect(self._configure_local_tools)
         footer.addWidget(self.configure_tools_button)
+        self.view_results_button = QPushButton("Results…")
+        self.view_results_button.clicked.connect(self._view_results)
+        footer.addWidget(self.view_results_button)
         footer.addWidget(
             self.compile_button
         )
@@ -1282,6 +1287,20 @@ class CalculateWorkspace(QWidget):
     # ============================================================
     # EXECUTE
     # ============================================================
+
+    def _view_results(self):
+        root=QFileDialog.getExistingDirectory(self, "Choose generated workflow directory")
+        if not root: return
+        try:
+            executions=self.result_service.executions(root)
+            if not executions:
+                QMessageBox.information(self,"Results","No execution attempts are stored for this workflow."); return
+            execution_id=executions[-1]; rows=self.result_service.summaries(root,execution_id)
+            dialog=QDialog(self); dialog.setWindowTitle("Calculation Results"); layout=QVBoxLayout(dialog); layout.addWidget(QLabel("Execution: "+execution_id))
+            detail=QPlainTextEdit(dialog); detail.setReadOnly(True)
+            detail.setPlainText("Results not parsed." if not rows else "\n\n".join(f"{row["type"]} — {row["status"]}\n{row["summary"]}\nParser: {row["provenance"].parser_id if row["provenance"] else "unavailable"}" for row in rows))
+            layout.addWidget(detail); dialog.resize(640,420); dialog.exec()
+        except Exception as error: QMessageBox.warning(self,"Results",str(error))
 
     def _configure_local_tools(self):
         dialog = QDialog(self)

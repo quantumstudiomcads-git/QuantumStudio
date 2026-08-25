@@ -1496,3 +1496,5 @@ C8B Results must be Qt-free, artifact-driven, source-hashed, and stored under ex
 C8C parser coverage remains artifact-driven and conservative: retain final relax structures as immutable results, preserve PDOS channels, and defer pp.x volumetric grids unless the emitted format is fully self-describing. Never add plotting or Analyze coupling to Calculate result parsing.
 
 C8D parameter forms must remain schema-driven and route persistence/validation through CalculationRequest and C3 resolution; preserve Fast/Intermediate/Precise/Custom semantics and keep machine tool paths out of scientific parameter UI.
+
+Calculate v0.1 scientific architecture is feature frozen after C9. Result browsing in Calculate is metadata/provenance only; do not add plotting or Analyze coupling without an explicit new stage.

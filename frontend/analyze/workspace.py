@@ -4,6 +4,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,QComboBox,QListWidget,QListWidgetItem,QStackedWidget,QPlainTextEdit,QPushButton,QFileDialog,QSplitter,QTableWidget,QTableWidgetItem,QMessageBox
 from frontend.services.result_service import ResultService
 from backend.analyze.transforms import result_kind,tabular_data,pdos_channels
+from backend.analyze.comparison import AnalysisSeries, ComparisonModel, provenance_differences
+from frontend.analyze.plots.compare import ComparisonPlot
 from frontend.analyze.plots.bands import BandPlot
 from frontend.analyze.plots.dos import DOSPlot
 from frontend.analyze.plots.base import ScientificPlotWidget
@@ -20,9 +22,39 @@ class AnalyzeWorkspace(QWidget):
         for label, box in (("Species",self.pdos_species),("Atom",self.pdos_atom),("Orbital",self.pdos_orbital),("Component",self.pdos_component),("Aggregation",self.pdos_aggregation)): pf.addWidget(QLabel(label+":")); pf.addWidget(box)
         self.pdos_controls.setVisible(False); root.addWidget(self.pdos_controls)
         for box in (self.pdos_species,self.pdos_atom,self.pdos_orbital,self.pdos_component,self.pdos_aggregation): box.currentIndexChanged.connect(self._refresh_pdos_view)
+        self.mode=QComboBox(self); self.mode.addItems(["Single Result","Compare Results"]); self.mode.currentIndexChanged.connect(self._mode_changed); root.insertWidget(1,self.mode)
+        self.compare_panel=QWidget(self); cp=QVBoxLayout(self.compare_panel); self.series_list=QListWidget(self); self.series_list.itemChanged.connect(self._series_visibility_changed); cp.addWidget(self.series_list); cb=QHBoxLayout(); self.add_series=QPushButton("Add Result",self); self.remove_series=QPushButton("Remove",self); self.compare_details=QPushButton("Comparison Details",self); cb.addWidget(self.add_series); cb.addWidget(self.remove_series); cb.addWidget(self.compare_details); cp.addLayout(cb); self.compare_panel.setVisible(False); root.insertWidget(2,self.compare_panel); self.add_series.clicked.connect(self._add_current_series); self.remove_series.clicked.connect(self._remove_series); self.compare_details.clicked.connect(self._show_compare_details); self.series=[]
         split=QSplitter(Qt.Orientation.Horizontal); self.navigation=QListWidget(self); self.navigation.setMaximumWidth(190); self.navigation.currentRowChanged.connect(self._view_changed); self.views=QStackedWidget(self); split.addWidget(self.navigation); split.addWidget(self.views); split.setStretchFactor(1,1); root.addWidget(split,1)
         self.overview=QPlainTextEdit(self); self.overview.setReadOnly(True); self.views.addWidget(self.overview); self.plot=ScientificPlotWidget(self); self.views.addWidget(self.plot); self.table=QTableWidget(self); self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.views.addWidget(self.table); self.provenance=QPlainTextEdit(self); self.provenance.setReadOnly(True); self.views.addWidget(self.provenance)
         self.empty=QLabel("No results to analyze.\n\nRun and parse a calculation in Calculate first.",self); self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter); self.views.addWidget(self.empty); self.views.setCurrentWidget(self.empty); self._populate_calculations()
+    def _mode_changed(self,*_):
+        comparing=self.mode.currentText()=="Compare Results"; self.compare_panel.setVisible(comparing)
+        if comparing and not self.series and self.current_result is not None:self._add_current_series()
+        if comparing:self._render_comparison()
+    def _add_current_series(self):
+        if self.current_result is None:return
+        series=AnalysisSeries.from_result(self.current_result)
+        if any(item.series_id==series.series_id for item in self.series):return
+        self.series.append(series); item=QListWidgetItem(series.label+" — "+series.status); item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable); item.setCheckState(Qt.CheckState.Checked); self.series_list.addItem(item); self._render_comparison()
+    def _series_visibility_changed(self,item):
+        row=self.series_list.row(item)
+        if 0 <= row < len(self.series): self.series[row].visible=item.checkState() == Qt.CheckState.Checked; self._render_comparison()
+    def _remove_series(self):
+        row=self.series_list.currentRow()
+        if row>=0:self.series.pop(row); self.series_list.takeItem(row); self._render_comparison()
+    def _render_comparison(self):
+        if self.mode.currentText()!="Compare Results" or not self.series:return
+        model=ComparisonModel("Comparison", "", self.series).check(); self._comparison_model=model
+        if model.compatibility=="INCOMPATIBLE":self.empty.setText("Comparison unavailable.\n"+"\n".join(model.warnings)); self.views.setCurrentWidget(self.empty); return
+        if not hasattr(self,"comparison_plot"):self.comparison_plot=ComparisonPlot(self); self.views.addWidget(self.comparison_plot)
+        self.comparison_plot.set_comparison(model); self.views.setCurrentWidget(self.comparison_plot)
+    def _show_compare_details(self):
+        model=getattr(self,"_comparison_model",None)
+        if model is None:return
+        lines=[f"Comparing {len(model.series)} {model.result_family} Results",f"Compatibility: {model.compatibility}"]
+        for key,values in provenance_differences(model):lines.append(key+": "+" | ".join(values))
+        QMessageBox.information(self,"Comparison Details","\n".join(lines))
+
     def _populate_calculations(self):
         self.calculation.clear()
         for request in self.project.get_calculations():

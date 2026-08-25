@@ -33,3 +33,11 @@ class AnalyzeA1Tests(unittest.TestCase):
         from frontend.core import Project
         project=Project("Roots"); project.register_execution_root("request-a","/tmp/workflow-a")
         self.assertEqual(project.execution_roots()["request-a"],"/tmp/workflow-a")
+
+    def test_comparison_compatibility_and_provenance(self):
+        from backend.analyze import AnalysisSeries, ComparisonModel, compatible_results, provenance_differences
+        p=ResultProvenance("r1","e1","t","qe","pw.x",(),{},"fixture",structure_fingerprint="same")
+        a=ScientificResult("BandStructureResult",ResultStatus.VALID,p,arrays={"energy":[0,1]},metadata={"band_path":[{"label":"G"},{"label":"X"}],"functional":"PBE"})
+        b=ScientificResult("BandStructureResult",ResultStatus.STALE,ResultProvenance("r2","e2","t","qe","pw.x",(),{},"fixture",structure_fingerprint="same"),arrays={"energy":[0,1]},metadata={"band_path":[{"label":"G"},{"label":"X"}],"functional":"HSE06"})
+        model=compatible_results(a,b); self.assertEqual(model.compatibility,"POTENTIALLY_COMPATIBLE"); self.assertTrue(model.warnings); self.assertTrue(provenance_differences(model))
+        bad=ScientificResult("DOSResult",ResultStatus.VALID,p,arrays={"energy":[0]}); self.assertEqual(compatible_results(a,bad).compatibility,"INCOMPATIBLE")

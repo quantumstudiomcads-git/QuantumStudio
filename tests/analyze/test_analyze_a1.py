@@ -80,3 +80,48 @@ class AnalyzeA1Tests(unittest.TestCase):
         p=ResultProvenance("r","e","t","qe","bands.x",(),{},"fixture")
         r=ScientificResult("BandStructureResult",ResultStatus.VALID,p,arrays={"energies":[[0,1],[.1,1],[.4,1]],"kpoints":[[0,0,0],[.01,0,0],[.02,0,0]]},metadata={"cell":[[10,0,0],[0,10,0],[0,0,10]]})
         fit=fit_effective_mass(r,BandEdge(.0,0,0),points_each_side=2); self.assertIn(fit.status,{"VALID","INSUFFICIENT_POINTS"})
+
+
+    def test_a7_repeated_gamma_and_degenerate_edges(self):
+        from backend.analyze.electronic import analyze_band_edges
+        p=ResultProvenance("r","e","t","qe","bands.x",(),{},"fixture")
+        result=ScientificResult("BandStructureResult",ResultStatus.VALID,p,
+            arrays={"energies":[[1,3],[1,4],[0,2]],"kpoints":[[0,0,0],[.5,0,0],[1,0,0]]},
+            metadata={"occupied_band_count":1,"path_labels":{0:"Γ",1:"X",2:"Γ"}})
+        analysis=analyze_band_edges(result)
+        self.assertEqual(analysis.classification,"DIRECT_SAMPLED_PATH")
+        self.assertEqual(len(analysis.degenerate_vbm),2)
+
+    def test_a7_effective_mass_direction_and_preview_samples(self):
+        from backend.analyze.electronic import BandEdge, available_fit_directions, fit_effective_mass
+        p=ResultProvenance("r","e","t","qe","bands.x",(),{},"fixture")
+        # Endpoint gives a one-sided fit; the stored physical k points, never plot index,
+        # provide the independent coordinate.
+        result=ScientificResult("BandStructureResult",ResultStatus.VALID,p,
+            arrays={"energies":[[0.0],[0.01],[0.04],[0.09]],"kpoints":[[0,0,0],[.01,0,0],[.02,0,0],[.03,0,0]]},
+            metadata={"cell":[[10,0,0],[0,10,0],[0,0,10]],"path_labels":{0:"Γ"}})
+        edge=BandEdge(0.0,0,0,label="Γ"); direction=available_fit_directions(result,edge)[0]
+        fit=fit_effective_mass(result,edge,carrier="CBM",direction=direction,points_each_side=3)
+        self.assertEqual(fit.status,"VALID"); self.assertGreater(fit.mass_me,0); self.assertEqual(len(fit.sample_energies),3); self.assertEqual(len(fit.fitted_energies),3)
+
+    def test_a7_derived_comparison_and_explicit_strain_trend(self):
+        from backend.analyze import AnalysisSeries
+        from backend.analyze.electronic import derived_comparison_rows, strain_gap_trend
+        p=ResultProvenance("r","e","t","qe","bands.x",(),{},"fixture")
+        def result(name,strain,gap):
+            return ScientificResult("BandStructureResult",ResultStatus.VALID,ResultProvenance(name,"e"+name,"t","qe","bands.x",(),{},"fixture"),
+                arrays={"energies":[[0,gap],[0,gap]],"kpoints":[[0,0,0],[0,0,0]]},metadata={"occupied_band_count":1,"strain":strain,"functional":name})
+        a,b=result("PBE",-2,.34),result("HSE06",2,.76)
+        rows,delta,warning=derived_comparison_rows([AnalysisSeries.from_result(a,"PBE"),AnalysisSeries.from_result(b,"HSE06")])
+        self.assertEqual(len(rows),2); self.assertAlmostEqual(delta,.42); self.assertIsNone(warning)
+        points,warnings=strain_gap_trend([AnalysisSeries.from_result(b,"HSE06"),AnalysisSeries.from_result(a,"PBE")])
+        self.assertEqual([point["strain_percent"] for point in points],[-2.0,2.0]); self.assertEqual(warnings,())
+
+    def test_a7_band_markers_use_edge_candidates(self):
+        from frontend.analyze.plots.bands import BandPlot
+        from backend.analyze.electronic import analyze_band_edges
+        app=QApplication.instance() or QApplication([])
+        p=ResultProvenance("r","e","t","qe","bands.x",(),{},"fixture")
+        result=ScientificResult("BandStructureResult",ResultStatus.VALID,p,arrays={"path_coordinate":[0,1],"energies":[[0,2],[0,3]],"kpoints":[[0,0,0],[.5,0,0]]},metadata={"occupied_band_count":1})
+        plot=BandPlot(); analysis=analyze_band_edges(result); plot.configure_electronic_analysis(analysis,show_edges=True); plot.set_result(result); app.processEvents()
+        self.assertGreaterEqual(len(plot.axes.collections),len(analysis.degenerate_vbm)+len(analysis.degenerate_cbm)); plot.close()

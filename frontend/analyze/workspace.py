@@ -1,13 +1,13 @@
 from __future__ import annotations
 from pathlib import Path
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,QComboBox,QListWidget,QListWidgetItem,QStackedWidget,QPlainTextEdit,QPushButton,QFileDialog,QSplitter,QTableWidget,QTableWidgetItem,QMessageBox,QDialog,QDialogButtonBox,QDoubleSpinBox,QCheckBox,QInputDialog
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,QComboBox,QListWidget,QListWidgetItem,QStackedWidget,QPlainTextEdit,QPushButton,QFileDialog,QSplitter,QTableWidget,QTableWidgetItem,QMessageBox,QDialog,QDialogButtonBox,QDoubleSpinBox,QSpinBox,QCheckBox,QInputDialog,QScrollArea
 from frontend.services.result_service import ResultService
 from backend.analyze.transforms import result_kind,tabular_data,pdos_channels
 from backend.analyze.comparison import AnalysisSeries, ComparisonModel, provenance_differences, difference_eligible
 from backend.analyze.export import export_comparison
 from backend.analyze.transforms import energy_reference, exact_difference
-from backend.analyze.electronic import analyze_band_edges
+from backend.analyze.electronic import analyze_band_edges, available_fit_directions, fit_effective_mass, strain_gap_trend, derived_comparison_rows
 from frontend.analyze.plots.compare import ComparisonPlot
 from frontend.analyze.plots.bands import BandPlot
 from frontend.analyze.plots.dos import DOSPlot
@@ -16,7 +16,7 @@ from frontend.analyze.plots.base import ScientificPlotWidget
 class AnalyzeWorkspace(QWidget):
     """Result-only browser; it never compiles, generates, executes, or parses."""
     def __init__(self, project, parent=None):
-        super().__init__(parent); self.project=project; self.service=ResultService(); self.workflow_roots={}; self.current_result=None
+        super().__init__(parent); self.project=project; self.service=ResultService(); self.workflow_roots={}; self.current_result=None; self._electronic_cache={}; self._show_band_edges=False; self._electronic_reference="Absolute"; self._last_fit=None
         self.setObjectName("analyzeWorkspace"); self.setStyleSheet("AnalyzeWorkspace{background:#111318;color:#E8EAF0;} QComboBox,QPlainTextEdit,QTableWidget{background:#17191F;color:#E8EAF0;border:1px solid #30343D;} QListWidget{background:#17191F;color:#D9DCE3;border:1px solid #30343D;} QPushButton{background:#252932;color:#D9DCE3;padding:7px 11px;border-radius:6px;} QToolTip{background:#17191F;color:#E8EAF0;border:1px solid #3A4655;}")
         root=QVBoxLayout(self); header=QHBoxLayout(); title=QLabel("Analyze"); title.setStyleSheet("font-size:16px;font-weight:600;"); header.addWidget(title); header.addStretch(); self.attach=QPushButton("Open Results Folder…",self); self.attach.clicked.connect(self._attach_root); header.addWidget(self.attach); root.addLayout(header)
         selectors=QHBoxLayout(); self.calculation=QComboBox(self); self.execution=QComboBox(self); self.result=QComboBox(self); selectors.addWidget(QLabel("Calculation:")); selectors.addWidget(self.calculation,1); selectors.addWidget(QLabel("Execution:")); selectors.addWidget(self.execution,1); selectors.addWidget(QLabel("Result:")); selectors.addWidget(self.result,1); root.addLayout(selectors)
@@ -26,7 +26,7 @@ class AnalyzeWorkspace(QWidget):
         self.pdos_controls.setVisible(False); root.addWidget(self.pdos_controls)
         for box in (self.pdos_species,self.pdos_atom,self.pdos_orbital,self.pdos_component,self.pdos_aggregation): box.currentIndexChanged.connect(self._refresh_pdos_view)
         self.mode=QComboBox(self); self.mode.addItems(["Single Result","Compare Results"]); self.mode.currentIndexChanged.connect(self._mode_changed); root.insertWidget(1,self.mode)
-        self.compare_panel=QWidget(self); cp=QVBoxLayout(self.compare_panel); self.series_list=QListWidget(self); self.series_list.itemChanged.connect(self._series_visibility_changed); cp.addWidget(self.series_list); cb=QHBoxLayout(); self.add_series=QPushButton("Add Result",self); self.remove_series=QPushButton("Remove",self); self.move_up=QPushButton("Move Up",self); self.move_down=QPushButton("Move Down",self); self.rename_series=QPushButton("Rename",self); self.compare_details=QPushButton("Comparison Details",self); cb.addWidget(self.add_series); cb.addWidget(self.remove_series); cb.addWidget(self.move_up); cb.addWidget(self.move_down); cb.addWidget(self.rename_series); cb.addWidget(self.compare_details); self.export_comparison_button=QPushButton("Export Comparison…",self); cb.addWidget(self.export_comparison_button); self.export_comparison_button.clicked.connect(self._export_comparison); cp.addLayout(cb); self.compare_panel.setVisible(False); root.insertWidget(2,self.compare_panel); self.add_series.clicked.connect(self._open_result_picker); self.remove_series.clicked.connect(self._remove_series); self.move_up.clicked.connect(lambda:self._move_series(-1)); self.move_down.clicked.connect(lambda:self._move_series(1)); self.rename_series.clicked.connect(self._rename_series); self.compare_details.clicked.connect(self._show_compare_details); self.series=[]
+        self.compare_panel=QWidget(self); cp=QVBoxLayout(self.compare_panel); self.series_list=QListWidget(self); self.series_list.itemChanged.connect(self._series_visibility_changed); cp.addWidget(self.series_list); cb=QHBoxLayout(); self.add_series=QPushButton("Add Result",self); self.remove_series=QPushButton("Remove",self); self.move_up=QPushButton("Move Up",self); self.move_down=QPushButton("Move Down",self); self.rename_series=QPushButton("Rename",self); self.compare_details=QPushButton("Comparison Details",self); self.derived_details=QPushButton("Electronic Analysis",self); self.derived_trend=QPushButton("Gap vs Strain",self); cb.addWidget(self.add_series); cb.addWidget(self.remove_series); cb.addWidget(self.move_up); cb.addWidget(self.move_down); cb.addWidget(self.rename_series); cb.addWidget(self.compare_details); cb.addWidget(self.derived_details); cb.addWidget(self.derived_trend); self.export_comparison_button=QPushButton("Export Comparison…",self); cb.addWidget(self.export_comparison_button); self.export_comparison_button.clicked.connect(self._export_comparison); self.derived_details.clicked.connect(self._show_compare_electronic); self.derived_trend.clicked.connect(self._show_strain_trend); cp.addLayout(cb); self.compare_panel.setVisible(False); root.insertWidget(2,self.compare_panel); self.add_series.clicked.connect(self._open_result_picker); self.remove_series.clicked.connect(self._remove_series); self.move_up.clicked.connect(lambda:self._move_series(-1)); self.move_down.clicked.connect(lambda:self._move_series(1)); self.rename_series.clicked.connect(self._rename_series); self.compare_details.clicked.connect(self._show_compare_details); self.series=[]
         self.view_mode=QComboBox(self); self.view_mode.addItem("Overlay"); self.view_mode.currentIndexChanged.connect(self._render_comparison); self.reference=QComboBox(self); self.reference.addItems(["Absolute","Fermi = 0","VBM = 0"]); self.reference.currentIndexChanged.connect(self._render_comparison); self.auto_range=QCheckBox("Auto range",self); self.auto_range.setChecked(True); self.min_energy=QDoubleSpinBox(self); self.max_energy=QDoubleSpinBox(self); self.min_energy.setRange(-1e4,1e4); self.max_energy.setRange(-1e4,1e4);
         controls=QHBoxLayout(); controls.addWidget(QLabel("View:")); controls.addWidget(self.view_mode); controls.addWidget(QLabel("Energy reference:")); controls.addWidget(self.reference); controls.addWidget(self.auto_range); controls.addWidget(QLabel("Min")); controls.addWidget(self.min_energy); controls.addWidget(QLabel("Max")); controls.addWidget(self.max_energy); self.compare_controls=QWidget(self); self.compare_controls.setLayout(controls); self.compare_controls.setVisible(False); root.insertWidget(3,self.compare_controls)
         split=QSplitter(Qt.Orientation.Horizontal); self.navigation=QListWidget(self); self.navigation.setMaximumWidth(190); self.navigation.currentRowChanged.connect(self._view_changed); self.views=QStackedWidget(self); split.addWidget(self.navigation); split.addWidget(self.views); split.setStretchFactor(1,1); root.addWidget(split,1)
@@ -104,6 +104,46 @@ class AnalyzeWorkspace(QWidget):
             try: export_comparison(model,directory,operation=self.view_mode.currentText(),reference=self.reference.currentText())
             except Exception as error: QMessageBox.warning(self,"Export Comparison",str(error))
 
+    def _show_compare_electronic(self):
+        model=getattr(self,"_comparison_model",None)
+        if model is None or model.result_family!="bands":
+            QMessageBox.information(self,"Electronic Analysis","Electronic comparison is available for Band Structure Results."); return
+        dialog=QDialog(self); dialog.setWindowTitle("Derived Electronic Analysis"); layout=QVBoxLayout(dialog)
+        visible=model.visible_series(); rows,delta,warning=derived_comparison_rows(visible)
+        table=QTableWidget(dialog); table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); table.setRowCount(6); table.setColumnCount(len(rows)+1)
+        table.setHorizontalHeaderLabels(["Property"]+[row["label"] for row in rows]); names=["Source status","Scope","Gap","Type","VBM (eV)","CBM (eV)"]
+        values=[("status",str), ("scope",str), ("gap",str), ("directness",str), ("vbm",lambda value:"—" if value is None else f"{value:.6g}"), ("cbm",lambda value:"—" if value is None else f"{value:.6g}")]
+        for row_index,(name,formatter) in enumerate(values):
+            table.setItem(row_index,0,QTableWidgetItem(names[row_index]))
+            for col,row in enumerate(rows,1): table.setItem(row_index,col,QTableWidgetItem(formatter(row[name])))
+        layout.addWidget(table)
+        if delta is not None: layout.addWidget(QLabel(f"Δ sampled-path gap ({visible[1].label} - {visible[0].label}): {delta:+.6g} eV"))
+        if warning: layout.addWidget(QLabel(warning))
+        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Close,dialog); buttons.rejected.connect(dialog.reject); buttons.accepted.connect(dialog.accept); layout.addWidget(buttons); dialog.resize(700,340); dialog.exec()
+
+    def _show_strain_trend(self):
+        model=getattr(self,"_comparison_model",None)
+        if model is None or model.result_family!="bands":
+            QMessageBox.information(self,"Gap vs Strain","A derived gap trend is available for Band Structure comparisons."); return
+        points,warnings=strain_gap_trend(model.visible_series())
+        if len(points)<2:
+            QMessageBox.information(self,"Gap vs Strain","At least two visible series with explicit numeric strain metadata and same-scope defensible gaps are required.\n"+"\n".join(warnings)); return
+        dialog=QDialog(self); dialog.setWindowTitle("Sampled-path Gap vs Strain"); layout=QVBoxLayout(dialog)
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        figure=Figure(facecolor="#111318"); axes=figure.add_subplot(111); axes.set_facecolor("#111318")
+        x=[point["strain_percent"] for point in points]; y=[point["gap_eV"] for point in points]
+        axes.plot(x,y,color="#55C7D9",marker="o"); axes.set_xlabel("Strain (%)",color="#D9DCE3"); axes.set_ylabel("Sampled-path gap (eV)",color="#D9DCE3"); axes.set_title("Sampled-path Gap vs Strain",color="#E8EAF0"); axes.tick_params(colors="#D9DCE3"); [spine.set_color("#59606D") for spine in axes.spines.values()]
+        layout.addWidget(FigureCanvasQTAgg(figure)); note=QLabel("\n".join(warnings)); note.setVisible(bool(warnings)); layout.addWidget(note)
+        export=QPushButton("Export Trend CSV…",dialog)
+        def write_trend():
+            import csv
+            filename,_=QFileDialog.getSaveFileName(dialog,"Export Gap Trend","gap_vs_strain.csv","CSV (*.csv)")
+            if filename:
+                with Path(filename).open("w",newline="",encoding="utf-8") as stream:
+                    writer=csv.DictWriter(stream,fieldnames=["strain_percent","gap_eV","gap_scope","directness","request_id","execution_id","label"]); writer.writeheader(); writer.writerows(points)
+        export.clicked.connect(write_trend); layout.addWidget(export); buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Close,dialog); buttons.rejected.connect(dialog.reject); buttons.accepted.connect(dialog.accept); layout.addWidget(buttons); dialog.resize(680,460); dialog.exec()
+
     def _show_compare_details(self):
         model=getattr(self,"_comparison_model",None)
         if model is None:return
@@ -172,14 +212,113 @@ class AnalyzeWorkspace(QWidget):
             structure=r.metadata["final_structure"]; lines.append(f"Final structure available (read-only), atoms: {len(structure.get('atoms',()))}")
         if r.warnings: lines.extend(["","Warnings:"]+r.warnings)
         self.overview.setPlainText("\n".join(lines)); self.views.setCurrentWidget(self.overview)
+    def _electronic_analysis(self):
+        if self.current_result is None:
+            return None
+        key=str(self.current_result.result_id)
+        if key not in self._electronic_cache:
+            self._electronic_cache[key]=analyze_band_edges(self.current_result)
+        return self._electronic_cache[key]
+
+    @staticmethod
+    def _edge_text(edge):
+        if edge is None:
+            return "—"
+        location=edge.label or ("k="+", ".join(f"{value:.3g}" for value in edge.kpoint) if edge.kpoint else f"sample {edge.path_sample_index}")
+        return f"band {edge.band_index + 1} — {location}"
+
+    def _reference_offset(self, analysis):
+        if self._electronic_reference == "Fermi = 0":
+            value=self.current_result.metadata.get("fermi_energy", self.current_result.scalars.get("fermi_energy",{}).get("value"))
+            return float(value) if value is not None else 0.0
+        if self._electronic_reference == "VBM = 0" and analysis is not None and analysis.status == "VALID" and analysis.vbm:
+            return float(analysis.vbm.energy)
+        return 0.0
+
+    def _refresh_electronic_reference(self, *_):
+        self._electronic_reference=self.electronic_reference.currentText()
+        if self.current_result is not None:
+            self._show_plot()
+
     def _show_electronic(self):
-        if not hasattr(self,"electronic_view"): self.electronic_view=QPlainTextEdit(self); self.electronic_view.setReadOnly(True); self.views.addWidget(self.electronic_view)
-        analysis=analyze_band_edges(self.current_result); lines=["Electronic Analysis",f"Status: {analysis.status}",f"Gap scope: {analysis.gap_scope}"]
-        if analysis.gap is not None: lines += [f"Sampled-path band gap: {analysis.gap:.6g} eV",f"Classification: {analysis.classification}"]
-        if analysis.vbm: lines.append(f"VBM: {analysis.vbm.energy:.6g} eV at sample {analysis.vbm.path_sample_index}")
-        if analysis.cbm: lines.append(f"CBM: {analysis.cbm.energy:.6g} eV at sample {analysis.cbm.path_sample_index}")
+        analysis=self._electronic_analysis()
+        if not hasattr(self,"electronic_view"):
+            self.electronic_view=QScrollArea(self); self.electronic_view.setWidgetResizable(True)
+            self.electronic_content=QWidget(self.electronic_view); self.electronic_layout=QVBoxLayout(self.electronic_content); self.electronic_view.setWidget(self.electronic_content); self.views.addWidget(self.electronic_view)
+        while self.electronic_layout.count():
+            item=self.electronic_layout.takeAt(0); widget=item.widget()
+            if widget: widget.deleteLater()
+        header=QLabel("Electronic Analysis"); header.setStyleSheet("font-size:15px;font-weight:600;"); self.electronic_layout.addWidget(header)
+        source=QLabel(f"Source Result: {self.current_result.status.value}    Derived analysis: {analysis.status}"); self.electronic_layout.addWidget(source)
+        scope="Fundamental band gap" if analysis.gap_scope == "full_bz" else "Sampled-path band gap"
+        summary=QPlainTextEdit(self.electronic_content); summary.setReadOnly(True); summary.setMaximumHeight(178)
+        lines=[f"Electronic state: {analysis.status}", f"Gap scope: {'Full Brillouin zone' if analysis.gap_scope == 'full_bz' else 'Sampled path'}"]
+        if analysis.gap is not None:
+            kind=analysis.classification.replace("_SAMPLED_PATH", " on sampled path").replace("_FULL_BZ", "").replace("_", " ").title()
+            lines += [f"{scope}: {analysis.gap:.6g} eV", f"Classification: {kind}", f"VBM: {analysis.vbm.energy:.6g} eV — {self._edge_text(analysis.vbm)}", f"CBM: {analysis.cbm.energy:.6g} eV — {self._edge_text(analysis.cbm)}"]
         if analysis.warnings: lines += ["", "Warnings:"] + list(analysis.warnings)
-        self.electronic_view.setPlainText("\n".join(lines)); self.views.setCurrentWidget(self.electronic_view)
+        summary.setPlainText("\n".join(lines)); self.electronic_layout.addWidget(summary)
+        edges=QCheckBox("Show band edges",self.electronic_content); edges.setChecked(self._show_band_edges); edges.setToolTip("Markers are derived only from retained A6 VBM/CBM candidates."); edges.toggled.connect(self._set_show_band_edges); self.electronic_layout.addWidget(edges)
+        ref_row=QHBoxLayout(); self.electronic_reference=QComboBox(self.electronic_content); self.electronic_reference.addItem("Absolute")
+        fermi=self.current_result.metadata.get("fermi_energy",self.current_result.scalars.get("fermi_energy",{}).get("value"))
+        if fermi is not None:self.electronic_reference.addItem("Fermi = 0")
+        if analysis.status == "VALID" and analysis.vbm is not None:self.electronic_reference.addItem("VBM = 0")
+        self.electronic_reference.setCurrentText(self._electronic_reference if self.electronic_reference.findText(self._electronic_reference)>=0 else "Absolute")
+        self.electronic_reference.currentIndexChanged.connect(self._refresh_electronic_reference); ref_row.addWidget(QLabel("Energy reference:")); ref_row.addWidget(self.electronic_reference); ref_row.addStretch(); self.electronic_layout.addLayout(ref_row)
+        mass_box=QWidget(self.electronic_content); form=QFormLayout(mass_box); carrier=QComboBox(mass_box); carrier.addItems(["Electron (CBM)","Hole (VBM)"])
+        extremum=QComboBox(mass_box); direction=QComboBox(mass_box); points=QSpinBox(mass_box); points.setRange(3,99); fit_button=QPushButton("Fit",mass_box); result_label=QLabel("Select an edge and sampled direction.",mass_box); preview=QPushButton("Show Fit",mass_box); preview.setEnabled(False)
+        state={"edge":None,"directions":()}
+        def populate_edges(*_):
+            carrier_name="CBM" if carrier.currentIndex()==0 else "VBM"; candidates=analysis.degenerate_cbm if carrier_name=="CBM" else analysis.degenerate_vbm
+            extremum.blockSignals(True); extremum.clear()
+            for edge in candidates: extremum.addItem(f"{carrier_name} — {self._edge_text(edge)}",edge)
+            extremum.blockSignals(False); populate_directions()
+        def populate_directions(*_):
+            edge=extremum.currentData(); state["edge"]=edge; choices=available_fit_directions(self.current_result,edge) if edge is not None else ()
+            state["directions"]=choices; direction.clear()
+            for choice in choices: direction.addItem(choice.label,choice)
+            maximum=max((len(choice.sample_indices) for choice in choices),default=3); points.setMaximum(max(3,maximum)); points.setValue(min(5,max(3,maximum)))
+            enabled=edge is not None and bool(choices); fit_button.setEnabled(enabled)
+            if not enabled: result_label.setText("Effective mass unavailable: no continuous sampled direction is available.")
+        def perform_fit(*_):
+            edge=extremum.currentData(); chosen=direction.currentData(); carrier_name="CBM" if carrier.currentIndex()==0 else "VBM"
+            fit=fit_effective_mass(self.current_result,edge,carrier=carrier_name,direction=chosen,points_each_side=points.value()) if edge and chosen else None
+            self._last_fit=fit
+            if fit is None or fit.status!="VALID":
+                result_label.setText("Effective mass unavailable: "+("; ".join(fit.warnings) if fit else "select an edge and direction.")); preview.setEnabled(False); return
+            quality="Good fit" if fit.r_squared >= .995 else "Acceptable fit" if fit.r_squared >= .98 else "Poor parabolic fit — use with caution."
+            title="Electron" if fit.edge=="CBM" else "Hole"
+            result_label.setText(f"{title} effective mass: {fit.mass_me:.4g} m₀   R²={fit.r_squared:.4g}   {fit.sample_count} points   {fit.k_range[1]:.4g} Å⁻¹\n{fit.direction} — {quality}")
+            preview.setEnabled(True)
+        carrier.currentIndexChanged.connect(populate_edges); extremum.currentIndexChanged.connect(populate_directions); fit_button.clicked.connect(perform_fit); preview.clicked.connect(self._show_fit_preview); populate_edges()
+        form.addRow(QLabel("Effective Mass")); form.addRow("Carrier:",carrier); form.addRow("Extremum:",extremum); form.addRow("Direction:",direction); form.addRow("Fit points:",points); form.addRow(fit_button); form.addRow(result_label); form.addRow(preview); self.electronic_layout.addWidget(mass_box)
+        export=QPushButton("Export Electronic Analysis…",self.electronic_content); export.clicked.connect(self._export_electronic_analysis); self.electronic_layout.addWidget(export); self.electronic_layout.addStretch(); self.views.setCurrentWidget(self.electronic_view)
+
+    def _set_show_band_edges(self, enabled):
+        self._show_band_edges=bool(enabled)
+        if self.current_result is not None:self._show_plot()
+
+    def _show_fit_preview(self):
+        fit=self._last_fit
+        if fit is None or fit.status != "VALID": return
+        dialog=QDialog(self); dialog.setWindowTitle("Effective-mass fit preview"); layout=QVBoxLayout(dialog)
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        figure=Figure(facecolor="#111318"); axes=figure.add_subplot(111); axes.set_facecolor("#111318")
+        axes.scatter(fit.sample_distances,fit.sample_energies,color="#55C7D9",label="sampled band")
+        axes.plot(fit.sample_distances,fit.fitted_energies,color="#E8A85C",label="quadratic fit")
+        axes.set_xlabel("Δk (Å⁻¹)",color="#D9DCE3"); axes.set_ylabel("Energy (eV)",color="#D9DCE3"); axes.legend(facecolor="#17191F",labelcolor="#E8EAF0")
+        axes.tick_params(colors="#D9DCE3"); [spine.set_color("#59606D") for spine in axes.spines.values()]
+        canvas=FigureCanvasQTAgg(figure); layout.addWidget(canvas); buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Close,dialog); buttons.rejected.connect(dialog.reject); buttons.accepted.connect(dialog.accept); layout.addWidget(buttons); dialog.resize(620,420); dialog.exec()
+
+    def _export_electronic_analysis(self):
+        import json
+        analysis=self._electronic_analysis(); filename,_=QFileDialog.getSaveFileName(self,"Export Electronic Analysis","electronic_analysis.json","JSON (*.json)")
+        if not filename:return
+        def edge(value):
+            return None if value is None else {"energy_eV":value.energy,"band_index":value.band_index,"path_sample_index":value.path_sample_index,"path_coordinate":value.path_coordinate,"kpoint":value.kpoint,"label":value.label}
+        payload={"result_id":self.current_result.result_id,"request_id":self.current_result.provenance.request_id,"execution_id":self.current_result.provenance.execution_id,"source_status":self.current_result.status.value,"status":analysis.status,"gap_scope":analysis.gap_scope,"sampled_gap_eV":analysis.gap,"classification":analysis.classification,"vbm":[edge(item) for item in analysis.degenerate_vbm],"cbm":[edge(item) for item in analysis.degenerate_cbm],"fits":[fit.__dict__ for fit in (() if self._last_fit is None else (self._last_fit,))]}
+        Path(filename).write_text(json.dumps(payload,indent=2,sort_keys=True),encoding="utf-8")
 
     def _show_plot(self):
         if self.current_result.result_type not in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult"}:
@@ -187,7 +326,10 @@ class AnalyzeWorkspace(QWidget):
         old=self.plot
         self.views.removeWidget(old); old.deleteLater()
         self.plot = BandPlot(self) if self.current_result.result_type == "BandStructureResult" else DOSPlot(self)
-        self.views.insertWidget(1,self.plot); self.plot.set_result(self.current_result); self.views.setCurrentWidget(self.plot)
+        self.views.insertWidget(1,self.plot)
+        if self.current_result.result_type == "BandStructureResult":
+            analysis=self._electronic_analysis(); self.plot.configure_electronic_analysis(analysis,show_edges=self._show_band_edges,energy_offset=self._reference_offset(analysis),reference_label=self._electronic_reference)
+        self.plot.set_result(self.current_result); self.views.setCurrentWidget(self.plot)
     def _show_table(self):
         if self.current_result.result_type == "PDOSResult":
             channels=pdos_channels(self.current_result, species=self.pdos_species.currentText(), atom=self.pdos_atom.currentText(), orbital=self.pdos_orbital.currentText(), component=self.pdos_component.currentText(), aggregation=self.pdos_aggregation.currentText())

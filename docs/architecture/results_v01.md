@@ -17,3 +17,7 @@ PDOS multi-file parsing, pp.x volumetric parsing, relaxation geometry, Wannier `
 and EPW physics are deliberately deferred pending stable raw contracts/fixtures.  BTP2
 and NEGF produce no numerical Results.  Calculate may own parse actions and summaries;
 Analyze alone will visualize or interactively interpret Results.
+
+## C8C coverage
+
+C8C adds conservative parsing of final QE relax/vc-relax geometry blocks into immutable native Structure result metadata, bounded projwfc PDOS components, Wannier `.wout` completion/spread summaries, and EPW completion summaries. PDOS channels are never aggregated. pp.x currently writes cube output but has no self-describing cell/grid parser contract in this release, so volumetric Results remain deferred. Results remain backend-side and source-hashed; no plot or Analyze behavior is introduced.

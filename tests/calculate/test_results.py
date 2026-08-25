@@ -23,4 +23,4 @@ class ResultTests(unittest.TestCase):
    for artifact, filename, kind in (("DOS_RAW_DATA","dos.dat","DOSResult"),("BAND_STRUCTURE_RAW_DATA","bands.dat","BandStructureResult"),("PHONON_DOS_RAW_DATA","phdos.dat","PhononDOSResult")):
     source=root/filename; source.write_text("# raw\n0.0 1.0\n1.0 2.0\n"); result=DEFAULT_PARSERS.parse(artifact,source); self.assertEqual(result.result_type,kind); self.assertEqual(result.status,ResultStatus.VALID)
  def test_registry_is_unambiguous(self):
-  self.assertEqual(DEFAULT_PARSERS.validate(),("BAND_STRUCTURE_RAW_DATA","DOS_RAW_DATA","PHONON_DOS_RAW_DATA","QE_SCF_STDOUT"))
+  self.assertEqual(DEFAULT_PARSERS.validate(),("BAND_STRUCTURE_RAW_DATA","DOS_RAW_DATA","EPW_SUMMARY","PDOS_RAW_DATA","PHONON_DOS_RAW_DATA","QE_RELAX_STDOUT","QE_SCF_STDOUT","WANNIER_WOUT"))

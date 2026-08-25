@@ -299,3 +299,7 @@ Runtime tasks move through PENDING, READY, RUNNING, COMPLETED, FAILED, CANCELLED
 ## C7 persistent runtime recovery
 
 C7 stores versioned execution-attempt sidecars atomically beneath generated workflow roots, never inside `.qs`. Persist request/workflow/input provenance and attempt-aware log paths; stale RUNNING records recover only as retryable INTERRUPTED and must never reattach to prior PIDs or auto-resume. Retry/restart must remain generic GeneratedTask/CommandSpec execution and preserve historical logs.
+
+## C8A computational post-processing
+
+C8A adds private QE post-processing stages for explicit bands (`pw.x` bands plus `bands.x`), DOS (`pw.x` dense signed NSCF plus `dos.x`), PDOS (`projwfc.x`), pp.x charge/spin raw grids, and phonon DOS (`ph.x -> q2r.x -> matdyn.x`). They remain Calculate workflow tasks and produce raw semantic artifacts only; C8B will parse them. Band paths are explicit fractional request data and are never inferred. Uniform NSCF tasks carry purpose signatures, preventing accidental sharing with Wannier, EPW, or BTP2. QE postprocessors retain the shared prefix/outdir and normalize to generic CommandSpec tasks; C6/C7 dispatch/recovery needs no engine-specific branch.

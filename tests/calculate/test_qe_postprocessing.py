@@ -1,0 +1,20 @@
+import unittest
+from backend.compiler.calculation_compiler import CalculationCompiler
+from backend.core.calculation_request import CalculationRequest
+from backend.engines.qe import QuantumEspressoAdapter
+
+S={"name":"S","periodic":[True,True,True],"cell":[[3,0,0],[0,3,0],[0,0,3]],"atoms":[{"element":"Si","x":0,"y":0,"z":0}]}
+P={"pseudopotentials":{"Si":"Si.UPF"},"postprocessing":True,"kpath":[{"label":"G","coordinates":[0,0,0],"points":10},{"label":"X","coordinates":[.5,0,0],"points":10}]}
+def plan(ids, extra=None): return CalculationCompiler(CalculationRequest(structure=S,selected_calculations=ids,parameters={**P,**(extra or {})})).compile()
+
+class QEPostprocessingTests(unittest.TestCase):
+ def test_bands_dos_pdos_and_pp_have_private_dags_and_inputs(self):
+  b=plan(["bands"]); self.assertEqual([x.semantic_task_type for x in b.tasks],["scf","qe_pw_bands","qe_bands"]); generated=QuantumEspressoAdapter().compile_plan(b); self.assertEqual(generated.tasks[-1].executable,"bands.x"); self.assertIn("K_POINTS crystal_b",generated.tasks[-2].input_text); self.assertEqual(b.tasks[-1].artifact_outputs,("BAND_STRUCTURE_RAW_DATA",))
+  d=plan(["dos","pdos"]); types=[x.semantic_task_type for x in d.tasks]; self.assertIn("qe_dos",types); self.assertIn("qe_projwfc",types); self.assertEqual(sum(x=="scf" for x in types),1); self.assertNotEqual(next(x for x in d.tasks if x.semantic_task_type=="qe_dos").parameter_signature,next(x for x in d.tasks if x.semantic_task_type=="qe_projwfc").parameter_signature)
+  pp=plan(["charge_density"]); self.assertEqual(pp.tasks[-1].tool_id,"pp.x"); self.assertIn("plot_num = 0",QuantumEspressoAdapter().compile_plan(pp).tasks[-1].input_text)
+ def test_spin_validation_phonon_chain_and_commands(self):
+  with self.assertRaises(Exception): plan(["spin_density"])
+  ph=plan(["phonon_dos"]); self.assertEqual([x.semantic_task_type for x in ph.tasks],["scf","qe_ph","qe_q2r","qe_matdyn"]); generated=QuantumEspressoAdapter().compile_plan(ph); self.assertEqual([x.executable for x in generated.tasks][-3:],["ph.x","q2r.x","matdyn.x"])
+  for item in generated.tasks: self.assertNotIn("<",item.executable)
+ def test_missing_band_path_is_typed(self):
+  with self.assertRaises(Exception): plan(["bands"],{"kpath":None})

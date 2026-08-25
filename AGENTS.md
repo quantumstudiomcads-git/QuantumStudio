@@ -1488,3 +1488,5 @@ Quantum Studio should grow through stable interfaces rather than repeated rewrit
 C6 local execution must consume the generic GeneratedWorkflow/CommandSpec boundary with shell=False; it may not branch on scientific calculation or engine names. Keep machine-specific tool paths outside CalculationRequest, and retain process exit status separate from scientific convergence/result parsing.
 
 C7 runtime state belongs in atomic, versioned execution-workspace sidecars, never CalculationRequest or .qs logs. Treat stale RUNNING as retryable INTERRUPTED; never attach old PIDs or automatically resume processes. Preserve attempts/logs and use workflow/input fingerprints to reject incompatible resumes.
+
+C8A QE post-processors are Calculate tasks that generate raw artifacts only. Require explicit band/phonon paths where applicable, preserve purpose-signed NSCF separation, and never infer high-symmetry paths or parse scientific output before C8B.

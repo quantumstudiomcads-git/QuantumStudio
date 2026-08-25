@@ -24,10 +24,11 @@ from backend.engines.qe.models import (
     UnsupportedQECalculationError,
 )
 from backend.engines.qe.writer import phonon_input, pw_input
+from backend.engines.qe.postprocessing import post_input, pw_bands_input
 
 
 ENGINE_ID = "quantum_espresso"
-SUPPORTED_CALCULATIONS = frozenset({"scf", "relax", "vc_relax", "phonons"})
+SUPPORTED_CALCULATIONS = frozenset({"scf", "relax", "vc_relax", "phonons", "qe_pw_bands", "qe_pw_nscf", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_ph", "qe_q2r", "qe_matdyn", "qe_matdyn_dos", "qe_pw_nscf_dos", "qe_pw_nscf_pdos", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_q2r", "qe_ph", "qe_pw_bands"})
 DEFERRED_CALCULATIONS = {
     "bands": "C3 has no reliable explicit band-path model; C4 will not guess a path.",
     "dos": "C3 lacks an explicit NSCF -> dos.x workflow stage required for scientifically sound DOS input.",
@@ -135,6 +136,14 @@ class QuantumEspressoAdapter(EngineAdapter):
             if task.calculation_id in {"scf", "relax", "vc_relax"}:
                 input_text = pw_input(task.calculation_id, parameters, plan.structure, context, pseudos)
                 executable, input_filename = "pw.x", f"{task.calculation_id}.in"
+            elif task.semantic_task_type == "qe_pw_bands":
+                input_text, executable, input_filename = pw_bands_input(parameters, plan.structure, context, pseudos), "pw.x", "bands_pw.in"
+            elif task.semantic_task_type == "qe_pw_nscf":
+                input_text, executable, input_filename = pw_input("qe_pw_nscf", parameters, plan.structure, context, pseudos), "pw.x", "nscf.in"
+            elif task.semantic_task_type in {"qe_bands","qe_dos","qe_projwfc","qe_pp","qe_q2r","qe_matdyn"}:
+                input_text, executable, input_filename = post_input(task.semantic_task_type, parameters, context), {"qe_bands":"bands.x","qe_dos":"dos.x","qe_projwfc":"projwfc.x","qe_pp":"pp.x","qe_q2r":"q2r.x","qe_matdyn":"matdyn.x"}[task.semantic_task_type], task.semantic_task_type.removeprefix("qe_") + ".in"
+            elif task.semantic_task_type == "qe_ph":
+                input_text, executable, input_filename = phonon_input(parameters, context), "ph.x", "phonons.in"
             elif task.calculation_id == "phonons":
                 input_text = phonon_input(parameters, context)
                 executable, input_filename = "ph.x", "phonons.in"
@@ -146,7 +155,7 @@ class QuantumEspressoAdapter(EngineAdapter):
                 input_filename=input_filename, output_filename=input_filename.removesuffix(".in") + ".out",
                 working_directory=directory, input_text=input_text,
                 depends_on_task_ids=tuple(task.depends_on_task_ids),
-                metadata={"qe_prefix": context.prefix, "qe_outdir": context.outdir, "structure_fingerprint": structure_fingerprint(plan.structure)},
+                metadata={"engine_id":task.engine_id,"semantic_task_type":task.semantic_task_type,"parameter_signature":task.parameter_signature,"artifact_inputs":list(task.artifact_inputs),"artifact_outputs":list(task.artifact_outputs),"qe_prefix": context.prefix, "qe_outdir": context.outdir, "structure_fingerprint": structure_fingerprint(plan.structure)},
             ))
         manifest = {
             "engine_id": self.engine_id,

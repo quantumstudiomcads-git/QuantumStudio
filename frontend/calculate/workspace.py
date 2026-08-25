@@ -1267,7 +1267,7 @@ class CalculateWorkspace(QWidget):
         layout.addWidget(QLabel("Optional absolute executable paths. Blank entries resolve from PATH."))
         form = QFormLayout()
         fields = {}
-        for tool_id in ("pw.x", "ph.x", "pw2wannier90.x", "wannier90.x", "epw.x"):
+        for tool_id in ("pw.x", "ph.x", "bands.x", "dos.x", "projwfc.x", "pp.x", "q2r.x", "matdyn.x", "pw2wannier90.x", "wannier90.x", "epw.x"):
             field = QLineEdit(self.local_tool_configuration.tool_paths.get(tool_id, ""), dialog)
             fields[tool_id] = field
             form.addRow(tool_id, field)

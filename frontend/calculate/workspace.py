@@ -8,6 +8,8 @@ and communicates with the Quantum Studio backend through the API.
 The workspace does not modify the structure.
 """
 
+import json
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -22,6 +24,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSplitter,
     QVBoxLayout,
+    QDialog,
+    QFileDialog,
+    QPlainTextEdit,
     QWidget,
 )
 
@@ -45,15 +50,26 @@ class CalculateWorkspace(QWidget):
         self.calculation_service = CalculationService(
             CALCULATIONS
         )
+        # The service owns the catalog/registry boundary; Qt sees descriptors,
+        # never backend registry internals.
+        self.catalog_descriptors = self.calculation_service.get_calculation_descriptors()
+        self.catalog_descriptor_map = {
+            descriptor.id: descriptor
+            for descriptor in self.catalog_descriptors
+        }
+        self.selected_support_error = ""
 
         self.selected_ids = []
 
         self.execution_plan = None
+        self.calculation_request = None
+        self.current_structure_summary = None
 
         self._build_ui()
         self._apply_style()
         self._populate_categories()
         self._populate_calculations()
+        self._refresh_configured_calculations()
 
 
     # ============================================================
@@ -426,6 +442,34 @@ class CalculateWorkspace(QWidget):
 
         selection_layout.setSpacing(10)
 
+        configured_header = QLabel("Configured Calculations")
+        configured_header.setObjectName("panelTitle")
+        selection_layout.addWidget(configured_header)
+        self.configured_list = QListWidget()
+        self.configured_list.setMaximumHeight(140)
+        self.configured_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.configured_list.itemSelectionChanged.connect(self._configured_selection_changed)
+        selection_layout.addWidget(self.configured_list)
+        self.request_name = QLineEdit()
+        self.request_name.setPlaceholderText("Calculation name")
+        self.parameters_input = QLineEdit()
+        self.parameters_input.setPlaceholderText('Parameters JSON, e.g. {"accuracy": "high"}')
+        request_actions = QHBoxLayout()
+        self.save_request_button = QPushButton("Save Parameters")
+        self.duplicate_request_button = QPushButton("Duplicate")
+        self.remove_request_button = QPushButton("Remove")
+        self.update_structure_button = QPushButton("Update From Current Structure")
+        for button in (self.save_request_button, self.duplicate_request_button, self.remove_request_button, self.update_structure_button):
+            request_actions.addWidget(button)
+            button.setEnabled(False)
+        selection_layout.addWidget(self.request_name)
+        selection_layout.addWidget(self.parameters_input)
+        selection_layout.addLayout(request_actions)
+        self.save_request_button.clicked.connect(self._save_selected_request)
+        self.duplicate_request_button.clicked.connect(self._duplicate_selected_request)
+        self.remove_request_button.clicked.connect(self._remove_selected_request)
+        self.update_structure_button.clicked.connect(self._update_selected_request_structure)
+
         selected_header = QHBoxLayout()
 
         selected_title = QLabel(
@@ -569,6 +613,12 @@ class CalculateWorkspace(QWidget):
 
         footer.addStretch()
 
+        self.create_button = QPushButton("Create Calculation")
+        self.create_button.setObjectName("compileButton")
+        self.create_button.setEnabled(False)
+        self.create_button.clicked.connect(self._create_calculation_requested)
+        footer.addWidget(self.create_button)
+
         self.compile_button = QPushButton(
             "Compile Workflow"
         )
@@ -585,6 +635,16 @@ class CalculateWorkspace(QWidget):
             self._compile_requested
         )
 
+
+        self.preview_qe_button = QPushButton("Preview QE Inputs")
+        self.preview_qe_button.setEnabled(False)
+        self.preview_qe_button.clicked.connect(self._preview_qe_inputs)
+        footer.addWidget(self.preview_qe_button)
+
+        self.generate_qe_button = QPushButton("Generate QE Inputs")
+        self.generate_qe_button.setEnabled(False)
+        self.generate_qe_button.clicked.connect(self._generate_qe_inputs)
+        footer.addWidget(self.generate_qe_button)
         footer.addWidget(
             self.compile_button
         )
@@ -623,8 +683,8 @@ class CalculateWorkspace(QWidget):
 
         categories = sorted(
             {
-                calculation.category
-                for calculation in CALCULATIONS
+                descriptor.info.category
+                for descriptor in self.catalog_descriptors
             }
         )
 
@@ -668,7 +728,8 @@ class CalculateWorkspace(QWidget):
 
         filtered = []
 
-        for calculation in CALCULATIONS:
+        for descriptor in self.catalog_descriptors:
+            calculation = descriptor.info
 
             if (
                 category != "All Categories"
@@ -681,31 +742,33 @@ class CalculateWorkspace(QWidget):
                     calculation.id,
                     calculation.name,
                     calculation.category,
+                    descriptor.status_label,
                 ]
             ).lower()
 
             if query and query not in searchable:
                 continue
 
-            filtered.append(
-                calculation
-            )
+            filtered.append(descriptor)
 
-        for calculation in filtered:
-
-            item = QListWidgetItem(
-                calculation.name
-            )
+        for descriptor in filtered:
+            calculation = descriptor.info
+            label = calculation.name
+            if not descriptor.backend_supported:
+                label += f" [{descriptor.status_label}]"
+            item = QListWidgetItem(label)
 
             item.setData(
                 Qt.ItemDataRole.UserRole,
                 calculation.id,
             )
 
+            dependencies = ", ".join(descriptor.dependencies) or "none"
             item.setToolTip(
                 f"{calculation.name}\n"
                 f"{calculation.category}\n"
-                f"Status: {calculation.status}"
+                f"Execution support: {descriptor.status_label}\n"
+                f"Backend dependencies: {dependencies}"
             )
 
             item.setFlags(
@@ -766,8 +829,9 @@ class CalculateWorkspace(QWidget):
                     calculation_id
                 )
 
-        # A changed selection invalidates the old plan.
+        # A changed selection invalidates the old reproducible request and plan.
         self.execution_plan = None
+        self.calculation_request = None
 
         self.execute_button.setEnabled(
             False
@@ -779,23 +843,22 @@ class CalculateWorkspace(QWidget):
 
         self.selected_list.clear()
 
+        descriptor_map = self.catalog_descriptor_map
         calculation_map = {
-            calculation.id: calculation
-            for calculation in CALCULATIONS
+            calculation_id: descriptor.info
+            for calculation_id, descriptor in descriptor_map.items()
         }
 
         for calculation_id in self.selected_ids:
-
-            calculation = calculation_map.get(
-                calculation_id
-            )
-
-            if calculation is None:
+            descriptor = descriptor_map.get(calculation_id)
+            calculation = calculation_map.get(calculation_id)
+            if calculation is None or descriptor is None:
                 continue
 
-            item = QListWidgetItem(
-                calculation.name
-            )
+            label = calculation.name
+            if not descriptor.backend_supported:
+                label += f" [{descriptor.status_label}]"
+            item = QListWidgetItem(label)
 
             item.setData(
                 Qt.ItemDataRole.UserRole,
@@ -804,12 +867,10 @@ class CalculateWorkspace(QWidget):
 
             item.setToolTip(
                 f"{calculation.category}\n"
-                f"Status: {calculation.status}"
+                f"Execution support: {descriptor.status_label}"
             )
 
-            self.selected_list.addItem(
-                item
-            )
+            self.selected_list.addItem(item)
 
         count = len(
             self.selected_ids
@@ -825,9 +886,7 @@ class CalculateWorkspace(QWidget):
             f"{count} {label}"
         )
 
-        self.compile_button.setEnabled(
-            count > 0
-        )
+        self._update_compile_availability()
 
         if count == 0:
 
@@ -836,30 +895,20 @@ class CalculateWorkspace(QWidget):
             )
 
         else:
-
             names = []
-
             for calculation_id in self.selected_ids:
-
-                calculation = calculation_map.get(
-                    calculation_id
-                )
-
+                calculation = calculation_map.get(calculation_id)
                 if calculation:
-
-                    names.append(
-                        calculation.name
-                    )
-
-            self.execution_preview.setText(
+                    names.append(calculation.name)
+            message = (
                 "Selected calculations:\n\n"
-                + "\n".join(
-                    f"• {name}"
-                    for name in names
-                )
-                + "\n\nCompile the workflow to resolve "
-                  "dependencies and parameters."
+                + "\n".join(f"• {name}" for name in names)
             )
+            if self.selected_support_error:
+                message += "\n\nCannot prepare this selection:\n" + self.selected_support_error
+            else:
+                message += "\n\nCompile the workflow to resolve dependencies and parameters."
+            self.execution_preview.setText(message)
 
         self.selection_changed.emit(
             list(self.selected_ids)
@@ -870,6 +919,7 @@ class CalculateWorkspace(QWidget):
         self.selected_ids.clear()
 
         self.execution_plan = None
+        self.calculation_request = None
 
         self.execute_button.setEnabled(
             False
@@ -880,84 +930,175 @@ class CalculateWorkspace(QWidget):
         self._refresh_selection()
 
     # ============================================================
-    # STRUCTURE SERIALIZATION
-    # ============================================================
-
-    def _get_structure_payload(self):
-
-        structure = self.project.get_structure()
-
-        atoms = []
-
-        for atom in structure.atoms:
-
-            atoms.append(
-                {
-                    "element": atom.element,
-
-                    "position": [
-                        atom.x,
-                        atom.y,
-                        atom.z,
-                    ],
-                }
-            )
-
-        return {
-            "name": structure.name,
-
-            "lattice": [
-                list(vector)
-                for vector in structure.cell
-            ],
-
-            "atoms": atoms,
-        }
-
-    # ============================================================
-    # STRUCTURE
+    # CANONICAL PROJECT STRUCTURE
     # ============================================================
 
     def _refresh_structure_summary(self):
-
-        try:
-
-            structure = self.project.get_structure()
-
-            atom_count = len(
-                structure.atoms
-            )
-
-            if atom_count == 0:
-
-                self.structure_label.setText(
-                    "No active structure"
-                )
-
-            else:
-
-                elements = sorted(
-                    {
-                        atom.element
-                        for atom in structure.atoms
-                    }
-                )
-
-                self.structure_label.setText(
-                    f"{structure.name}  •  "
-                    f"{atom_count} atoms  •  "
-                    f"{', '.join(elements)}"
-                )
-
-        except Exception:
-
+        """Read the current Structure only through Project's public API."""
+        summary = self.calculation_service.summarize_structure(self.project)
+        self.current_structure_summary = summary
+        if not summary.valid:
+            self.structure_label.setText("No active structure.\nCreate or import a structure in Builder first.")
+        else:
+            pbc = ", ".join(axis for axis, enabled in zip(("X", "Y", "Z"), summary.periodic) if enabled) or "None"
+            dimensionality = "unknown" if summary.dimensionality is None else f"{summary.dimensionality}D"
+            species = ", ".join(summary.species) or "unavailable"
+            cell = "valid" if summary.cell_valid else "unavailable"
             self.structure_label.setText(
-                "Structure unavailable"
+                f"Current Structure\n{summary.name}\nAtoms: {summary.atom_count}  •  Species: {species}\n"
+                f"PBC: {pbc}  •  Cell: {cell}  •  {dimensionality}"
             )
+        self._update_compile_availability()
+        return summary
+
+    def _update_compile_availability(self):
+        self.selected_support_error = ""
+        supported = bool(self.selected_ids)
+        if supported:
+            try:
+                self.calculation_service.validate_selected_calculations(self.selected_ids)
+            except Exception as error:
+                supported = False
+                self.selected_support_error = str(error)
+        enabled = supported and bool(getattr(self.current_structure_summary, "valid", False))
+        if hasattr(self, "compile_button"):
+            self.compile_button.setEnabled(enabled)
+        if hasattr(self, "create_button"):
+            self.create_button.setEnabled(enabled)
+        if hasattr(self, "preview_qe_button"):
+            qe_available = bool(self.execution_plan and self.calculation_request)
+            if qe_available:
+                support = self.calculation_service.qe_input_support(self.execution_plan.resolved_calculations)
+                qe_available = all(item["available"] for item in support)
+            self.preview_qe_button.setEnabled(qe_available)
+            self.generate_qe_button.setEnabled(qe_available)
 
     def refresh(self):
-
+        """Refresh derived display state; existing request snapshots are intentionally unchanged."""
         self._refresh_structure_summary()
+        self._refresh_configured_calculations()
+
+    # ============================================================
+    # PERSISTENT CONFIGURED REQUESTS
+    # ============================================================
+
+    def _selected_configured_request_id(self):
+        item = self.configured_list.currentItem() if hasattr(self, "configured_list") else None
+        return None if item is None else item.data(Qt.ItemDataRole.UserRole)
+
+    def _set_configured_action_enabled(self, enabled):
+        for button in (self.save_request_button, self.duplicate_request_button, self.remove_request_button, self.update_structure_button):
+            button.setEnabled(bool(enabled))
+
+    def _refresh_configured_calculations(self, selected_id=None):
+        if not hasattr(self, "configured_list"):
+            return
+        selected_id = self._selected_configured_request_id() if selected_id is None else selected_id
+        self.configured_list.blockSignals(True)
+        self.configured_list.clear()
+        for request in self.project.get_calculations():
+            try:
+                prepared = self.calculation_service.prepare_persisted_request(request)
+                status = "Ready for Plan"
+                summary = prepared.summary
+            except Exception:
+                status = "Compile Error"
+                summary = None
+            atom_text = f"{summary.atom_count} atoms" if summary is not None else "saved snapshot"
+            item = QListWidgetItem(
+                f"{request.name or request.calculation_id} — {request.calculation_id} "
+                f"• {atom_text} • {status}"
+            )
+            item.setData(Qt.ItemDataRole.UserRole, request.id)
+            item.setToolTip(f"{status}\nRequest ID: {request.id}")
+            self.configured_list.addItem(item)
+            if request.id == selected_id:
+                self.configured_list.setCurrentItem(item)
+        self.configured_list.blockSignals(False)
+        self._configured_selection_changed()
+
+    def _configured_selection_changed(self):
+        request_id = self._selected_configured_request_id()
+        request = self.project.get_calculation(request_id) if request_id else None
+        self._set_configured_action_enabled(request is not None)
+        if request is None:
+            return
+        self.request_name.setText(request.name)
+        self.parameters_input.setText(json.dumps(request.parameters, sort_keys=True))
+        try:
+            self.calculation_request = self.calculation_service.prepare_persisted_request(request)
+            self.execution_plan = self.calculation_service.compile_request(self.calculation_request)
+            self._display_execution_plan()
+        except Exception as error:
+            self.execution_plan = None
+            self.execution_preview.setText(
+                f"Configured request: {request.name or request.calculation_id}\n"
+                f"Snapshot atoms: {len(request.structure.get('atoms', []))}\n\n"
+                f"Compile Error: {error}"
+            )
+
+    def create_persistent_calculation(self, parameters=None, name=None):
+        prepared = self.calculation_service.create_request(
+            self.project, self.selected_ids, parameters=parameters, name=name,
+        )
+        self.project.add_calculation(prepared.backend_request)
+        self.calculation_request = prepared
+        self._refresh_configured_calculations(prepared.id)
+        return prepared
+
+    def _create_calculation_requested(self):
+        try:
+            prepared = self.create_persistent_calculation()
+            self.configured_list.setCurrentRow(self.configured_list.count() - 1)
+            return prepared
+        except Exception as error:
+            QMessageBox.warning(self, "Create Calculation", str(error))
+            return None
+
+    def _save_selected_request(self):
+        request = self.project.get_calculation(self._selected_configured_request_id())
+        if request is None:
+            return
+        try:
+            parameters = json.loads(self.parameters_input.text() or "{}")
+            if not isinstance(parameters, dict):
+                raise ValueError("Parameters must be a JSON object.")
+            updated = self.calculation_service.update_request_parameters(request, parameters, name=self.request_name.text())
+            self.project.update_calculation(updated)
+            self._refresh_configured_calculations(updated.id)
+        except Exception as error:
+            QMessageBox.warning(self, "Save Calculation Parameters", str(error))
+
+    def _duplicate_selected_request(self):
+        request = self.project.get_calculation(self._selected_configured_request_id())
+        if request is None:
+            return
+        try:
+            duplicate = self.calculation_service.duplicate_request(request)
+            self.project.add_calculation(duplicate)
+            self._refresh_configured_calculations(duplicate.id)
+        except Exception as error:
+            QMessageBox.warning(self, "Duplicate Calculation", str(error))
+
+    def _remove_selected_request(self):
+        request_id = self._selected_configured_request_id()
+        if request_id is not None:
+            self.project.remove_calculation(request_id)
+            self.calculation_request = None
+            self.execution_plan = None
+            self._refresh_configured_calculations()
+            self.execution_preview.setText("Select one or more calculations.")
+
+    def _update_selected_request_structure(self):
+        request = self.project.get_calculation(self._selected_configured_request_id())
+        if request is None:
+            return
+        try:
+            updated = self.calculation_service.update_request_from_project(request, self.project)
+            self.project.update_calculation(updated)
+            self._refresh_configured_calculations(updated.id)
+        except Exception as error:
+            QMessageBox.warning(self, "Update From Current Structure", str(error))
 
     # ============================================================
     # PUBLIC API
@@ -992,175 +1133,108 @@ class CalculateWorkspace(QWidget):
         )
 
 
+    def create_calculation_request(self, parameters=None, execution_target="local"):
+        """Snapshot Project.structure through the service without mutating Project or Builder."""
+        prepared = self.calculation_service.create_request(
+            self.project, self.selected_ids, parameters=parameters, execution_target=execution_target,
+        )
+        self.calculation_request = prepared
+        return prepared
+
+    def prepare_workflow(self, parameters=None, execution_target="local"):
+        prepared = self.create_calculation_request(parameters, execution_target)
+        self.execution_plan = self.calculation_service.compile_request(prepared)
+        return self.execution_plan
+
     def _compile_requested(self):
-
         if not self.selected_ids:
-
             return
-
         try:
-
             self.compile_button.setEnabled(False)
-
-            self.compile_button.setText(
-                "Compiling..."
-            )
-
-            # ----------------------------------------------------
-            # 1. Validate active structure
-            # ----------------------------------------------------
-
-            structure, summary = (
-                self._validate_structure_for_workflow()
-            )
-
-            # ----------------------------------------------------
-            # 2. Resolve dependencies locally
-            # ----------------------------------------------------
-
-            resolved = (
-                self._resolve_calculation_order()
-            )
-
-            # ----------------------------------------------------
-            # 3. Create local execution plan
-            # ----------------------------------------------------
-
-            self.execution_plan = {
-                "structure": {
-                    "name": summary.name,
-                    "atom_count": summary.atom_count,
-                },
-
-                "selected": list(
-                    self.selected_ids
-                ),
-
-                "resolved": resolved,
-
-                "parameters": {},
-
-                "execution_target": "local",
-
-                "compiled": True,
-            }
-
-            # ----------------------------------------------------
-            # 4. Display execution plan
-            # ----------------------------------------------------
-
+            self.compile_button.setText("Compiling...")
+            self.prepare_workflow()
             self._display_execution_plan()
-
-            # ----------------------------------------------------
-            # 5. Enable execution
-            # ----------------------------------------------------
-
+            # This remains a preview-only action; no engine executable is invoked.
             self.execute_button.setEnabled(True)
-
-
         except Exception as error:
-
             self.execution_plan = None
-
+            self.calculation_request = None
             self.execute_button.setEnabled(False)
-
-            QMessageBox.critical(
-                self,
-                "Compilation Failed",
-                str(error),
-            )
-
-
+            QMessageBox.critical(self, "Compilation Failed", str(error))
         finally:
-
-            self.compile_button.setText(
-                "Compile Workflow"
-            )
-
-            self.compile_button.setEnabled(
-                bool(self.selected_ids)
-            )
-
-
+            self.compile_button.setText("Compile Workflow")
+            self._update_compile_availability()
     def _display_execution_plan(self):
-
-        if self.execution_plan is None:
-
+        if self.execution_plan is None or self.calculation_request is None:
             return
-
-        resolved = self.execution_plan.get(
-            "resolved",
-            [],
-        )
-
-        calculation_map = (
-            self._get_calculation_map()
-        )
-
-        structure_info = (
-            self.execution_plan.get(
-                "structure",
-                {},
-            )
-        )
-
-        structure_name = (
-            structure_info.get(
-                "name",
-                "Active Structure",
-            )
-        )
-
-        atom_count = (
-            structure_info.get(
-                "atom_count",
-                0,
-            )
-        )
-
+        resolved = self.execution_plan.resolved_calculations
+        calculation_map = self._get_calculation_map()
+        summary = self.calculation_request.summary
         lines = [
-            f"Structure: {structure_name}",
-            f"Atoms: {atom_count}",
-            "",
-            "Resolved execution sequence:",
-            "",
+            f"Structure snapshot: {summary.name}", f"Atoms: {summary.atom_count}",
+            "", "Resolved execution sequence:", "",
         ]
-
-        for index, calculation_id in enumerate(
-            resolved,
-            start=1,
-        ):
-
-            calculation = calculation_map.get(
-                calculation_id
-            )
-
-            if calculation is not None:
-
-                name = calculation.name
-
-            else:
-
-                name = calculation_id
-
+        task_by_id = {task.id: task for task in self.execution_plan.tasks}
+        for index, calculation_id in enumerate(resolved, start=1):
+            calculation = calculation_map.get(calculation_id)
+            task = self.execution_plan.task_for_calculation(calculation_id)
+            dependencies = ", ".join(
+                task_by_id[task_id].calculation_id for task_id in task.depends_on_task_ids
+            ) or "none"
             lines.append(
-                f"{index}. {name}"
+                f"{index}. {calculation.name if calculation is not None else calculation_id}"
+                f"   depends on: {dependencies}"
             )
+        support = self.calculation_service.qe_input_support(resolved)
+        if all(item["available"] for item in support):
+            lines.append("✓ QE input generation available")
+        else:
+            lines.extend((
+                "", "QE input generation deferred:",
+                *[f"• {item['calculation_id']}: {item['reason']}" for item in support if not item["available"]],
+            ))
+        lines.extend(["", "✓ Workflow compiled", "✓ Dependencies resolved", "✓ Structure snapshot captured", "✓ Ready for QE input generation"])
+        self.execution_preview.setText("\n".join(lines))
+        self._update_compile_availability()
 
-        lines.extend(
-            [
-                "",
-                "✓ Workflow compiled",
-                "✓ Dependencies resolved",
-                "✓ Active structure validated",
-                "✓ Ready for execution",
-            ]
-        )
+    def _preview_qe_inputs(self):
+        if self.calculation_request is None:
+            return
+        try:
+            generation = self.calculation_service.preview_qe_inputs(self.calculation_request)
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Quantum ESPRESSO Input Preview")
+            layout = QVBoxLayout(dialog)
+            preview = QPlainTextEdit(dialog)
+            preview.setReadOnly(True)
+            preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+            preview.setStyleSheet("font-family: monospace;")
+            preview.setPlainText("\n\n".join(
+                f"# {task.working_directory}/{task.input_filename} ({task.executable})\n\n{task.input_text}"
+                for task in generation.tasks
+            ))
+            layout.addWidget(preview)
+            dialog.resize(840, 680)
+            dialog.exec()
+        except Exception as error:
+            QMessageBox.warning(self, "QE Input Preview", str(error))
 
-        self.execution_preview.setText(
-            "\n".join(lines)
-        )
-
+    def _generate_qe_inputs(self):
+        request_id = self._selected_configured_request_id()
+        if request_id is None or self.calculation_request is None:
+            QMessageBox.warning(self, "Generate QE Inputs", "Create and select a saved calculation request first.")
+            return
+        root = QFileDialog.getExistingDirectory(self, "Choose QE input export directory")
+        if not root:
+            return
+        try:
+            location = self.calculation_service.generate_qe_inputs(self.calculation_request, root)
+            QMessageBox.information(
+                self, "QE Inputs Generated",
+                f"QE inputs were generated at:\n{location}\n\nNo calculation was executed.",
+            )
+        except Exception as error:
+            QMessageBox.warning(self, "Generate QE Inputs", str(error))
 
     # ============================================================
     # EXECUTE
@@ -1179,10 +1253,7 @@ class CalculateWorkspace(QWidget):
 
             return
 
-        resolved = self.execution_plan.get(
-            "resolved",
-            [],
-        )
+        resolved = self.execution_plan.resolved_calculations
 
         calculation_map = (
             self._get_calculation_map()

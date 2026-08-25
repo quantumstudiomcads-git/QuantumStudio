@@ -1296,9 +1296,42 @@ Manual interaction may still be required for final feature freeze.
 
 # 52. CALCULATE / BACKEND SCOPE
 
+Calculate consumes canonical input only through `Project.get_structure()`.
+Builder must not know Calculate exists, and Calculate must not read Builder
+widgets or mutate `Project.structure`. A prepared calculation request holds an
+independent native Structure snapshot plus its `Structure.to_dict()` backend
+payload, so later Builder edits cannot change a reproducible request.
+
+Project owns optional persistent configured `CalculationRequest` records in the
+v0.4 `.qs` `calculations` section. Persist request source intent and snapshot
+only; `ExecutionPlan` is derived and must be recompiled, never persisted.
+Malformed optional calculation records must not stop Project, Builder, or Device
+loading. Calculate may update a request snapshot only through an explicit
+Update From Current Structure operation.
+
+The frontend calculation catalog is discoverability metadata; the backend
+CalculationRegistry is the single authoritative executable dependency source.
+Only catalog entries explicitly reconciled as IMPLEMENTED may compile. Backend
+`requires` uses direct stable calculation IDs, not ambiguous artifact lookup.
+Compilation creates a deterministic shared-prerequisite DAG and engine-agnostic
+PlannedTasks with explicit task edges. ExecutionPlan remains derived. Explicit
+request parameters override defaults; incompatible workflow requirements for a
+shared prerequisite must raise a conflict instead of silently duplicating or
+merging tasks.
+
 Do not fix unrelated calculation/compiler/backend issues during Builder or Device Builder work unless explicitly requested.
 
-Keep task scope narrow.
+
+Engine-specific input generation must remain downstream of ExecutionPlan through
+an explicit adapter boundary. The first adapter is `QuantumEspressoAdapter`
+(`quantum_espresso`), which derives previews/exports only and must never place
+QE syntax, runtime paths, or executable invocation in CalculationCompiler or
+ExecutionPlan. QE inputs use request snapshots in Å (`ibrav=0` cards), explicit
+per-element pseudopotential assignments, stable workflow prefix/outdir context,
+and transactional exports into user-selected directories. Never guess/download
+pseudopotentials or execute an engine from input generation.
+Keep task scope narrow. Do not connect Device Builder to Calculate or invoke an
+engine/executor until a dedicated milestone explicitly authorizes it.
 
 Builder and Device Builder development must not destabilize calculation APIs.
 

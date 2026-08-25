@@ -1,25 +1,14 @@
-from backend.calculations.registry import registry
-
-from backend.calculations.definitions.basic import (
-    SCF,
-    RELAX,
-    BANDS,
-    DOS,
-    PHONONS,
-)
+"""Legacy compatibility entry point for built-in executable definitions."""
 
 
 def register_builtin_calculations():
+    """Ensure the single active backend registry is imported and validated.
 
-    definitions = [
-        SCF,
-        RELAX,
-        BANDS,
-        DOS,
-        PHONONS,
-    ]
+    Definitions now live only in the executable calculation-family modules;
+    this compatibility function no longer registers a second basic definition set.
+    """
+    import backend.calculations
+    from backend.calculations import registry
 
-    for definition in definitions:
-
-        if not registry.exists(definition.id):
-            registry.register(definition)
+    registry.validate()
+    return registry.all()

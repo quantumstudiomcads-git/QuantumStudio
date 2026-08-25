@@ -1,30 +1,14 @@
-"""
-Quantum Studio Calculation Registry
+"""Public executable calculation registry.
 
-Importing this package registers all currently
-available calculations.
+Importing this package registers and validates the active backend definitions.
 """
 
+from backend.calculations.registry import registry
+from backend.calculations import structural  # noqa: F401
+from backend.calculations import electronic  # noqa: F401
+from backend.calculations import vibrational  # noqa: F401
+from backend.calculations import optical  # noqa: F401
 
-from backend.calculations.registry import (
-    registry,
-)
+registry.validate()
 
-
-# -------------------------------------------------------------
-# Import calculation families.
-#
-# These imports intentionally trigger registration.
-# -------------------------------------------------------------
-
-from backend.calculations import structural
-from backend.calculations import electronic
-from backend.calculations import vibrational
-from backend.calculations import optical
-
-
-__all__ = [
-
-    "registry",
-
-]
+__all__ = ["registry"]

@@ -56,3 +56,13 @@ class AnalyzeA1Tests(unittest.TestCase):
         a=ScientificResult("BandStructureResult",ResultStatus.VALID,p,arrays={"energies":[[1],[2]]})
         b=ScientificResult("BandStructureResult",ResultStatus.VALID,p,arrays={"energies":[[1],[2],[3]]})
         model=ComparisonModel("x","bands",[AnalysisSeries.from_result(a),AnalysisSeries.from_result(b)]).check(); self.assertFalse(difference_eligible(model)[0])
+
+    def test_comparison_export_package(self):
+        from backend.analyze import AnalysisSeries, ComparisonModel
+        from backend.analyze.export import export_comparison
+        p=ResultProvenance("r","e","t","qe","pw.x",(),{},"fixture")
+        a=ScientificResult("DOSResult",ResultStatus.VALID,p,arrays={"energy":[0,1],"dos":[1,2]})
+        model=ComparisonModel("x","dos",[AnalysisSeries.from_result(a,"PBE")]).check()
+        with tempfile.TemporaryDirectory() as d:
+            from pathlib import Path
+            export_comparison(model,Path(d)); self.assertTrue((Path(d)/"comparison.json").is_file()); self.assertTrue((Path(d)/"series_01.csv").is_file())

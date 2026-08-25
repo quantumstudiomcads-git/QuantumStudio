@@ -1,10 +1,12 @@
 from __future__ import annotations
 from pathlib import Path
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,QComboBox,QListWidget,QListWidgetItem,QStackedWidget,QPlainTextEdit,QPushButton,QFileDialog,QSplitter,QTableWidget,QTableWidgetItem,QMessageBox,QDialog,QDialogButtonBox
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,QComboBox,QListWidget,QListWidgetItem,QStackedWidget,QPlainTextEdit,QPushButton,QFileDialog,QSplitter,QTableWidget,QTableWidgetItem,QMessageBox,QDialog,QDialogButtonBox,QDoubleSpinBox,QCheckBox,QInputDialog
 from frontend.services.result_service import ResultService
 from backend.analyze.transforms import result_kind,tabular_data,pdos_channels
 from backend.analyze.comparison import AnalysisSeries, ComparisonModel, provenance_differences, difference_eligible
+from backend.analyze.export import export_comparison
+from backend.analyze.transforms import energy_reference, exact_difference
 from frontend.analyze.plots.compare import ComparisonPlot
 from frontend.analyze.plots.bands import BandPlot
 from frontend.analyze.plots.dos import DOSPlot
@@ -23,7 +25,9 @@ class AnalyzeWorkspace(QWidget):
         self.pdos_controls.setVisible(False); root.addWidget(self.pdos_controls)
         for box in (self.pdos_species,self.pdos_atom,self.pdos_orbital,self.pdos_component,self.pdos_aggregation): box.currentIndexChanged.connect(self._refresh_pdos_view)
         self.mode=QComboBox(self); self.mode.addItems(["Single Result","Compare Results"]); self.mode.currentIndexChanged.connect(self._mode_changed); root.insertWidget(1,self.mode)
-        self.compare_panel=QWidget(self); cp=QVBoxLayout(self.compare_panel); self.series_list=QListWidget(self); self.series_list.itemChanged.connect(self._series_visibility_changed); cp.addWidget(self.series_list); cb=QHBoxLayout(); self.add_series=QPushButton("Add Result",self); self.remove_series=QPushButton("Remove",self); self.move_up=QPushButton("Move Up",self); self.move_down=QPushButton("Move Down",self); self.rename_series=QPushButton("Rename",self); self.compare_details=QPushButton("Comparison Details",self); cb.addWidget(self.add_series); cb.addWidget(self.remove_series); cb.addWidget(self.move_up); cb.addWidget(self.move_down); cb.addWidget(self.rename_series); cb.addWidget(self.compare_details); cp.addLayout(cb); self.compare_panel.setVisible(False); root.insertWidget(2,self.compare_panel); self.add_series.clicked.connect(self._open_result_picker); self.remove_series.clicked.connect(self._remove_series); self.move_up.clicked.connect(lambda:self._move_series(-1)); self.move_down.clicked.connect(lambda:self._move_series(1)); self.rename_series.clicked.connect(self._rename_series); self.compare_details.clicked.connect(self._show_compare_details); self.series=[]
+        self.compare_panel=QWidget(self); cp=QVBoxLayout(self.compare_panel); self.series_list=QListWidget(self); self.series_list.itemChanged.connect(self._series_visibility_changed); cp.addWidget(self.series_list); cb=QHBoxLayout(); self.add_series=QPushButton("Add Result",self); self.remove_series=QPushButton("Remove",self); self.move_up=QPushButton("Move Up",self); self.move_down=QPushButton("Move Down",self); self.rename_series=QPushButton("Rename",self); self.compare_details=QPushButton("Comparison Details",self); cb.addWidget(self.add_series); cb.addWidget(self.remove_series); cb.addWidget(self.move_up); cb.addWidget(self.move_down); cb.addWidget(self.rename_series); cb.addWidget(self.compare_details); self.export_comparison_button=QPushButton("Export Comparison…",self); cb.addWidget(self.export_comparison_button); self.export_comparison_button.clicked.connect(self._export_comparison); cp.addLayout(cb); self.compare_panel.setVisible(False); root.insertWidget(2,self.compare_panel); self.add_series.clicked.connect(self._open_result_picker); self.remove_series.clicked.connect(self._remove_series); self.move_up.clicked.connect(lambda:self._move_series(-1)); self.move_down.clicked.connect(lambda:self._move_series(1)); self.rename_series.clicked.connect(self._rename_series); self.compare_details.clicked.connect(self._show_compare_details); self.series=[]
+        self.view_mode=QComboBox(self); self.view_mode.addItem("Overlay"); self.view_mode.currentIndexChanged.connect(self._render_comparison); self.reference=QComboBox(self); self.reference.addItems(["Absolute","Fermi = 0","VBM = 0"]); self.reference.currentIndexChanged.connect(self._render_comparison); self.auto_range=QCheckBox("Auto range",self); self.auto_range.setChecked(True); self.min_energy=QDoubleSpinBox(self); self.max_energy=QDoubleSpinBox(self); self.min_energy.setRange(-1e4,1e4); self.max_energy.setRange(-1e4,1e4);
+        controls=QHBoxLayout(); controls.addWidget(QLabel("View:")); controls.addWidget(self.view_mode); controls.addWidget(QLabel("Energy reference:")); controls.addWidget(self.reference); controls.addWidget(self.auto_range); controls.addWidget(QLabel("Min")); controls.addWidget(self.min_energy); controls.addWidget(QLabel("Max")); controls.addWidget(self.max_energy); self.compare_controls=QWidget(self); self.compare_controls.setLayout(controls); self.compare_controls.setVisible(False); root.insertWidget(3,self.compare_controls)
         split=QSplitter(Qt.Orientation.Horizontal); self.navigation=QListWidget(self); self.navigation.setMaximumWidth(190); self.navigation.currentRowChanged.connect(self._view_changed); self.views=QStackedWidget(self); split.addWidget(self.navigation); split.addWidget(self.views); split.setStretchFactor(1,1); root.addWidget(split,1)
         self.overview=QPlainTextEdit(self); self.overview.setReadOnly(True); self.views.addWidget(self.overview); self.plot=ScientificPlotWidget(self); self.views.addWidget(self.plot); self.table=QTableWidget(self); self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.views.addWidget(self.table); self.provenance=QPlainTextEdit(self); self.provenance.setReadOnly(True); self.views.addWidget(self.provenance)
         self.empty=QLabel("No results to analyze.\n\nRun and parse a calculation in Calculate first.",self); self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter); self.views.addWidget(self.empty); self.views.setCurrentWidget(self.empty); self._populate_calculations()
@@ -76,10 +80,29 @@ class AnalyzeWorkspace(QWidget):
         if row>=0:self.series.pop(row); self.series_list.takeItem(row); self._render_comparison()
     def _render_comparison(self):
         if self.mode.currentText()!="Compare Results" or not self.series:return
-        model=ComparisonModel("Comparison", "", self.series).check(); self._comparison_model=model
+        model=ComparisonModel("Comparison", "", self.series).check(); self._comparison_model=model; self.compare_controls.setVisible(True)
+        visible=model.visible_series(); requested=self.view_mode.currentText() if hasattr(self,"view_mode") else "Overlay"; self.view_mode.blockSignals(True); self.view_mode.clear(); self.view_mode.addItem("Overlay")
+        eligible,reason=difference_eligible(model)
+        if eligible:self.view_mode.addItem(f"Difference {visible[1].label} - {visible[0].label}")
+        if requested.startswith("Difference") and eligible:self.view_mode.setCurrentIndex(1)
+        self.view_mode.blockSignals(False)
         if model.compatibility=="INCOMPATIBLE":self.empty.setText("Comparison unavailable.\n"+"\n".join(model.warnings)); self.views.setCurrentWidget(self.empty); return
         if not hasattr(self,"comparison_plot"):self.comparison_plot=ComparisonPlot(self); self.views.addWidget(self.comparison_plot)
-        self.comparison_plot.set_comparison(model); self.views.setCurrentWidget(self.comparison_plot)
+        if self.view_mode.currentIndex()==1 and eligible:
+            try:
+                import numpy as np
+                a,b=visible; key="energies" if "energies" in a.scientific_result.arrays else "dos"; values=exact_difference(a.scientific_result,b.scientific_result,key=key); self.comparison_plot.axes.clear(); x=b.scientific_result.arrays.get("path_coordinate",b.scientific_result.arrays.get("energy")); self.comparison_plot.axes.plot(x,values,color="#E8A85C"); self.comparison_plot.axes.set_title(f"Difference {b.label} - {a.label}",color="#E8EAF0"); self.comparison_plot.axes.set_ylabel("Δ (eV)",color="#D9DCE3"); self.comparison_plot.canvas.draw_idle()
+            except Exception as error:self.empty.setText("Difference unavailable.\n"+str(error)); self.views.setCurrentWidget(self.empty); return
+        else:self.comparison_plot.set_comparison(model)
+        self.views.setCurrentWidget(self.comparison_plot)
+    def _export_comparison(self):
+        model=getattr(self,"_comparison_model",None)
+        if model is None:return
+        directory=QFileDialog.getExistingDirectory(self,"Export Comparison Folder")
+        if directory:
+            try: export_comparison(model,directory,operation=self.view_mode.currentText(),reference=self.reference.currentText())
+            except Exception as error: QMessageBox.warning(self,"Export Comparison",str(error))
+
     def _show_compare_details(self):
         model=getattr(self,"_comparison_model",None)
         if model is None:return

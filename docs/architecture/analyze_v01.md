@@ -13,3 +13,7 @@ The plotting boundary is `ScientificPlotWidget`; engine-specific views consume r
 ## A4 comparison completion
 
 Compare Results uses a metadata-first Calculation → Execution → Result picker. `AnalysisSeries` remain session-only and can be reordered, renamed, hidden, or removed without mutating Project/ResultStore. Shared energy alignment is a Qt-free transform; Fermi/VBM references require metadata on every visible series. Exact differences require identical axes/shapes and never interpolate. Frequency conversion is limited to explicit THz↔cm^-1 conversion. Comparison provenance and per-series CSV/metadata export remain structured; total-energy differences across differing functionals/pseudopotentials are not automatically interpreted.
+
+## A5 comparison UI
+
+A5 exposes dependent Calculation → Execution → Result picking, session-only series labels/order/visibility, shared energy-reference and range controls, explicit `Difference B - A` mode, and comparison export packages (`comparison.json` plus per-series CSV). Difference mode uses only exact backend transforms with compatible axes/shapes; no interpolation is performed. Status warnings and subtraction direction remain visible. Total-energy interpretation across differing Hamiltonians remains prohibited.

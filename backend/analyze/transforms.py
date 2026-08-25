@@ -52,3 +52,33 @@ def pdos_channels(result, *, species=None, atom=None, orbital=None, component=No
     for channel, data in selected: groups.setdefault(str(channel.get(key, channel.get("element", channel.get("label", "channel")))), []).append(data)
     import numpy as np
     return [({"label": label, "aggregated": True}, np.sum(np.asarray(series), axis=0).tolist()) for label, series in sorted(groups.items())]
+
+
+def energy_reference(result, reference):
+    """Return a copied energy axis aligned without mutating the Result."""
+    import numpy as np
+    energy=np.asarray(result.arrays.get("energy", result.arrays.get("path_coordinate", [])), dtype=float).copy()
+    if reference == "Absolute": return energy
+    key="fermi_energy" if reference == "Fermi = 0" else "vbm"
+    value=result.metadata.get(key)
+    if value is None: value=result.scalars.get(key, {}).get("value") if isinstance(result.scalars.get(key),dict) else result.scalars.get(key)
+    if value is None: raise ValueError(f"{reference} is unavailable for this Result.")
+    return energy-float(value)
+
+
+def exact_difference(left, right, *, key=None):
+    """Subtract right-left only for equal shapes/axes; no interpolation."""
+    import numpy as np
+    if key is None: key = "dos" if "dos" in left.arrays and "dos" in right.arrays else "energy"
+    a=np.asarray(left.arrays[key],dtype=float); b=np.asarray(right.arrays[key],dtype=float)
+    if a.shape != b.shape: raise ValueError("Difference requires identical array shapes.")
+    if key == "energy" and not np.allclose(a,b,rtol=1e-9,atol=1e-12): raise ValueError("Difference requires an identical energy grid.")
+    return b-a
+
+
+def frequency_convert(values, source, target):
+    import numpy as np
+    if source == target:return np.asarray(values,dtype=float).copy()
+    factors={("THz","cm^-1"):33.3564095,("cm^-1","THz"):1/33.3564095}
+    if (source,target) not in factors: raise ValueError(f"Unsupported frequency conversion: {source} to {target}.")
+    return np.asarray(values,dtype=float)*factors[(source,target)]

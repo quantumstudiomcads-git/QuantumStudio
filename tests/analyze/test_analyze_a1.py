@@ -41,3 +41,18 @@ class AnalyzeA1Tests(unittest.TestCase):
         b=ScientificResult("BandStructureResult",ResultStatus.STALE,ResultProvenance("r2","e2","t","qe","pw.x",(),{},"fixture",structure_fingerprint="same"),arrays={"energy":[0,1]},metadata={"band_path":[{"label":"G"},{"label":"X"}],"functional":"HSE06"})
         model=compatible_results(a,b); self.assertEqual(model.compatibility,"POTENTIALLY_COMPATIBLE"); self.assertTrue(model.warnings); self.assertTrue(provenance_differences(model))
         bad=ScientificResult("DOSResult",ResultStatus.VALID,p,arrays={"energy":[0]}); self.assertEqual(compatible_results(a,bad).compatibility,"INCOMPATIBLE")
+
+    def test_shared_energy_alignment_does_not_mutate_result(self):
+        from backend.analyze.transforms import energy_reference, exact_difference, frequency_convert
+        p=ResultProvenance("r","e","t","qe","pw.x",(),{},"f")
+        a=ScientificResult("DOSResult",ResultStatus.VALID,p,arrays={"energy":[1.,2.]},metadata={"fermi_energy":1.})
+        self.assertEqual(energy_reference(a,"Fermi = 0").tolist(),[0.,1.]); self.assertEqual(a.arrays["energy"].tolist() if hasattr(a.arrays["energy"],"tolist") else a.arrays["energy"],[1.,2.])
+        b=ScientificResult("DOSResult",ResultStatus.VALID,p,arrays={"energy":[1.,2.]})
+        b.arrays["dos"]=[3.,5.]; a.arrays["dos"]=[1.,2.]; self.assertEqual(exact_difference(a,b).tolist(),[2.,3.]); self.assertAlmostEqual(frequency_convert([1.],"THz","cm^-1")[0],33.3564095)
+
+    def test_difference_rejects_band_sampling_mismatch(self):
+        from backend.analyze import AnalysisSeries, ComparisonModel, difference_eligible
+        p=ResultProvenance("r","e","t","qe","pw.x",(),{},"f")
+        a=ScientificResult("BandStructureResult",ResultStatus.VALID,p,arrays={"energies":[[1],[2]]})
+        b=ScientificResult("BandStructureResult",ResultStatus.VALID,p,arrays={"energies":[[1],[2],[3]]})
+        model=ComparisonModel("x","bands",[AnalysisSeries.from_result(a),AnalysisSeries.from_result(b)]).check(); self.assertFalse(difference_eligible(model)[0])

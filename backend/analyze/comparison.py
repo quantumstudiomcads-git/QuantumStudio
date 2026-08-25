@@ -68,3 +68,16 @@ def provenance_differences(model):
 
 def compatible_results(left, right):
     return ComparisonModel("Comparison", "", [AnalysisSeries.from_result(left), AnalysisSeries.from_result(right)]).check()
+
+
+def difference_eligible(model):
+    visible=model.visible_series()
+    if len(visible)!=2 or model.compatibility == "INCOMPATIBLE": return False, "Difference requires exactly two compatible visible series."
+    a,b=visible
+    if a.result_type=="BandStructureResult":
+        try:
+            import numpy as np
+            ya=np.asarray(a.scientific_result.arrays.get("energies",a.scientific_result.arrays.get("energy"))); yb=np.asarray(b.scientific_result.arrays.get("energies",b.scientific_result.arrays.get("energy")))
+            if ya.shape!=yb.shape:return False,"Band difference requires identical sampling and band counts."
+        except Exception:return False,"Band difference data is unavailable."
+    return True, ""

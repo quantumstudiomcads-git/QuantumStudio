@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from frontend.calculations.catalog import CALCULATIONS
 from frontend.services.calculation_service import CalculationService
+from frontend.calculate.parameter_session import PRESETS, descriptors, parse_value, preset_parameters
 from backend.execution import ExecutionStore, LocalExecutionManager, LocalExecutionService, LocalToolConfiguration, RecoveryState
 
 
@@ -470,6 +471,9 @@ class CalculateWorkspace(QWidget):
             button.setEnabled(False)
         selection_layout.addWidget(self.request_name)
         selection_layout.addWidget(self.parameters_input)
+        self.edit_parameters_button = QPushButton("Configure Parameters…")
+        self.edit_parameters_button.clicked.connect(self._configure_parameters)
+        selection_layout.addWidget(self.edit_parameters_button)
         selection_layout.addLayout(request_actions)
         self.save_request_button.clicked.connect(self._save_selected_request)
         self.duplicate_request_button.clicked.connect(self._duplicate_selected_request)
@@ -1064,6 +1068,25 @@ class CalculateWorkspace(QWidget):
             QMessageBox.warning(self, "Create Calculation", str(error))
             return None
 
+    def _configure_parameters(self):
+        if not self.selected_ids:
+            QMessageBox.information(self, "Parameters", "Select a generation-ready calculation first."); return
+        dialog=QDialog(self); dialog.setWindowTitle("Scientific Parameters"); layout=QVBoxLayout(dialog); preset=QComboBox(dialog)
+        for mode,label in (("FAST","Fast"),("INTERMEDIATE","Intermediate"),("PRECISE","Precise"),("CUSTOM","Custom")): preset.addItem(label,mode)
+        preset.setCurrentIndex(1); layout.addWidget(QLabel("Accuracy preset")); layout.addWidget(preset); form=QFormLayout(); fields={}
+        existing=json.loads(self.parameters_input.text() or "{}")
+        for item in descriptors(self.selected_ids):
+            field=QLineEdit(json.dumps(existing.get(item["key"], item["default"])))
+            field.setToolTip(item["key"]); fields[item["key"]]=field; form.addRow(item["label"]+(f" ({item["unit"]})" if item["unit"] else ""),field)
+        layout.addLayout(form); resolved=QPlainTextEdit(dialog); resolved.setReadOnly(True); layout.addWidget(QLabel("Resolved parameters")); layout.addWidget(resolved)
+        def refresh():
+            values=preset_parameters(self.selected_ids,preset.currentData(),{key:parse_value(field.text()) for key,field in fields.items() if field.text()})
+            resolved.setPlainText(json.dumps(values,indent=2,sort_keys=True))
+        preset.currentIndexChanged.connect(refresh); refresh(); buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel,dialog); buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject); layout.addWidget(buttons)
+        if dialog.exec()==QDialog.DialogCode.Accepted:
+            values={key:parse_value(field.text()) for key,field in fields.items() if field.text()}
+            values["accuracy"]=PRESETS[preset.currentData()] if preset.currentData()!="CUSTOM" else "standard"
+            values["accuracy_preset"]=preset.currentData(); self.parameters_input.setText(json.dumps(values,sort_keys=True));
     def _save_selected_request(self):
         request = self.project.get_calculation(self._selected_configured_request_id())
         if request is None:

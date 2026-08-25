@@ -1494,3 +1494,5 @@ C8A QE post-processors are Calculate tasks that generate raw artifacts only. Req
 C8B Results must be Qt-free, artifact-driven, source-hashed, and stored under execution history rather than .qs. Keep execution/process state separate from scientific result validity; parsers must never shift raw references, mutate Builder, or create visualizations.
 
 C8C parser coverage remains artifact-driven and conservative: retain final relax structures as immutable results, preserve PDOS channels, and defer pp.x volumetric grids unless the emitted format is fully self-describing. Never add plotting or Analyze coupling to Calculate result parsing.
+
+C8D parameter forms must remain schema-driven and route persistence/validation through CalculationRequest and C3 resolution; preserve Fast/Intermediate/Precise/Custom semantics and keep machine tool paths out of scientific parameter UI.

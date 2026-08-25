@@ -307,3 +307,7 @@ C8A adds private QE post-processing stages for explicit bands (`pw.x` bands plus
 ## C8B scientific result parsing
 
 C8B adds a Qt-free engine-neutral Result model and sidecar ResultStore. Parsers consume declared raw artifacts, retain source hashes/provenance and distinguish scientific validity from process state. Current conservative parsing supports QE SCF stdout, bands, DOS, and matdyn phonon-DOS raw rows. No parser shifts energy references, mutates Builder, renders plots, or treats BTP2/NEGF configuration as numerical results.
+
+## C8D Calculate operation
+
+Calculate exposes a schema-driven parameter dialog over the C3 resolver with Fast, Intermediate, Precise, and Custom modes. It presents user-facing labels/units, retains explicit Custom values, and shows resolved parameter JSON before saving a request. Machine executable paths remain in Local Tools, not scientific forms. C8D adds no plotting or Analyze behavior.

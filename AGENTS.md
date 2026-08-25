@@ -1346,6 +1346,8 @@ C5C BoltzTraP2 workflows are configuration-only private task DAGs: a purpose-sig
 
 C5D NEGF transport must remain a standalone, Qt-free multi-component TransportInput contract until an explicit Device-to-Calculate adapter exists. A single CalculationRequest structure snapshot never represents a generic left/central/right device. NEGF configuration declares Hamiltonian/overlap and principal-layer artifacts only; it must not select an executable, construct numerical matrices, or execute a solver.
 
+C5E semantics classify all 147 public scientific intents independently from private PlannedTasks and current public support. Keep calculation kind/input cardinality/dependency descriptors Qt-free, preserve task-family plus signature compatibility for deduplication, and represent future invocations only through structural CommandSpec contracts. C6 must consume declared artifact locality and manifest contracts rather than infer shell operations or dependencies from names.
+
 Builder and Device Builder development must not destabilize calculation APIs.
 
 ---

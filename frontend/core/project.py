@@ -7,7 +7,7 @@ from frontend.core.structure import Structure
 class Project:
 
     FORMAT = "qstudio"
-    VERSION = "0.3"
+    VERSION = "0.4"
 
     def __init__(
         self,
@@ -26,6 +26,8 @@ class Project:
         self.structure = {}
         self.device = None
         self.device_load_error = None
+        self.calculations = []
+        self.calculation_load_errors = []
 
         self.calculator = {}
         self.workflows = {}
@@ -56,6 +58,12 @@ class Project:
                 if self.device is None
                 else self.device.to_dict()
             ),
+            # Optional from v0.4. Only configured request source state persists;
+            # derived execution plans and compiler caches are intentionally excluded.
+            "calculations": {
+                "schema_version": "0.1",
+                "requests": [request.to_persistence_dict() for request in self.calculations],
+            },
 
             "calculator": self.calculator,
             "workflows": self.workflows,
@@ -176,6 +184,30 @@ class Project:
                 project.device = None
                 project.device_load_error = f"Device data was not loaded: {error}"
 
+        # Calculation requests are optional and independently recoverable. A
+        # malformed request never prevents the Project, Builder, or Device from loading.
+        calculation_data = data.get("calculations", None)
+        if calculation_data is not None:
+            try:
+                from backend.core.calculation_request import CalculationRequest
+                from frontend.core.structure import Structure
+                records = calculation_data.get("requests", []) if isinstance(calculation_data, dict) else calculation_data
+                if not isinstance(records, list):
+                    raise ValueError("Calculation section requests must be a list.")
+                seen_ids = set()
+                for index, record in enumerate(records, start=1):
+                    try:
+                        request = CalculationRequest.from_persistence_dict(record)
+                        if request.id in seen_ids:
+                            raise ValueError(f"Duplicate calculation request id: {request.id}")
+                        Structure.from_dict(request.structure)
+                        seen_ids.add(request.id)
+                        project.calculations.append(request)
+                    except Exception as error:
+                        project.calculation_load_errors.append(f"Calculation {index} was not loaded: {error}")
+            except Exception as error:
+                project.calculation_load_errors.append(f"Calculation data was not loaded: {error}")
+
         project.modified = False
 
         return project
@@ -258,3 +290,52 @@ class Project:
 
     def clear_device(self):
         self.set_device(None)
+
+    # ============================================================
+    # Persistent calculation requests
+    # ============================================================
+
+    def get_calculations(self):
+        """Return an immutable view of configured requests owned by this Project."""
+        return tuple(self.calculations)
+
+    def get_calculation(self, request_id):
+        return next((request for request in self.calculations if request.id == request_id), None)
+
+    def add_calculation(self, request):
+        from backend.core.calculation_request import CalculationRequest
+        if not isinstance(request, CalculationRequest):
+            raise TypeError("Project calculations must be CalculationRequest instances.")
+        if self.get_calculation(request.id) is not None:
+            raise ValueError(f"Duplicate calculation request id: {request.id}")
+        if not request.name:
+            base = request.calculation_id.replace("_", " ").title()
+            used = {item.name for item in self.calculations}
+            index = 1
+            candidate = f"{base} {index}"
+            while candidate in used:
+                index += 1
+                candidate = f"{base} {index}"
+            request.name = candidate
+        self.calculations.append(request)
+        self.modified = True
+        return request
+
+    def update_calculation(self, request):
+        from backend.core.calculation_request import CalculationRequest
+        if not isinstance(request, CalculationRequest):
+            raise TypeError("Project calculations must be CalculationRequest instances.")
+        for index, existing in enumerate(self.calculations):
+            if existing.id == request.id:
+                self.calculations[index] = request
+                self.modified = True
+                return request
+        raise KeyError(f"Unknown calculation request id: {request.id}")
+
+    def remove_calculation(self, request_id):
+        request = self.get_calculation(request_id)
+        if request is None:
+            return False
+        self.calculations.remove(request)
+        self.modified = True
+        return True

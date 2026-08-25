@@ -365,6 +365,11 @@ class ProjectWindow(QMainWindow):
         # 3 = Analyze
         # --------------------------------------------------------
 
+        if index == 2:
+            # Calculate derives its display from the public Project structure;
+            # refresh when entering the workspace without retaining a Builder reference.
+            self.calculator.refresh()
+
         if hasattr(
             self,
             "builder_toolbar",

@@ -8,9 +8,10 @@ from .models import TaskExecutionRecord, TaskState, WorkflowExecutionRecord, now
 from .tools import LocalToolConfiguration
 
 class LocalExecutionManager:
- def __init__(self,tools=None,event_callback=None): self.tools=tools or LocalToolConfiguration(); self.event_callback=event_callback; self._cancel=threading.Event(); self._process=None; self._lock=threading.Lock()
+ def __init__(self,tools=None,event_callback=None): self.tools=tools or LocalToolConfiguration(); self.event_callback=event_callback; self._cancel=threading.Event(); self._process=None; self._lock=threading.Lock(); self._store=None
  def _emit(self,record,task_id,state):
   entry={"task_id":task_id,"state":state.value,"timestamp":now()}; record.events.append(entry)
+  if self._store: self._store.save(record)
   if self.event_callback:self.event_callback(entry)
  def _safe(self,root,directory,relative):
   result=(root/directory/relative).resolve()
@@ -54,10 +55,13 @@ class LocalExecutionManager:
  def cancel(self):
   self._cancel.set(); self._terminate_current()
  def _run_task(self,workflow,task,record):
-  root=Path(workflow.root).resolve(); runtime=record.tasks[task.task_id]; runtime.state=TaskState.RUNNING; runtime.started_at=now(); self._emit(record,task.task_id,runtime.state)
-  directory=self._safe(root,"",task.working_directory); command=task.command; executable=self.tools.resolve(task.tool_id,command.program,task.engine_id)
+  root=Path(workflow.root).resolve(); runtime=record.tasks[task.task_id]; runtime.attempt_count += 1; runtime.state=TaskState.RUNNING; runtime.started_at=now(); runtime.timeout_seconds=task.timeout_seconds; self._emit(record,task.task_id,runtime.state)
+  directory=self._safe(root,"",task.working_directory); command=task.command; executable=self.tools.resolve(task.tool_id,command.program,task.engine_id); runtime.resolved_executable=str(executable)
   stdin=self._safe(root,task.working_directory,command.stdin_file).open("rb") if command.stdin_file else None
-  stdout_path=self._safe(root,task.working_directory,command.stdout_file or "stdout.log"); stderr_path=self._safe(root,task.working_directory,command.stderr_file or "stderr.log"); runtime.stdout_path=str(stdout_path); runtime.stderr_path=str(stderr_path)
+  stdout_name=command.stdout_file or "stdout.log"; stderr_name=command.stderr_file or "stderr.log"
+  if record.execution_id:
+   stdout_name=f"{stdout_name}.attempt{runtime.attempt_count:03d}"; stderr_name=f"{stderr_name}.attempt{runtime.attempt_count:03d}"
+  stdout_path=self._safe(root,task.working_directory,stdout_name); stderr_path=self._safe(root,task.working_directory,stderr_name); runtime.stdout_path=str(stdout_path); runtime.stderr_path=str(stderr_path)
   try:
    with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
     env=os.environ.copy(); env.update(self.tools.environment); env.update(command.environment)
@@ -76,14 +80,31 @@ class LocalExecutionManager:
    if stdin:stdin.close()
    with self._lock:self._process=None
    runtime.finished_at=now(); self._emit(record,task.task_id,runtime.state)
- def execute(self,workflow):
+ def execute(self,workflow, record=None, store=None):
   errors=self.preflight(workflow)
   if errors: raise ExecutionPreflightError("\n".join(errors))
-  self._cancel.clear(); records={task.task_id:TaskExecutionRecord(task.task_id) for task in workflow.tasks}; record=WorkflowExecutionRecord(workflow.request_id,str(Path(workflow.root).resolve()),records); task_map=workflow.task_map()
+  self._cancel.clear(); self._store=store; records=record.tasks if record is not None else {task.task_id:TaskExecutionRecord(task.task_id) for task in workflow.tasks}; record=record or WorkflowExecutionRecord(workflow.request_id,str(Path(workflow.root).resolve()),records); record.started_at=record.started_at or now(); task_map=workflow.task_map()
   for task in workflow.tasks:
    runtime=records[task.task_id]
+   if runtime.state is TaskState.COMPLETED: continue
    dependencies=[records[item].state for item in task.dependencies]
    if any(state in {TaskState.FAILED,TaskState.CANCELLED,TaskState.BLOCKED} for state in dependencies): runtime.state=TaskState.BLOCKED; runtime.error_message="Blocked by prerequisite."; runtime.finished_at=now(); self._emit(record,task.task_id,runtime.state); continue
    if self._cancel.is_set(): runtime.state=TaskState.CANCELLED; runtime.finished_at=now(); self._emit(record,task.task_id,runtime.state); continue
    runtime.state=TaskState.READY; self._emit(record,task.task_id,runtime.state); self._run_task(workflow,task,record)
+  record.finished_at=now();
+  if self._store: self._store.save(record)
   return record
+
+ def resume(self, workflow, record, store=None):
+  retryable={TaskState.FAILED, TaskState.INTERRUPTED, TaskState.CANCELLED}
+  first=next((task.task_id for task in workflow.tasks if record.tasks[task.task_id].state in retryable), None)
+  if first is not None:
+   descendants = store.invalidate_downstream(workflow, record, first) if store else {first}
+   for task_id in descendants: record.tasks[task_id].state=TaskState.PENDING
+  return self.execute(workflow, record, store)
+
+ def restart_task(self, workflow, record, task_id, store=None):
+  if record.tasks[task_id].state is TaskState.RUNNING: raise ExecutionPreflightError("Cannot restart a running task.")
+  descendants = store.invalidate_downstream(workflow, record, task_id) if store else {task_id}
+  for item in descendants: record.tasks[item].state=TaskState.PENDING
+  return self.execute(workflow, record, store)

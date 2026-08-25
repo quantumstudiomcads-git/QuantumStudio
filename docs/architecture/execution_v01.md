@@ -39,3 +39,9 @@ and generated files remain authoritative while it runs.  Exit code zero means on
 process-level success; convergence and scientific result parsing belong to C8.
 Calculate prepares/runs/parses future Results, while Analyze remains the separate
 visualization and interpretation workspace.
+
+## C7 persistence and recovery
+
+Execution runtime state is versioned separately from `.qs` and is written atomically below `<workflow>/executions/<execution-id>/execution.json`. A CalculationRequest remains the stable scientific snapshot; each run has a distinct ExecutionAttempt ID, workflow/manifest/input fingerprints, resolved tool path provenance, timestamps, and per-task attempts. Logs remain task-local and persistent attempts use suffixes such as `.attempt001`, never overwriting prior failure logs.
+
+On recovery, missing sidecars mean never run; corrupt sidecars are contained diagnostics. A stale RUNNING task becomes retryable INTERRUPTED without attaching to any old PID. Resume retains validated completed prerequisites and reruns the first retryable task plus downstream work. Restarting a task invalidates all transitive descendants; Restart Workflow creates an independent new execution ID. Modified inputs or manifest/request mismatch prohibit automatic resume. There is no automatic process restart, engine-native checkpoint handling, scientific parsing, or runtime state in `.qs`.

@@ -30,7 +30,7 @@ class LocalExecutionService:
     def active(self) -> LocalExecutionHandle | None:
         return self._handle if self._handle and not self._handle.done.is_set() else None
 
-    def start(self, workflow) -> LocalExecutionHandle:
+    def start(self, workflow, **execute_kwargs) -> LocalExecutionHandle:
         if self.active is not None:
             raise RuntimeError("A local workflow is already running.")
         holder: dict[str, LocalExecutionHandle] = {}
@@ -38,7 +38,7 @@ class LocalExecutionService:
         def run() -> None:
             handle = holder["handle"]
             try:
-                handle.result = self.manager.execute(workflow)
+                handle.result = self.manager.execute(workflow, **execute_kwargs)
             except Exception as error:  # converted to concise UI text by the caller
                 handle.error = error
             finally:

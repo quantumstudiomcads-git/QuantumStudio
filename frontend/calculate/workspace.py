@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 
 from frontend.calculations.catalog import CALCULATIONS
 from frontend.services.calculation_service import CalculationService
-from backend.execution import LocalExecutionManager, LocalExecutionService, LocalToolConfiguration
+from backend.execution import ExecutionStore, LocalExecutionManager, LocalExecutionService, LocalToolConfiguration, RecoveryState
 
 
 class CalculateWorkspace(QWidget):
@@ -1299,8 +1299,17 @@ class CalculateWorkspace(QWidget):
                 return
             if QMessageBox.question(self, "Run Local Workflow", "Preflight passed. Run the generated workflow serially using configured tools/PATH?") != QMessageBox.StandardButton.Yes:
                 return
+            store = ExecutionStore(root)
+            assessment = store.assess(workflow, request_id=self.calculation_request.id)
+            record = None
+            if assessment.state is RecoveryState.RECOVERABLE:
+                if QMessageBox.question(self, "Recover Local Execution", "A recoverable execution was found. Resume from completed prerequisites?") == QMessageBox.StandardButton.Yes:
+                    record = assessment.record
+            elif assessment.state in {RecoveryState.INCOMPATIBLE, RecoveryState.MODIFIED_INPUTS, RecoveryState.CORRUPT_RUNTIME_RECORD}:
+                QMessageBox.information(self, "Execution History", assessment.message + " A new execution attempt will be created.")
+            record = record or store.create(workflow)
             self._local_execution_service = LocalExecutionService(manager)
-            self._active_execution = self._local_execution_service.start(workflow)
+            self._active_execution = self._local_execution_service.start(workflow, record=record, store=store)
             self.execute_button.setText("Cancel Local Execution")
             self.execution_preview.setPlainText("Local execution started. The request snapshot and generated inputs are locked for this run.")
             QTimer.singleShot(100, self._poll_local_execution)

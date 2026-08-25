@@ -7,3 +7,5 @@ from .tools import LocalToolConfiguration
 __all__=["GeneratedTask","GeneratedWorkflow","LocalExecutionManager","LocalToolConfiguration","TaskState","WorkflowState"]
 
 from .service import LocalExecutionService, LocalExecutionHandle
+
+from .persistence import ExecutionStore, RecoveryAssessment, RecoveryState

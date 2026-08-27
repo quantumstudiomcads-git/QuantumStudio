@@ -10,18 +10,76 @@ def _prov(path, *, request_id="", execution_id="", task_id="", tool_id="", parse
  p=Path(path).resolve();
  if not p.is_file(): raise ResultParseError("Result source artifact is missing.")
  return ResultProvenance(request_id,execution_id,task_id,"quantum_espresso",tool_id,(str(p),),{str(p):hashlib.sha256(p.read_bytes()).hexdigest()},parser_id)
+_QE_NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?"
+_SCF_PATTERNS = {
+    "total_energy": re.compile(r"!\s+total\s+energy\s*=\s*(" + _QE_NUMBER + r")\s+Ry\b", re.I),
+    "fermi_energy": re.compile(r"the\s+Fermi\s+energy\s+is\s+(" + _QE_NUMBER + r")\s+e[vV]\b", re.I),
+    "number_of_electrons": re.compile(r"number\s+of\s+electrons\s*=\s*(" + _QE_NUMBER + r")", re.I),
+    "total_magnetization": re.compile(r"total\s+magnetization\s*=\s*(" + _QE_NUMBER + r")", re.I),
+    "absolute_magnetization": re.compile(r"absolute\s+magnetization\s*=\s*(" + _QE_NUMBER + r")", re.I),
+    "electronic_iterations": re.compile(r"iteration\s*#\s*(\d+)", re.I),
+    "final_scf_accuracy": re.compile(r"estimated\s+scf\s+accuracy\s*<\s*(" + _QE_NUMBER + r")\s+Ry\b", re.I),
+}
+
+def _qe_float(value):
+    return float(str(value).replace("D", "E").replace("d", "e"))
+
 def parse_scf_output(path, **kwargs):
- text=Path(path).read_text(encoding="utf-8",errors="replace"); p=_prov(path,tool_id="pw.x",parser_id="qe.pw.scf",**kwargs); scalars={}; warnings=[]
- energy=re.findall(r"!\s+total energy\s+=\s+([-+0-9.Ee]+)\s+Ry",text)
- if energy: scalars["total_energy"]={"value":float(energy[-1])*RY_TO_EV,"unit":"eV","source_value":float(energy[-1]),"source_unit":"Ry"}
- fermi=re.findall(r"the Fermi energy is\s+([-+0-9.Ee]+)\s+ev",text,re.I)
- if fermi: scalars["fermi_energy"]={"value":float(fermi[-1]),"unit":"eV"}
- for name,pattern in (("total_magnetization",r"total magnetization\s+=\s+([-+0-9.Ee]+)"),("absolute_magnetization",r"absolute magnetization\s+=\s+([-+0-9.Ee]+)")):
-  found=re.findall(pattern,text,re.I)
-  if found: scalars[name]={"value":float(found[-1]),"unit":"Bohr magneton"}
- converged=bool(re.search(r"convergence has been achieved",text,re.I)); status=ResultStatus.VALID if converged else ResultStatus.NOT_CONVERGED
- if not converged:warnings.append("QE SCF convergence marker was not found.")
- return ScientificResult("GroundStateResult",status,p,scalars,metadata={"converged":converged},warnings=warnings)
+    """Parse the bounded v0.21 SCF scalar contract from QE pw.x stdout.
+
+    Execution completion (C7 task state) and QE ``JOB DONE`` evidence are kept
+    distinct from the electronic convergence marker.  Optional engine-reported
+    values are omitted rather than assigned physically misleading defaults.
+    """
+    text = Path(path).read_text(encoding="utf-8", errors="replace")
+    provenance = _prov(path, tool_id="pw.x", parser_id="qe.pw.scf", **kwargs)
+    values = {}
+    iterations = None
+    for line in text.splitlines():
+        for key, pattern in _SCF_PATTERNS.items():
+            match = pattern.search(line)
+            if not match:
+                continue
+            if key == "electronic_iterations":
+                iterations = int(match.group(1))
+            else:
+                values[key] = _qe_float(match.group(1))
+    converged = bool(re.search(r"convergence\s+has\s+been\s+achieved", text, re.I))
+    job_done = bool(re.search(r"\bJOB\s+DONE\.?", text, re.I))
+    fatal_error = bool(re.search(r"\b(?:error in routine|%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%)\b", text, re.I))
+    scalars = {}
+    if "total_energy" in values:
+        source = values["total_energy"]
+        scalars["total_energy"] = {"value": source * RY_TO_EV, "unit": "eV", "source_value": source, "source_unit": "Ry"}
+    if "fermi_energy" in values:
+        scalars["fermi_energy"] = {"value": values["fermi_energy"], "unit": "eV"}
+    if "number_of_electrons" in values:
+        scalars["number_of_electrons"] = {"value": values["number_of_electrons"], "unit": "electrons"}
+    for key in ("total_magnetization", "absolute_magnetization"):
+        if key in values:
+            scalars[key] = {"value": values[key], "unit": "Bohr magneton/cell", "source_unit": "Bohr mag/cell"}
+    if iterations is not None:
+        scalars["electronic_iterations"] = {"value": iterations, "unit": "iterations"}
+    if "final_scf_accuracy" in values:
+        source = values["final_scf_accuracy"]
+        scalars["final_scf_accuracy"] = {"value": source * RY_TO_EV, "unit": "eV", "source_value": source, "source_unit": "Ry"}
+    warnings = []
+    if fatal_error:
+        status = ResultStatus.PARSE_FAILED
+        warnings.append("QE fatal-error marker was found in pw.x stdout.")
+    elif not converged:
+        status = ResultStatus.NOT_CONVERGED
+        warnings.append("QE SCF convergence marker was not found.")
+    elif "total_energy" not in scalars:
+        status = ResultStatus.PARTIAL
+        warnings.append("QE reported SCF convergence but no final total-energy line was found.")
+    else:
+        status = ResultStatus.VALID
+    if not job_done:
+        warnings.append("QE JOB DONE completion marker was not found; C7 execution state remains the authoritative process-completion record.")
+    metadata = {"converged": converged, "job_done": job_done, "execution_completed_evidence": job_done, "fatal_error_marker": fatal_error, "contract_version": "v0.21-e1", "optional_scalars": ["fermi_energy", "total_magnetization", "absolute_magnetization"]}
+    return ScientificResult("GroundStateResult", status, provenance, scalars, metadata=metadata, warnings=warnings)
+
 def _columns(path, count, parser, result_type, names, **kwargs):
  rows=[]
  for line in Path(path).read_text(encoding="utf-8",errors="replace").splitlines():

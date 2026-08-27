@@ -9,6 +9,10 @@ from backend.engines.qe.hybrid_bands import hybrid_band_contract
 
 def _sig(value): return hashlib.sha256(json.dumps(value,sort_keys=True,default=str).encode()).hexdigest()[:16]
 
+def _pseudo_identity(values):
+    if not isinstance(values, dict): return {}
+    return {str(element): ({"filename": value.get("filename"), "sha256": value.get("sha256")} if isinstance(value, dict) else {"legacy_assignment": str(value)}) for element, value in sorted(values.items())}
+
 def _path(value, label):
     if not isinstance(value, list) or len(value) < 2: raise InvalidQEParameterError("Choose a band path before generating this Band Structure calculation.")
     points=[]
@@ -24,7 +28,7 @@ def expand(request, tasks, parameters):
     if not scf: return tasks
     result=[task for task in tasks if task.calculation_id not in {"bands","dos","pdos","charge_density","spin_density","phonon_dos"}]
     def add(name, semantic, tool, deps, params, inputs, outputs, metadata=None):
-        signature=_sig({"semantic":semantic,"parameters":params}); task=PlannedTask(id=f"{request.id}:{semantic}:{signature}",calculation_id=name,semantic_task_type=semantic,engine_id="quantum_espresso",tool_id=tool,parameter_signature=signature,depends_on_task_ids=tuple(dep.id for dep in deps),parameters=params,structure_reference="request_snapshot",artifact_inputs=tuple(inputs),artifact_outputs=tuple(outputs),metadata=metadata or {}); result.append(task); return task
+        signature=_sig({"semantic":semantic,"calculation_id":name,"purpose":(metadata or {}).get("purpose"),"structure":request.structure,"pseudopotentials":_pseudo_identity(request.parameters.get("pseudopotentials",{})),"parameters":params}); task=PlannedTask(id=f"{request.id}:{semantic}:{signature}",calculation_id=name,semantic_task_type=semantic,engine_id="quantum_espresso",tool_id=tool,parameter_signature=signature,depends_on_task_ids=tuple(dep.id for dep in deps),parameters=params,structure_reference="request_snapshot",artifact_inputs=tuple(inputs),artifact_outputs=tuple(outputs),metadata=metadata or {}); result.append(task); return task
     if "bands" in selected:
         values=dict(parameters["bands"]); path=_path(values.get("kpath"),"Band structure")
         functional=resolve(request.parameters.get("xc_functional", request.parameters.get("functional", values.get("functional", "pbe"))))
@@ -33,7 +37,7 @@ def expand(request, tasks, parameters):
             mesh=scf_parameters.get("exx_q_mesh") or scf_parameters.get("kpoints", [1,1,1])
             contract=hybrid_band_contract(path, mesh, request.structure.get("periodic"))
             scf_parameters["hybrid_band_contract"]=contract
-            scf=replace(scf, parameters=scf_parameters, parameter_signature=_sig({"semantic":"hybrid_scf_bands","parameters":scf_parameters}), artifact_outputs=tuple(sorted(set(scf.artifact_outputs+("qe_band_eigenvalues",)))), metadata={**scf.metadata, "hybrid_band":contract})
+            scf=replace(scf, parameters=scf_parameters, parameter_signature=_sig({"semantic":"hybrid_scf_bands","structure":request.structure,"pseudopotentials":_pseudo_identity(request.parameters.get("pseudopotentials",{})),"parameters":scf_parameters}), artifact_outputs=tuple(sorted(set(scf.artifact_outputs+("qe_band_eigenvalues",)))), metadata={**scf.metadata, "hybrid_band":contract})
             result=[scf if task.calculation_id=="scf" else task for task in result]
             add("qe_bands","qe_bands","bands.x",[scf],{"filband":"bands.dat","hybrid_band_method":contract["method"]},["qe_save","qe_band_eigenvalues"],["BAND_STRUCTURE_RAW_DATA"],{"purpose":"hybrid_bands", "hybrid_band":contract})
         else:
@@ -43,7 +47,7 @@ def expand(request, tasks, parameters):
         if public in selected:
             values=dict(parameters[public]); mesh=values.get("dense_kpoints");
             if not isinstance(mesh,(list,tuple)) or len(mesh)!=3: raise InvalidQEParameterError(f"{public} requires dense_kpoints mesh.")
-            nscf=add(f"qe_pw_nscf_{public}","qe_pw_nscf","pw.x",[scf],{**values,"kpoints":{"mode":"automatic","mesh":list(mesh),"shifts":[0,0,0]},"occupations":"tetrahedra"},["qe_save"],["qe_wavefunctions","qe_eigenvalues"],{"purpose":public})
+            nscf=add(f"qe_pw_nscf_{public}","qe_pw_nscf","pw.x",[scf],{**values,"kpoints":{"mode":"automatic","mesh":list(mesh),"shifts":[0,0,0]},"occupations":"tetrahedra"},["qe_save"],["qe_wavefunctions","qe_eigenvalues"],{"purpose":public,"private_nscf_contract":{"version":"v0.21-e1","parent_scf_task_id":scf.id,"state_inputs":["qe_charge_density","qe_save"],"required_outputs":["qe_wavefunctions","qe_eigenvalues"],"structure_reference":"request_snapshot","requires_shared_prefix_outdir":True}})
             add(terminal,terminal,tool,[nscf],values,["qe_save","qe_wavefunctions"],[output],{"purpose":public})
     for public, kind, output in (("charge_density","charge","CHARGE_DENSITY_RAW_DATA"),("spin_density","spin","SPIN_DENSITY_RAW_DATA")):
         if public in selected:

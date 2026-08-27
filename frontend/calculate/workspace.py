@@ -1623,7 +1623,7 @@ class CalculateWorkspace(QWidget):
             directory=self.local_tool_configuration.qe_bin_directory
             status.setText(("✓ Quantum ESPRESSO "+version+" detected") if version else "Searching for Quantum ESPRESSO…")
             location.setText("Installation: "+(directory or "Not detected"))
-            found=sorted(name for name in ("pw.x","ph.x","bands.x","dos.x","projwfc.x","pp.x","q2r.x","matdyn.x","pw2wannier90.x","epw.x") if name in self.local_tool_configuration.tool_paths)
+            found=sorted(name for name in ("pw.x","ph.x","bands.x","dos.x","projwfc.x","pp.x","q2r.x","matdyn.x","pw2wannier90.x","wannier90.x","epw.x") if name in self.local_tool_configuration.tool_paths)
             tools.setText("Detected tools: "+(", ".join(found) if found else "—"))
         refresh(); layout.addWidget(status); layout.addWidget(location); layout.addWidget(tools)
         actions=QHBoxLayout(); rescan=QPushButton("Rescan",dialog); choose=QPushButton("Choose Installation Folder",dialog); actions.addWidget(rescan); actions.addWidget(choose); layout.addLayout(actions)

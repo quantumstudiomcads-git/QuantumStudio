@@ -30,6 +30,13 @@ def tabular_data(result):
         return cols, rows
     if t=="WorkFunctionResult":
         x=_values(result,"distance_A"); raw=_values(result,"potential_raw_Ry"); ev=_values(result,"potential_eV"); macro=_values(result,"macroscopic_eV"); return ["distance_A","potential_raw_Ry","potential_eV","macroscopic_eV"], [[x[i],raw[i] if i<len(raw) else "",ev[i] if i<len(ev) else "",macro[i] if i<len(macro) else ""] for i in range(len(x))]
+    if t=="RelaxationResult":
+        atoms=result.metadata.get("final_structure",{}).get("atoms",[])
+        return ["element","x_A","y_A","z_A"], [[atom.get("element",""),atom.get("x",""),atom.get("y",""),atom.get("z","")] for atom in atoms]
+    if t=="WannierizationResult":
+        centres=_values(result,"centres_A"); spreads=_values(result,"individual_spreads_A2")
+        if centres: return ["wannier_index","centre_x_A","centre_y_A","centre_z_A","spread_A2"], [[index+1,*centre,spreads[index] if index<len(spreads) else ""] for index,centre in enumerate(centres)]
+        return ["quantity","value"], [["num_wann",result.metadata.get("num_wann","")],["final_spread_A2",result.scalars.get("final_spread",{}).get("value","")]]
     if t=="PhononDOSResult":
         x=_values(result,"frequency"); y=_values(result,"dos")
         return ["frequency","dos"], [[x[i],y[i]] for i in range(min(len(x),len(y)))]

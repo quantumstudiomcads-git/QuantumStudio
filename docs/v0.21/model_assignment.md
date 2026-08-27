@@ -19,3 +19,5 @@
 SCF completeness: Terra/High; NSCF: Terra/High; Relax and VC-relax: Terra/High; Bands combinations: Terra/High; DOS and PDOS: Terra/High; SOC: Terra/High; DFT+U: Terra/High; charge/spin density and ELF: Terra/High; electrostatic potential/work function: Terra/High; Fermi surface: Terra/High; Wannier90: Terra/High; Volumetric Result: Terra/High; Analyze volumetric viewer: Terra/High; derived electronic quantities: Terra/High; real QE validation: Terra/High; documentation/testing: Luna/Medium.
 
 This follows the requested policy: Terra establishes contracts and validates physics, Terra implements bounded established contracts and Qt/adapter work, and Luna expands tests/docs/mechanical wiring.
+
+Final completion note: HSE/B3LYP paths, Wannier external executable, and SOC/+U combination limitations are capability-gated in the E6/E7 freeze; no Sol assignments are permitted.

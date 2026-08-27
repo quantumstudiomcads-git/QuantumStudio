@@ -38,3 +38,17 @@ class ResultCoverageTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as tmp:
    root=Path(tmp); w=root/"x.wout"; w.write_text("Number of Wannier Functions : 4\nFinal State Spread 2.5\nAll done\n"); self.assertEqual(DEFAULT_PARSERS.parse("WANNIER_WOUT",w).status,ResultStatus.VALID)
    e=root/"epw.out"; e.write_text("EPW completed\n"); result=DEFAULT_PARSERS.parse("EPW_SUMMARY",e); self.assertEqual(result.status,ResultStatus.UNVERIFIED); self.assertNotIn("lambda",result.scalars)
+
+ def test_relax_convergence_force_and_wannier_centres(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp); relax=root/"unfinished.out"; relax.write_text("! total energy = -1.0 Ry\nATOMIC_POSITIONS angstrom\nSi 0 0 0\n\nTotal force = 0.0012\nJOB DONE.\n")
+   parsed=DEFAULT_PARSERS.parse("QE_RELAX_STDOUT",relax); self.assertEqual(parsed.status,ResultStatus.NOT_CONVERGED); self.assertEqual(parsed.scalars["final_total_force"]["unit"],"Ry per bohr")
+   w=root/"seed.wout"; w.write_text("Number of Wannier Functions : 2\nWF centre and spread 1 ( 0.0, 1.0, 2.0 ) 0.5\nWF centre and spread 2 ( 3.0, 4.0, 5.0 ) 0.7\nFinal State Spread 1.2\nAll done\n"); (root/"seed_hr.dat").write_text("header\n2\n5\n")
+   wannier=DEFAULT_PARSERS.parse("WANNIER_WOUT",w); self.assertEqual(wannier.arrays["centres_A"].shape,(2,3)); self.assertEqual(wannier.metadata["hr"]["num_rpoints"],5)
+
+ def test_wannier_result_source_prefers_wout_artifact(self):
+  from frontend.services.result_service import ResultService
+  from types import SimpleNamespace
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp); task=root/"run"; task.mkdir(); (task/"seed.wout").write_text("All done\n")
+   source=ResultService()._source(root,{"working_directory":"run"},SimpleNamespace(stdout_path=""),"wannier90_run"); self.assertEqual(source.name,"seed.wout")

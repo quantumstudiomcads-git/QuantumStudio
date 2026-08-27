@@ -1,8 +1,8 @@
 # Quantum Studio v0.21 — E4 Electronic Capability Matrix
 
-E3 update date: 2026-08-27. This is source, test, and bounded runtime-integration evidence; it is not a numerical-reference release claim.
+Final E6/E7 completion update: 2026-08-27. This is source, test, and bounded runtime-integration evidence; it is not a numerical-reference release claim.
 
-Baseline: 147 public intents (20 `ready`, 1 `partial`, 126 `planned`); reconciliation maps those to 20 implemented, 1 unavailable, and 126 planned. Project files use qstudio v0.4 calculation persistence (with v0.2/v0.3 compatibility tests). The active branch is `v0.2`; v0.21 documentation is intentionally untracked until a future commit.
+Catalog baseline: 147 public intents (23 `ready`, 1 `partial`, 123 `planned`); reconciliation maps 23 executable definitions, with capability status refined by the final override below. Project files use qstudio v0.4 calculation persistence (with v0.2/v0.3 compatibility tests). The active branch is `v0.2`; documentation reflects the active v0.21 worktree.
 
 | ID / public name | Quantity / kind | Engine and private dependencies | Generate / execute | Parser → Result | Analyze / export | Actual status and missing work | v0.21 |
 |---|---|---|---|---|---|---|---|
@@ -46,3 +46,22 @@ Shared prerequisites are deduplicated within one `ExecutionPlan` DAG; cross-requ
 * QE total energy and final SCF accuracy use the shared Ry-to-eV conversion. Collinear magnetizations use `Bohr magneton/cell`, not per atom. Forces/stress remain Relax/VC-relax concerns; eigenvalues and occupations remain downstream artifact contracts.
 * Private DOS, PDOS, and Wannier NSCF tasks have deterministic parent-SCF edges, immutable request snapshots, workflow-local verified pseudos, purpose-specific signatures, common QE prefix/outdir/save state, and no artificial standalone result. Public `nscf` remains `partial`.
 * Runtime integration evidence: two-atom diamond-Si primitive PBE with SSSP Efficiency 1.3.0 `Si.pbe-n-rrkjus_psl.1.0.0.UPF` and QE 7.6 completed SCF -> private DOS NSCF -> dos.x. SCF parsed -22.82588915 Ry as -310.56204303437835 eV, 8.0 electrons, 5 iterations, converged=true, JOB DONE=true. Fermi and magnetizations were absent because QE did not print them. This is integration evidence, not a numerical reference.
+
+## Final E6/E7 completion override
+
+The following table supersedes the earlier milestone wording for user-facing v0.21 electronic capability status. `READY` requires the normal workflow and structured Result route; `EXTERNAL_BACKEND_REQUIRED` is a complete gated path only when the executable is configured.
+
+| Public capability | Final state | Generate / Run / Parse / Analyze / Export | Limitation |
+|---|---|---|---|
+| SCF; Relax; VC-Relax | READY | Yes / Yes / GroundStateResult or RelaxationResult / summary+data / CSV | VC stress is final QE pressure only; no trajectory viewer |
+| NSCF | PARTIAL | Internal prerequisite only | Standalone eigenvalue Result intentionally absent |
+| Bands | READY scalar PBE; READY SOC PBE; PARTIAL collinear/+U/hybrid | Existing band route | Remaining combinations have no final real integration evidence |
+| DOS / PDOS | READY scalar and collinear PBE; READY +U DOS | Existing purpose-signed NSCF route | SOC projection semantics PARTIAL; hybrid route UNSUPPORTED |
+| Charge Density / ELF / Potential | READY scalar PBE | pp.x → VolumetricResult → field Analyze/export | Method variants not all runtime validated |
+| Spin Density | READY collinear PBE | pp.x signed field | SOC/noncollinear vector field unsupported |
+| Work Function | READY scalar metal slab | SCF + pp.x potential → WorkFunctionResult | Same-state Fermi, valid slab/plateau required |
+| Band Gap / Effective Mass | READY derived Analyze | Bands Result → electronic analysis/export | Sampled-path scope |
+| Magnetic Moments | PARTIAL | GroundState scalar values | No site/projected moment Result |
+| HSE06 / B3LYP | PARTIAL | Writer and HSE direct-band route | No final runtime validation; hybrid DOS/PDOS blocked |
+| Wannierization | EXTERNAL_BACKEND_REQUIRED | Full DAG + WOUT centres/spreads/HR parsing | wannier90.x must be configured; no local executable detected |
+| Wannier Bands / Fermi Surface / Bader / charge transfer / band-decomposed charge / spin-orbital textures / Hubbard-U determination / Berry-topology properties | UNSUPPORTED | No v0.21 backend Result route | Hidden from runnable workflow by planned catalog state |

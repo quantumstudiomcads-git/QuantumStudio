@@ -225,7 +225,7 @@ class AnalyzeWorkspace(QWidget):
         if self.current_result is None:return
         label=self.navigation.item(row).text() if row >= 0 else ""
         if label=="Overview":self._show_overview()
-        elif label in {"Band Structure","Density of States","Projected DOS","Phonon DOS"}:self._show_plot()
+        elif label in {"Band Structure","Density of States","Projected DOS","Phonon DOS","Volumetric Field","Work Function"}:self._show_plot()
         elif label=="Electronic Analysis":self._show_electronic()
         elif label=="Data":self._show_table()
         elif label=="Provenance":self._show_provenance()

@@ -46,3 +46,5 @@ Collinear bcc Fe PBE with starting_magnetization=0.5 completed SCF then `plot_nu
 ## E5 surface-electrostatics evidence
 
 Al(111) scalar PBE integration run: SCF → pp.x `plot_num=11` → 30×30×360 potential cube → automatic slab/vacuum analysis. The 3-layer, 34.6765 Å cell had a 16.664 Å validated shared boundary-wrapped vacuum plateau. QE reported E_F=-1.7765 eV; E_vac=2.417519 eV with 5.28e-06 eV standard deviation and effectively zero fitted slope, yielding Phi=4.194019 eV. This is integration evidence, not a converged numerical reference value.
+
+Final E6/E7 completion: Relax/VC parser convergence fidelity and Wannier centres/spreads/HR parsing were strengthened. No new real QE runtime calculation was launched; validated E1-E5 artifacts were reused and remaining combinations are capability-gated.

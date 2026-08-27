@@ -206,10 +206,16 @@ def parse_relax_output(path, **kwargs):
  if cells:
   cu,body=cells[-1]; factor=.529177210903 if cu.lower()=="bohr" else 1.; cell=[[float(x)*factor for x in line.split()[:3]] for line in body.splitlines()]
  structure=Structure(atoms=atoms,cell=cell or [[10.,0,0],[0,10.,0],[0,0,10.]],name="Relaxed Structure")
- status=ResultStatus.VALID if re.search(r"convergence has been achieved|JOB DONE",text,re.I) else ResultStatus.NOT_CONVERGED
+ status=ResultStatus.VALID if re.search(r"convergence has been achieved",text,re.I) else ResultStatus.NOT_CONVERGED
+ forces=re.findall(r"Total force\s*=\s*("+_QE_NUMBER+r")",text,re.I)
+ pressure=re.findall(r"P\s*=\s*("+_QE_NUMBER+r")",text,re.I)
  scalars={}
  if energies: scalars["total_energy"]={"value":float(energies[-1])*RY_TO_EV,"unit":"eV","source_value":float(energies[-1]),"source_unit":"Ry"}
- return ScientificResult("RelaxationResult",status,p,scalars,metadata={"final_structure":structure.to_dict(),"vc_relax":bool(cells)})
+ if forces: scalars["final_total_force"]={"value":_qe_float(forces[-1]),"unit":"Ry per bohr"}
+ if pressure: scalars["final_pressure"]={"value":_qe_float(pressure[-1]),"unit":"kbar"}
+ import numpy as _np
+ metadata={"final_structure":structure.to_dict(),"vc_relax":bool(cells),"final_cell_A":cell,"final_volume_A3":abs(float(_np.linalg.det(cell))) if cell else None,"converged":status is ResultStatus.VALID,"job_done":bool(re.search(r"\bJOB\s+DONE\.?",text,re.I))}
+ return ScientificResult("RelaxationResult",status,p,scalars,metadata=metadata)
 
 def _prov_many(paths, **kwargs):
     first=Path(paths[0]).resolve(); provenance=_prov(first,**kwargs)
@@ -266,9 +272,21 @@ def parse_pdos(path, **kwargs):
 def parse_wannier_wout(path, **kwargs):
  text=Path(path).read_text(errors="replace"); p=_prov(path,tool_id="wannier90.x",parser_id="wannier90.wout",**kwargs)
  spread=re.findall(r"Final State.*?Spread\s+([-+0-9.Ee]+)",text,re.I); n=re.findall(r"Number of Wannier Functions\s*:\s*(\d+)",text,re.I)
+ matches=list(re.finditer(r"WF\s+centre\s+and\s+spread\s+\d+\s+\(\s*("+_QE_NUMBER+r")\s*,\s*("+_QE_NUMBER+r")\s*,\s*("+_QE_NUMBER+r")\s*\)\s*("+_QE_NUMBER+r")",text,re.I))
+ centres=np.asarray([[ _qe_float(match.group(i)) for i in (1,2,3)] for match in matches],float) if matches else np.empty((0,3))
+ individual=np.asarray([_qe_float(match.group(4)) for match in matches],float) if matches else np.empty((0,))
+ hr=Path(path).with_name(Path(path).stem+"_hr.dat")
+ hr_metadata={}
+ if hr.is_file():
+  lines=hr.read_text(encoding="utf-8",errors="replace").splitlines()
+  try: hr_metadata={"available":True,"num_wann":int(lines[1].strip()),"num_rpoints":int(lines[2].strip()),"source_path":str(hr.resolve()),"source_hash":hashlib.sha256(hr.read_bytes()).hexdigest()}
+  except (IndexError,ValueError): hr_metadata={"available":True,"diagnostic":"Wannier HR header is malformed."}
  status=ResultStatus.VALID if re.search(r"All done|Wannierisation.*converged",text,re.I) else ResultStatus.PARTIAL
  scalars={"final_spread":{"value":float(spread[-1]),"unit":"angstrom^2"}} if spread else {}
- return ScientificResult("WannierizationResult",status,p,scalars,metadata={"num_wann":int(n[-1]) if n else None})
+ metadata={"num_wann":int(n[-1]) if n else None,"centres_unit":"angstrom","spread_unit":"angstrom^2","hr":hr_metadata,"converged":status is ResultStatus.VALID}
+ arrays={}
+ if len(centres): arrays["centres_A"]=centres; arrays["individual_spreads_A2"]=individual
+ return ScientificResult("WannierizationResult",status,p,scalars,arrays=arrays,metadata=metadata)
 
 def parse_epw_output(path, **kwargs):
  text=Path(path).read_text(errors="replace"); p=_prov(path,tool_id="epw.x",parser_id="epw.summary",**kwargs)

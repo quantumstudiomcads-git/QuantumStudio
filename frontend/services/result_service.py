@@ -33,6 +33,10 @@ class ResultService:
   workflow=Path(root).resolve(); directory=(workflow/str(task.get("working_directory",""))).resolve()
   if workflow not in directory.parents and directory != workflow: raise ResultStoreError("Task directory escapes generated workflow root.")
   names={"qe_bands":("bands.dat",), "qe_dos":("dos.dat",), "qe_matdyn":("phdos.dat","phonon.dos"), "qe_projwfc":("*.pdos_atm#*","pdos_atm#*"), "qe_pp":()}
+  if semantic=="wannier90_run":
+   candidates=sorted(directory.glob("*.wout"))
+   if len(candidates)==1 and directory in candidates[0].resolve().parents: return candidates[0]
+   if len(candidates)>1: raise ResultStoreError("Wannier result discovery found multiple .wout files in the task directory.")
   if semantic=="qe_pp":
    field=((task.get("metadata") or {}).get("task_metadata") or {}).get("field",{})
    candidate=(directory/str(field.get("artifact",""))).resolve()

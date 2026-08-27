@@ -1527,3 +1527,6 @@ Analyze A7 rules: edge markers derive exclusively from validated BandGapAnalysis
 
 
 Analyze v0.1 is feature-frozen after A8. During full-application QA, restrict Analyze changes to defects, scientific-correctness fixes, performance, accessibility/usability, and release blockers; do not casually add scientific features, raw-file parsing, engine execution, interpolation, or private Builder/Calculate coupling.
+
+
+Quantum Studio v0.1 is in feature-freeze / whole-application QA after QA0. New work must be classified as a defect fix, scientific-correctness fix, performance fix, usability/accessibility fix, packaging/install fix, or release blocker. Do not expand v0.1 scope without explicitly leaving the freeze.

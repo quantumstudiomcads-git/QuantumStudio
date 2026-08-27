@@ -7,10 +7,7 @@ def pw_bands_input(parameters, structure, context, pseudos):
     points=parameters.get("band_path")
     if not isinstance(points,list) or len(points)<2: raise InvalidQEParameterError("Band structure requires explicit band_path.")
     text=pw_input("qe_pw_nscf", parameters, structure, context, pseudos).replace("calculation = 'nscf'", "calculation = 'bands'")
-    rows=[]
-    for point in points:
-        xyz=point["coordinates"]; rows.append(" ".join(format(float(x),".12g") for x in xyz)+f" {int(point['points'])}")
-    return text.split("K_POINTS automatic")[0].rstrip()+"\n\nK_POINTS crystal_b\n"+str(len(rows))+"\n"+"\n".join(rows)+"\n"
+    return text
 
 def post_input(kind, parameters, context):
     prefix,outdir=context.prefix,context.outdir

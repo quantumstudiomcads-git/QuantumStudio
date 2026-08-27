@@ -99,10 +99,25 @@ class ProjectWindow(QMainWindow):
         )
 
         self._build_ui()
+        self.setMinimumSize(900, 560)
         self._build_menu()
         self._apply_style()
 
     # ============================================================
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Qt/window manager owns maximize geometry; only repair an off-screen normal window.
+        if not self.isMaximized() and not self.isFullScreen():
+            handle = self.windowHandle()
+            screen = handle.screen() if handle is not None else QGuiApplication.primaryScreen()
+            if screen is not None:
+                available = screen.availableGeometry()
+                if not available.intersects(self.frameGeometry()):
+                    target = self.frameGeometry()
+                    target.moveCenter(available.center())
+                    self.move(target.topLeft())
+
+
     # Window title
     # ============================================================
 

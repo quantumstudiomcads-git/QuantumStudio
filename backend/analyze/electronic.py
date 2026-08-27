@@ -31,6 +31,7 @@ class BandGapAnalysis:
     degenerate_vbm: tuple[BandEdge, ...] = ()
     degenerate_cbm: tuple[BandEdge, ...] = ()
     warnings: tuple[str, ...] = ()
+    minimum_direct_gap: float | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,17 @@ def _edge_label(result, sample):
     return None
 
 
+def minimum_sampled_direct_gap(result, *, tolerance=TOLERANCE):
+    """Return the minimum direct gap over sampled k points when occupancy is defensible."""
+    bands=_bands(result)
+    if bands is None: return None
+    mask, reason=_occupied_mask(result,bands.shape,tolerance)
+    if reason: return None
+    occupied=np.where(mask,bands,np.nan); unoccupied=np.where(~mask,bands,np.nan)
+    gaps=np.nanmin(unoccupied,axis=1)-np.nanmax(occupied,axis=1)
+    if not np.all(np.isfinite(gaps)): return None
+    return float(np.min(gaps))
+
 def analyze_band_edges(result, *, tolerance=TOLERANCE):
     """Identify defensible sampled-path edges without changing the source Result."""
     bands = _bands(result)
@@ -152,8 +164,9 @@ def analyze_band_edges(result, *, tolerance=TOLERANCE):
             direct = vbm.path_sample_index == cbm.path_sample_index
         prefix = "DIRECT" if direct else "INDIRECT"
         classification = f"{prefix}_{'FULL_BZ' if scope == 'full_bz' else 'SAMPLED_PATH'}"
+    direct_gap=minimum_sampled_direct_gap(result,tolerance=tolerance)
     return BandGapAnalysis("VALID", scope, float(max(0.0, gap)), classification, vbm, cbm,
-                           vbm_candidates, cbm_candidates)
+                           vbm_candidates, cbm_candidates, (), direct_gap)
 
 
 def available_fit_directions(result, edge: BandEdge):

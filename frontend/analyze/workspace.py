@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,QComboBox,QListWidget,QListWidgetItem,QStackedWidget,QPlainTextEdit,QPushButton,QFileDialog,QSplitter,QTableWidget,QTableWidgetItem,QTableView,QMessageBox,QDialog,QDialogButtonBox,QDoubleSpinBox,QSpinBox,QCheckBox,QInputDialog,QScrollArea
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,QComboBox,QListWidget,QListWidgetItem,QStackedWidget,QPlainTextEdit,QPushButton,QFileDialog,QSplitter,QTableWidget,QTableWidgetItem,QTableView,QMessageBox,QDialog,QDialogButtonBox,QDoubleSpinBox,QSpinBox,QCheckBox,QInputDialog,QScrollArea,QSizePolicy
 from frontend.services.result_service import ResultService
 from backend.analyze.transforms import result_kind,tabular_data,pdos_channels
 from backend.analyze.comparison import AnalysisSeries, ComparisonModel, provenance_differences, difference_eligible
@@ -17,10 +17,11 @@ from frontend.analyze.table_model import ScientificTableModel, ScientificTableVi
 class AnalyzeWorkspace(QWidget):
     """Result-only browser; it never compiles, generates, executes, or parses."""
     def __init__(self, project, parent=None):
-        super().__init__(parent); self.project=project; self.service=ResultService(); self.workflow_roots={}; self.current_result=None; self._electronic_cache={}; self._show_band_edges=False; self._electronic_reference="Absolute"; self._last_fit=None
+        super().__init__(parent); self.project=project; self.service=ResultService(); self.workflow_roots={}; self.current_result=None; self._electronic_cache={}; self._show_band_edges=False; self._electronic_reference="VBM = 0"; self._last_fit=None
         self.setObjectName("analyzeWorkspace"); self.setStyleSheet("AnalyzeWorkspace{background:#111318;color:#E8EAF0;} QComboBox,QPlainTextEdit,QTableWidget,QTableView,QScrollArea{background:#17191F;color:#E8EAF0;border:1px solid #30343D;} QListWidget,QHeaderView::section,QMenu{background:#17191F;color:#D9DCE3;border:1px solid #30343D;} QPushButton{background:#252932;color:#D9DCE3;padding:7px 11px;border-radius:6px;} QToolTip{background:#17191F;color:#E8EAF0;border:1px solid #3A4655;}")
         root=QVBoxLayout(self); header=QHBoxLayout(); title=QLabel("Analyze"); title.setStyleSheet("font-size:16px;font-weight:600;"); header.addWidget(title); header.addStretch(); self.refresh=QPushButton("Refresh Results",self); self.refresh.setToolTip("Refresh Result metadata without parsing scientific output"); self.refresh.clicked.connect(self._refresh_results); header.addWidget(self.refresh); self.attach=QPushButton("Open Results Folder…",self); self.attach.setToolTip("Advanced fallback for legacy or external Quantum Studio results"); self.attach.clicked.connect(self._attach_root); header.addWidget(self.attach); root.addLayout(header)
         selectors=QHBoxLayout(); self.calculation=QComboBox(self); self.execution=QComboBox(self); self.result=QComboBox(self); selectors.addWidget(QLabel("Calculation:")); selectors.addWidget(self.calculation,1); selectors.addWidget(QLabel("Execution:")); selectors.addWidget(self.execution,1); selectors.addWidget(QLabel("Result:")); selectors.addWidget(self.result,1); root.addLayout(selectors)
+        for combo in (self.calculation, self.execution, self.result): combo.setMinimumWidth(0); combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.calculation.setToolTip("Configured calculation"); self.execution.setToolTip("Completed execution for this calculation"); self.result.setToolTip("Parsed scientific Result"); self.mode.setToolTip("Inspect one Result or compare compatible Results") if hasattr(self,"mode") else None; self.calculation.currentIndexChanged.connect(self._calculation_changed); self.execution.currentIndexChanged.connect(self._execution_changed); self.result.currentIndexChanged.connect(self._result_changed)
         self.pdos_controls=QWidget(self); pf=QHBoxLayout(self.pdos_controls); pf.setContentsMargins(0,0,0,0); self.pdos_species=QComboBox(self); self.pdos_atom=QComboBox(self); self.pdos_orbital=QComboBox(self); self.pdos_component=QComboBox(self); self.pdos_aggregation=QComboBox(self); self.pdos_aggregation.addItems(["None","By species","By atom","By orbital"]);
         for label, box in (("Species",self.pdos_species),("Atom",self.pdos_atom),("Orbital",self.pdos_orbital),("Component",self.pdos_component),("Aggregation",self.pdos_aggregation)): pf.addWidget(QLabel(label+":")); pf.addWidget(box)
@@ -188,6 +189,8 @@ class AnalyzeWorkspace(QWidget):
         self.result.clear(); root=self.workflow_roots.get(str(self.calculation.currentData())); execution=self.execution.currentData()
         if not root or not execution: self.views.setCurrentWidget(self.empty); return
         try:
+            if not self.service.summaries(root, execution):
+                self.service.parse(root, execution)
             for row in self.service.summaries(root,execution): self.result.addItem(f"{result_kind(type('R',(),{'result_type':row['type']})())} — {row['status']}",row['result_id'])
         except Exception as error: self.empty.setText("Results unavailable.\n"+str(error)); self.views.setCurrentWidget(self.empty)
         if self.result.count() == 0:
@@ -277,6 +280,7 @@ class AnalyzeWorkspace(QWidget):
         if analysis.gap is not None:
             kind=analysis.classification.replace("DIRECT_SAMPLED_PATH", "Direct on sampled path").replace("INDIRECT_SAMPLED_PATH", "Indirect on sampled path").replace("DIRECT_FULL_BZ", "Direct gap").replace("INDIRECT_FULL_BZ", "Indirect gap").replace("ZERO_GAP", "Zero-gap")
             lines += [f"{scope}: {analysis.gap:.6g} eV", f"Classification: {kind}", f"VBM: {analysis.vbm.energy:.6g} eV — {self._edge_text(analysis.vbm)}", f"CBM: {analysis.cbm.energy:.6g} eV — {self._edge_text(analysis.cbm)}"]
+            if analysis.minimum_direct_gap is not None: lines.append(f"Minimum sampled direct gap: {analysis.minimum_direct_gap:.6g} eV")
         if analysis.warnings: lines += ["", "Warnings:"] + list(analysis.warnings)
         summary.setPlainText("\n".join(lines)); self.electronic_layout.addWidget(summary)
         edges=QCheckBox("Show band edges",self.electronic_content); edges.setChecked(self._show_band_edges); edges.setToolTip("Markers are derived only from retained A6 VBM/CBM candidates."); edges.toggled.connect(self._set_show_band_edges); self.electronic_layout.addWidget(edges)
@@ -342,7 +346,7 @@ class AnalyzeWorkspace(QWidget):
         if not filename:return
         def edge(value):
             return None if value is None else {"energy_eV":value.energy,"band_index":value.band_index,"path_sample_index":value.path_sample_index,"path_coordinate":value.path_coordinate,"kpoint":value.kpoint,"label":value.label}
-        payload={"result_id":self.current_result.result_id,"request_id":self.current_result.provenance.request_id,"execution_id":self.current_result.provenance.execution_id,"source_status":self.current_result.status.value,"status":analysis.status,"gap_scope":analysis.gap_scope,"sampled_gap_eV":analysis.gap,"classification":analysis.classification,"vbm":[edge(item) for item in analysis.degenerate_vbm],"cbm":[edge(item) for item in analysis.degenerate_cbm],"fits":[fit.__dict__ for fit in (() if self._last_fit is None else (self._last_fit,))]}
+        payload={"result_id":self.current_result.result_id,"request_id":self.current_result.provenance.request_id,"execution_id":self.current_result.provenance.execution_id,"source_status":self.current_result.status.value,"status":analysis.status,"gap_scope":analysis.gap_scope,"sampled_gap_eV":analysis.gap,"sampled_path_gap_eV":analysis.gap,"sampled_path_character":analysis.classification,"minimum_sampled_direct_gap_eV":analysis.minimum_direct_gap,"classification":analysis.classification,"vbm":[edge(item) for item in analysis.degenerate_vbm],"cbm":[edge(item) for item in analysis.degenerate_cbm],"fits":[fit.__dict__ for fit in (() if self._last_fit is None else (self._last_fit,))]}
         Path(filename).write_text(json.dumps(payload,indent=2,sort_keys=True),encoding="utf-8")
 
     def _show_plot(self):
@@ -361,6 +365,8 @@ class AnalyzeWorkspace(QWidget):
         self.views.insertWidget(1,self.plot)
         if self.current_result.result_type == "BandStructureResult":
             analysis=self._electronic_analysis(); self.plot.configure_electronic_analysis(analysis,show_edges=self._show_band_edges,energy_offset=self._reference_offset(analysis),reference_label=self._electronic_reference)
+            request=next((item for item in self.project.get_calculations() if str(item.id)==str(self.current_result.provenance.request_id)),None)
+            if request is not None: self.plot.set_path_metadata(request.parameters.get("kpath"))
         self.plot.set_result(self.current_result); self.views.setCurrentWidget(self.plot)
     def _show_table(self):
         if self.current_result.result_type == "PDOSResult":

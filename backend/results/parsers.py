@@ -33,7 +33,38 @@ def _columns(path, count, parser, result_type, names, **kwargs):
  data=np.asarray(rows,float); arrays={name:data[:,index] for index,name in enumerate(names)}; return ScientificResult(result_type,ResultStatus.VALID,_prov(path,tool_id=parser+".x",parser_id="qe."+parser,**kwargs),arrays=arrays,metadata={"units":{names[0]:"eV" if parser in {"dos","bands","projwfc"} else "cm^-1"}})
 def parse_dos(path, **kwargs): return _columns(path,2,"dos","DOSResult",("energy","dos"),**kwargs)
 def parse_phonon_dos(path, **kwargs): return _columns(path,2,"matdyn","PhononDOSResult",("frequency","dos"),**kwargs)
-def parse_bands(path, **kwargs): return _columns(path,2,"bands","BandStructureResult",("path_coordinate","energy"),**kwargs)
+def parse_bands(path, **kwargs):
+    """Parse QE bands.x filband output (header, k-point, energy blocks)."""
+    lines=Path(path).read_text(encoding="utf-8",errors="replace").splitlines()
+    header=next((line for line in lines if "nbnd=" in line and "nks=" in line), "")
+    match=re.search(r"nbnd\s*=\s*(\d+).*nks\s*=\s*(\d+)", header, re.I)
+    if not match: raise ResultParseError("QE bands artifact has no nbnd/nks header.")
+    nbnd,nks=int(match.group(1)),int(match.group(2)); kpoints=[]; energies=[]; index=0
+    while index < len(lines) and len(kpoints)<nks:
+        try: values=[float(item) for item in lines[index].split()]
+        except ValueError: index+=1; continue
+        if len(values) < 3: index+=1; continue
+        index += 1; band=[]
+        while index < len(lines) and len(band)<nbnd:
+            try: row=[float(item) for item in lines[index].split()]
+            except ValueError: index+=1; continue
+            band.extend(row); index += 1
+        if len(band) < nbnd: break
+        kpoints.append(values[:3]); energies.append(band[:nbnd])
+    if len(kpoints) != nks: raise ResultParseError("QE bands artifact is truncated or malformed.")
+    import numpy as np
+    coords=np.asarray(kpoints,float); values=np.asarray(energies,float)
+    path_coordinate=np.concatenate(([0.0],np.cumsum(np.linalg.norm(np.diff(coords,axis=0),axis=1))))
+    metadata={"units":{"energies":"eV","kpoints":"crystal"},"kpoints":coords.tolist()}
+    if kwargs.get("band_path") is not None:
+        metadata["band_path"]=kwargs["band_path"]
+        node_positions=[0]
+        for point in kwargs["band_path"][:-1]: node_positions.append(node_positions[-1]+int(point.get("points",1)))
+        metadata["path_node_positions"]=node_positions
+        metadata["path_labels"]={position:point.get("label","") for position,point in zip(node_positions,kwargs["band_path"]) if point.get("label")}
+    provenance={key:value for key,value in kwargs.items() if key in {"request_id","execution_id","task_id"}}
+    return ScientificResult("BandStructureResult",ResultStatus.VALID,_prov(path,tool_id="bands.x",parser_id="qe.bands",**provenance),arrays={"path_coordinate":path_coordinate,"energies":values},metadata=metadata)
+
 class ParserRegistry:
  def __init__(self): self._parsers={}
  def register(self,key,parser):

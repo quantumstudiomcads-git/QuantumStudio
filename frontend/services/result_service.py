@@ -51,13 +51,15 @@ class ResultService:
   routes={"scf":"QE_SCF_STDOUT","relax":"QE_RELAX_STDOUT","vc_relax":"QE_RELAX_STDOUT","qe_bands":"BAND_STRUCTURE_RAW_DATA","qe_dos":"DOS_RAW_DATA","qe_matdyn":"PHONON_DOS_RAW_DATA","qe_projwfc":"PDOS_RAW_DATA","wannier90_run":"WANNIER_WOUT","epw":"EPW_SUMMARY"}
   for task_id,runtime in record.tasks.items():
    if runtime.state is not TaskState.COMPLETED: continue
-   task=manifest.get(task_id,{}) ; semantic=str(task.get("semantic_task_type", "")); route=routes.get(semantic)
+   task=manifest.get(task_id,{}) ; semantic=str(task.get("semantic_task_type") or (task.get("metadata") or {}).get("semantic_task_type", "")); route=routes.get(semantic)
    if route is None: continue
    source=self._source(root,task,runtime,semantic)
    if source is None:
     errors.append(f"{semantic}: declared result source is missing."); continue
    try:
-    result=DEFAULT_PARSERS.parse(route,source,request_id=record.request_id,execution_id=execution_id,task_id=task_id)
+    parse_kwargs={"request_id":record.request_id,"execution_id":execution_id,"task_id":task_id};
+    if semantic == "qe_bands": parse_kwargs["band_path"]=(task.get("metadata") or {}).get("band_path");
+    result=DEFAULT_PARSERS.parse(route,source,**parse_kwargs)
     if reparse or result.result_id not in store.list(): store.save(result)
     parsed.append(result.result_id)
    except (ResultParseError,ResultStoreError,ValueError) as error:

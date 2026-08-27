@@ -48,8 +48,10 @@ from frontend.services.result_service import ResultService
 from frontend.calculate.parameter_session import PRESETS, descriptors, parse_value, preset_parameters
 from frontend.calculate.functional_pseudo_dialog import FunctionalPseudoDialog
 from frontend.calculate.preparation import CalculationPreparationWorker
+from frontend.calculate.result_parsing import ResultParsingWorker
 from frontend.calculate.qe_discovery import QuantumEspressoDiscoveryWorker
 from frontend.calculate.band_path_dialog import BandPathDialog
+from frontend.builder.brillouin_zone.path_api import band_path_summary, normalize_band_path, recommended_band_path, materialize_path
 from frontend.calculate.results_dialog import ResultsDialog
 from frontend.calculate.typed_parameter_controls import control_value, make_control
 from backend.execution import ExecutionStore, LocalExecutionManager, LocalExecutionService, LocalToolConfiguration, RecoveryState, available_logical_cpus
@@ -95,6 +97,7 @@ class CalculateWorkspace(QWidget):
         self._active_execution = None
         self._last_execution_output_paths = ()
         self._preparation_worker = None
+        self._result_parsing_worker = None
         self._preparation_for_run = False
         self._pseudo_provisioner = None
         self.local_tool_configuration = LocalToolConfiguration.load_machine_configuration()
@@ -116,7 +119,7 @@ class CalculateWorkspace(QWidget):
             QTimer.singleShot(0, self._start_qe_discovery)
 
     def closeEvent(self, event):
-        for worker in (self._preparation_worker, self._qe_discovery_worker):
+        for worker in (self._preparation_worker, self._qe_discovery_worker, self._result_parsing_worker):
             if worker is not None and worker.isRunning(): worker.wait()
         super().closeEvent(event)
 
@@ -1172,6 +1175,15 @@ class CalculateWorkspace(QWidget):
             )
 
     def create_persistent_calculation(self, parameters=None, name=None):
+        parameters = dict(parameters or {})
+        if "bands" in self.selected_ids:
+            existing_path = parameters.get("kpath")
+            if existing_path:
+                parameters["kpath"] = normalize_band_path(existing_path)
+            else:
+                recommendation = recommended_band_path(self.project.get_structure().to_dict())
+                parameters["kpath"] = normalize_band_path(materialize_path(recommendation.segments, (True,) * len(recommendation.segments), 40))
+            parameters["postprocessing"] = True
         prepared = self.calculation_service.create_request(
             self.project, self.selected_ids, parameters=parameters, name=name,
         )
@@ -1214,14 +1226,14 @@ class CalculateWorkspace(QWidget):
         for item in descriptors(self.selected_ids):
             key=item["key"]; value=existing.get(key,item["default"])
             if key=="kpath":
-                field=QPushButton("Choose Band Path…",dialog); field._band_path=list(value or [])
+                field=QPushButton("Choose Band Path…  [" + band_path_summary(value) + "]",dialog); field.band_path=normalize_band_path(value)
                 def choose_path(_checked=False, button=field):
                     try:
-                        editor = BandPathDialog(structure, button._band_path, dialog)
+                        editor = BandPathDialog(structure, button.band_path, dialog)
                         if editor.exec() == QDialog.DialogCode.Accepted:
-                            button._band_path = editor.value()
-                            button.setText("Band Path: " + " — ".join(point["label"] for point in button._band_path))
-                            button.setToolTip("Selected band path: " + " — ".join(point["label"] for point in button._band_path))
+                            button.band_path = normalize_band_path(editor.value())
+                            button.setText("Choose Band Path…  [" + band_path_summary(button.band_path) + "]")
+                            button.setToolTip("Selected band path: " + band_path_summary(button.band_path))
                     except Exception as error:
                         QMessageBox.warning(dialog, "Band Path", str(error))
                 field.clicked.connect(choose_path)
@@ -1232,7 +1244,7 @@ class CalculateWorkspace(QWidget):
         def values_from_fields():
             values={}
             for key,field in fields.items():
-                values[key]=list(field._band_path) if key=="kpath" else control_value(key,field)
+                values[key]=normalize_band_path(field.band_path) if key=="kpath" else control_value(key,field)
             return values
         def refresh():
             values=preset_parameters(self.selected_ids,preset.currentData(),values_from_fields()); values.update(scientific_state)
@@ -1246,6 +1258,8 @@ class CalculateWorkspace(QWidget):
         dialog.resize(720,620)
         if dialog.exec()==QDialog.DialogCode.Accepted:
             values=values_from_fields(); values.update(scientific_state)
+            if "bands" in self.selected_ids:
+                values["postprocessing"] = True
             values["accuracy"]=PRESETS[preset.currentData()] if preset.currentData()!="CUSTOM" else "standard"; values["accuracy_preset"]=preset.currentData(); self.parameters_input.setText(json.dumps(values,sort_keys=True))
             request = self.project.get_calculation(self._selected_configured_request_id())
             if request is not None:
@@ -1426,6 +1440,16 @@ class CalculateWorkspace(QWidget):
             ))
         lines.extend(["", "✓ Workflow compiled", "✓ Dependencies resolved", "✓ Structure snapshot captured", "✓ Ready for QE input generation"])
         self.execution_preview.setText("\n".join(lines))
+    def _result_parsing_completed(self, worker):
+        if self._result_parsing_worker is worker:
+            self._result_parsing_worker = None
+        worker.deleteLater()
+        if worker.error is not None:
+            LOGGER.debug("Automatic result parsing failed:\n%s", worker.error[1])
+            self.workflow_status.setText("Status: Calculation completed. Results processing failed")
+            return
+        errors = (worker.outcome or {}).get("errors", ())
+        self.workflow_status.setText("Status: Calculation completed. Results processing failed" if errors else "Status: Results ready")
         self._update_compile_availability()
 
     def _generated_root(self):
@@ -1706,3 +1730,9 @@ class CalculateWorkspace(QWidget):
             lines.append(line)
         self._last_execution_output_paths = tuple(task.stdout_path for task in result.tasks.values() if task.stdout_path)
         self.execution_preview.setText("\n".join(lines))
+        if result.state.value == "COMPLETED":
+            self.workflow_status.setText("Status: Calculation completed. Processing results…")
+            worker = ResultParsingWorker(self.result_service, self._generated_root_path, result.execution_id, self)
+            self._result_parsing_worker = worker
+            worker.finished_result.connect(self._result_parsing_completed)
+            worker.start()

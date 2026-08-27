@@ -35,6 +35,30 @@ class BandPathRecommendation:
     message: str = ""
 
 
+def normalize_band_path(path: object) -> list[dict[str, object]]:
+    """Return the single serializable BandPath representation used by Calculate."""
+    if not isinstance(path, (list, tuple)):
+        return []
+    normalized = []
+    for point in path:
+        if not isinstance(point, Mapping):
+            raise ValueError("Band path points must be mappings.")
+        coordinates = point.get("coordinates")
+        if not isinstance(coordinates, (list, tuple)) or len(coordinates) != 3:
+            raise ValueError("Band path points require three fractional coordinates.")
+        count = int(point.get("points", 40))
+        if count < 1:
+            raise ValueError("Band path interpolation counts must be positive.")
+        normalized.append({"label": str(point.get("label", "")).strip(), "coordinates": [float(value) for value in coordinates], "points": count})
+    if normalized and len(normalized) < 2:
+        raise ValueError("Band path requires at least two points.")
+    return normalized
+
+def band_path_summary(path: object) -> str:
+    points = normalize_band_path(path)
+    return " — ".join(str(point["label"]) for point in points) if points else "Not selected"
+
+
 def _length(vector: object) -> float:
     return sqrt(sum(float(value) ** 2 for value in vector))
 

@@ -102,8 +102,23 @@ def structure_cards(structure: Mapping[str, Any], pseudopotentials: Mapping[str,
     return "\n".join(lines)
 
 
+def _band_path_card(path: object) -> str:
+    if not isinstance(path, list) or len(path) < 2:
+        raise InvalidQEParameterError("Band structure requires an explicit ordered band path.")
+    rows = []
+    for index, point in enumerate(path):
+        if not isinstance(point, Mapping) or not isinstance(point.get("coordinates"), (list, tuple)) or len(point["coordinates"]) != 3:
+            raise InvalidQEParameterError("Band path points require three fractional coordinates.")
+        count = 1 if index == len(path) - 1 else int(point.get("points", 0))
+        if count < 1:
+            raise InvalidQEParameterError("Band path interpolation counts must be positive.")
+        rows.append(" ".join(format_number(float(value)) for value in point["coordinates"]) + f" {count}")
+    return "K_POINTS crystal_b\n" + str(len(rows)) + "\n" + "\n".join(rows)
+
 def k_points_card(parameters: Mapping[str, Any], periodic: object) -> str:
-    """Serialize the deliberately small C4 gamma/automatic k-point model."""
+    """Resolve exactly one primary QE K_POINTS card, with explicit band paths taking precedence."""
+    if parameters.get("band_path") is not None:
+        return _band_path_card(parameters["band_path"])
     value = parameters.get("kpoints", parameters.get("dense_kpoints"))
     if value is None:
         return "K_POINTS gamma"

@@ -45,4 +45,4 @@ def hybrid_band_contract(path, exx_q_mesh, periodic):
 
 def additional_k_points_card(contract):
     rows=[" ".join(format(value, ".12g") for value in point)+" 0.0" for point in contract["visible_points"]]
-    return "ADDITIONAL_K_POINTS crystal\\n"+str(len(rows))+"\\n"+"\\n".join(rows)
+    return "ADDITIONAL_K_POINTS crystal\n"+str(len(rows))+"\n"+"\n".join(rows)

@@ -10,7 +10,7 @@ from backend.engines.qe.hybrid_bands import hybrid_band_contract
 def _sig(value): return hashlib.sha256(json.dumps(value,sort_keys=True,default=str).encode()).hexdigest()[:16]
 
 def _path(value, label):
-    if not isinstance(value, list) or len(value) < 2: raise InvalidQEParameterError(f"{label} requires an explicit ordered path with at least two points.")
+    if not isinstance(value, list) or len(value) < 2: raise InvalidQEParameterError("Choose a band path before generating this Band Structure calculation.")
     points=[]
     for item in value:
         if not isinstance(item, dict) or not isinstance(item.get("coordinates"), (list,tuple)) or len(item["coordinates"]) != 3: raise InvalidQEParameterError(f"{label} points require three fractional coordinates.")
@@ -38,7 +38,7 @@ def expand(request, tasks, parameters):
             add("qe_bands","qe_bands","bands.x",[scf],{"filband":"bands.dat","hybrid_band_method":contract["method"]},["qe_save","qe_band_eigenvalues"],["BAND_STRUCTURE_RAW_DATA"],{"purpose":"hybrid_bands", "hybrid_band":contract})
         else:
             pw=add("qe_pw_bands","qe_pw_bands","pw.x",[scf],{**values,"band_path":path},["qe_save"],["qe_band_eigenvalues"],{"purpose":"bands"})
-            add("qe_bands","qe_bands","bands.x",[pw],{"filband":"bands.dat"},["qe_save","qe_band_eigenvalues"],["BAND_STRUCTURE_RAW_DATA"])
+            add("qe_bands","qe_bands","bands.x",[pw],{"filband":"bands.dat"},["qe_save","qe_band_eigenvalues"],["BAND_STRUCTURE_RAW_DATA"],{"purpose":"bands","band_path":path})
     for public, terminal, tool, output in (("dos","qe_dos","dos.x","DOS_RAW_DATA"),("pdos","qe_projwfc","projwfc.x","PDOS_RAW_DATA")):
         if public in selected:
             values=dict(parameters[public]); mesh=values.get("dense_kpoints");

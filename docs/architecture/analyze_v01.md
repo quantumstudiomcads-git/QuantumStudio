@@ -39,3 +39,11 @@ A read-only final-structure preview remains deferred: Analyze has no clean publi
 A8 completes Analyze v0.1 usability and QA without adding scientific analysis. The workspace distinguishes empty projects, unparsed calculations, unavailable result roots, and per-result errors; Result refresh remains metadata-first. The Data tab now uses a lightweight Qt model/view rather than allocating item widgets for every numeric cell, and replaced Matplotlib canvases clear their figures before deferred deletion. Exports normalize missing extensions and show contextual failures.
 
 Analyze v0.1 feature set is **frozen after A8**. Post-freeze work is limited to defect fixes, scientific-correctness fixes, performance, accessibility/usability work, and release blockers. Deferred scope includes a public read-only relaxed-structure renderer, volumetric fields, transport/optics without structured Results, full-BZ extrema/gap search, advanced interpolation, and persisted comparison sessions.
+
+## Band presentation
+
+Band Structure Results remain immutable structured data. Analyze offers a Publication display mode with persisted high-symmetry labels/separators, validated VBM/CBM markers, sampled-path and minimum-direct-gap summaries, and session-only annotations. Overlay uses the existing comparison model and requires compatible path topology. Publication styling and measurements never alter scientific Results or provenance; conventional/supercell folding remains a scope warning rather than an automatic primitive-cell transform.
+
+## Publication band figure
+
+The BandPlot defaults to a boxed Publication presentation: white canvas, dark bands, inward ticks, categorical persisted high-symmetry labels, subtle separators, and general grid disabled. The Grid checkbox controls only ordinary Matplotlib grid artists; separators and energy-reference guides are independent. Appearance controls and point readout are session-only and re-style immutable Results.

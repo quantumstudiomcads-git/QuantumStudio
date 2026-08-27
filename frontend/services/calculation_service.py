@@ -195,9 +195,14 @@ class CalculationService:
         self.validate_selected_calculations(selected)
         structure, summary = self.validate_structure(project, selected)
         snapshot = structure.copy()
+        request_parameters = dict(parameters or {})
+        if "bands" in selected and not request_parameters.get("kpath"):
+            from frontend.builder.brillouin_zone.path_api import materialize_path, normalize_band_path, recommended_band_path
+            recommendation = recommended_band_path(snapshot.to_dict())
+            request_parameters["kpath"] = normalize_band_path(materialize_path(recommendation.segments, (True,) * len(recommendation.segments), 40))
         request = CalculationRequest(
             structure=snapshot.to_dict(), selected_calculations=selected,
-            parameters=dict(parameters or {}), execution_target=str(execution_target),
+            parameters=request_parameters, execution_target=str(execution_target),
             metadata={"structure_source": "project.structure", "structure_name": snapshot.name},
             name="" if name is None else str(name),
         )

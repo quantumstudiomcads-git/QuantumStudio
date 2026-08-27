@@ -66,6 +66,28 @@ CALCULATION_DEFAULTS = {
 
         "energy_window": [-10, 10],
 
+        "delta_e": 0.01,
+
+        "spin": False,
+
+        "soc": False,
+    },
+
+
+    "pdos": {
+
+        "functional": "PBE",
+
+        "ecutwfc": 60,
+
+        "ecutrho": 480,
+
+        "dense_kpoints": [12, 12, 12],
+
+        "energy_window": [-10, 10],
+
+        "delta_e": 0.01,
+
         "spin": False,
 
         "soc": False,

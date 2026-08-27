@@ -28,13 +28,13 @@ registry.register(CalculationDefinition(
     id="dos", name="Density of States", category="Electronic Properties",
     description="Electronic density of states.", requires=("scf",), workflow="electronic.dos",
     engine="quantum_espresso", tags=("electronic", "dos"),
-    parameters=_POST_SCF_PARAMETERS + ("dense_kpoints", "energy_window"),
+    parameters=_POST_SCF_PARAMETERS + ("dense_kpoints", "energy_window", "delta_e"),
 ))
 registry.register(CalculationDefinition(
     id="pdos", name="Projected Density of States", category="Electronic Properties",
     description="Atom- and orbital-resolved electronic density of states.", requires=("scf",),
     workflow="electronic.pdos", engine="quantum_espresso", tags=("electronic", "dos", "projected"),
-    parameters=_POST_SCF_PARAMETERS + ("dense_kpoints", "energy_window", "projection"),
+    parameters=_POST_SCF_PARAMETERS + ("dense_kpoints", "energy_window", "delta_e", "projection"),
 ))
 registry.register(CalculationDefinition(
     id="charge_density", name="Charge Density", category="Electronic Properties",

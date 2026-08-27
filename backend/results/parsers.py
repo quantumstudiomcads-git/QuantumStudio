@@ -80,16 +80,47 @@ def parse_scf_output(path, **kwargs):
     metadata = {"converged": converged, "job_done": job_done, "execution_completed_evidence": job_done, "fatal_error_marker": fatal_error, "contract_version": "v0.21-e1", "optional_scalars": ["fermi_energy", "total_magnetization", "absolute_magnetization"]}
     return ScientificResult("GroundStateResult", status, provenance, scalars, metadata=metadata, warnings=warnings)
 
+def _numeric_rows(path):
+    rows=[]
+    for line in Path(path).read_text(encoding="utf-8",errors="replace").splitlines():
+        if not line.strip() or line.lstrip().startswith(("#","!")): continue
+        try: row=[_qe_float(value) for value in line.split()]
+        except ValueError: continue
+        if not row or not all(np.isfinite(row)): raise ResultParseError("Raw artifact contains a non-finite numeric value.")
+        rows.append(row)
+    if not rows: raise ResultParseError("Raw artifact contains no numeric data rows.")
+    widths={len(row) for row in rows}
+    if len(widths)!=1: raise ResultParseError("Raw artifact has inconsistent column counts.")
+    return np.asarray(rows,float)
+
+def _monotonic_energy(values):
+    if len(values)<2 or not np.all(np.diff(values)>0): raise ResultParseError("Energy grid must be strictly increasing.")
+
+def _source_headers(path):
+    return [line.strip() for line in Path(path).read_text(encoding="utf-8",errors="replace").splitlines() if line.lstrip().startswith("#")]
+
+def parse_dos(path, **kwargs):
+    """Parse QE dos.x scalar/non-spin output without changing its raw energy axis."""
+    data=_numeric_rows(path)
+    if data.shape[1] not in (2,3): raise ResultParseError("QE non-spin dos.x output requires E, DOS(E), and optional integrated DOS columns.")
+    energy=data[:,0]; _monotonic_energy(energy)
+    headers="\n".join(_source_headers(path)); fermi=re.search(r"EFermi\s*=\s*("+_QE_NUMBER+r")\s*eV",headers,re.I)
+    scalars={}
+    metadata={"contract_version":"v0.21-e2","units":{"energy":"eV","dos":"states/eV/cell","integrated_dos":"states/cell"},"energy_reference":{"raw":"engine_output","display_default":"Fermi = 0" if fermi else "Absolute"},"normalization":"PER_CELL","source_energy_unit":"eV","spin_semantics":"NON_SPIN","parser_diagnostics":[]}
+    if fermi:
+        value=_qe_float(fermi.group(1)); scalars["fermi_energy"]={"value":value,"unit":"eV"}; metadata["fermi_energy_eV"]=value; metadata["fermi_reference"]={"source":"dos.x header","source_task":"qe_dos","value_eV":value}
+    arrays={"energy":energy,"dos":data[:,1]}
+    if data.shape[1]==3:
+        integrated=data[:,2]
+        if np.any(np.diff(integrated)<-1e-7): raise ResultParseError("Integrated DOS is not monotonic.")
+        arrays["integrated_dos"]=integrated
+    return ScientificResult("DOSResult",ResultStatus.VALID,_prov(path,tool_id="dos.x",parser_id="qe.dos",**kwargs),arrays=arrays,scalars=scalars,metadata=metadata)
+
 def _columns(path, count, parser, result_type, names, **kwargs):
- rows=[]
- for line in Path(path).read_text(encoding="utf-8",errors="replace").splitlines():
-  if not line.strip() or line.lstrip().startswith(("#","!")): continue
-  try: values=[float(x) for x in line.split()]
-  except ValueError: continue
-  if len(values)>=count: rows.append(values[:count])
- if not rows: raise ResultParseError("Raw artifact contains no numeric data rows.")
- data=np.asarray(rows,float); arrays={name:data[:,index] for index,name in enumerate(names)}; return ScientificResult(result_type,ResultStatus.VALID,_prov(path,tool_id=parser+".x",parser_id="qe."+parser,**kwargs),arrays=arrays,metadata={"units":{names[0]:"eV" if parser in {"dos","bands","projwfc"} else "cm^-1"}})
-def parse_dos(path, **kwargs): return _columns(path,2,"dos","DOSResult",("energy","dos"),**kwargs)
+    data=_numeric_rows(path)
+    if data.shape[1]<count: raise ResultParseError("Raw artifact has too few numeric columns.")
+    arrays={name:data[:,index] for index,name in enumerate(names)}
+    return ScientificResult(result_type,ResultStatus.VALID,_prov(path,tool_id=parser+".x",parser_id="qe."+parser,**kwargs),arrays=arrays,metadata={"units":{names[0]:"eV" if parser in {"bands","projwfc"} else "cm^-1"}})
 def parse_phonon_dos(path, **kwargs): return _columns(path,2,"matdyn","PhononDOSResult",("frequency","dos"),**kwargs)
 def parse_bands(path, **kwargs):
     """Parse QE bands.x filband output (header, k-point, energy blocks)."""
@@ -157,24 +188,51 @@ def parse_relax_output(path, **kwargs):
  if energies: scalars["total_energy"]={"value":float(energies[-1])*RY_TO_EV,"unit":"eV","source_value":float(energies[-1]),"source_unit":"Ry"}
  return ScientificResult("RelaxationResult",status,p,scalars,metadata={"final_structure":structure.to_dict(),"vc_relax":bool(cells)})
 
+def _prov_many(paths, **kwargs):
+    first=Path(paths[0]).resolve(); provenance=_prov(first,**kwargs)
+    resolved=tuple(str(Path(item).resolve()) for item in paths)
+    return ResultProvenance(provenance.request_id,provenance.execution_id,provenance.source_task_id,provenance.engine_id,provenance.tool_id,resolved,{item:hashlib.sha256(Path(item).read_bytes()).hexdigest() for item in resolved},provenance.parser_id,provenance.parser_version,provenance.structure_fingerprint,provenance.workflow_fingerprint,provenance.public_intent)
+
 def parse_pdos(path, **kwargs):
- root=Path(path).resolve(); files=[root] if root.is_file() else sorted(root.glob("pdos_atm#*"))
- if not files or any(root not in item.resolve().parents and item.resolve()!=root for item in files): raise ResultParseError("No safe PDOS sources found.")
- components=[]; energy=None
- for item in files:
-  match=re.search(r"atm#(\d+)\(([^)]+)\)_wfc#(\d+)\(([^)]+)\)",item.name)
-  if not match: continue
-  data=[]
-  for line in item.read_text(errors="replace").splitlines():
-   try: data.append([float(x) for x in line.split()])
-   except ValueError: pass
-  if not data: continue
-  array=np.asarray(data); axis=array[:,0]
-  if energy is not None and (len(axis)!=len(energy) or not np.allclose(axis,energy)): raise ResultParseError("PDOS energy grids are incompatible.")
-  energy=axis; components.append({"atom_index":int(match.group(1)),"species":match.group(2),"orbital_index":int(match.group(3)),"orbital_label":match.group(4),"values":array[:,1:]})
- if energy is None: raise ResultParseError("PDOS files contain no data.")
- p=_prov(files[0],tool_id="projwfc.x",parser_id="qe.projwfc",**kwargs)
- return ScientificResult("PDOSResult",ResultStatus.VALID,p,arrays={"energy":energy},metadata={"components":[{**{k:v for k,v in c.items() if k!="values"},"array_index":i} for i,c in enumerate(components)] ,"component_values":[c["values"].tolist() for c in components],"energy_unit":"eV"})
+    """Parse bounded QE projwfc component files; values remain raw positive densities."""
+    root=Path(path).resolve()
+    if not root.is_dir(): raise ResultParseError("PDOS parser requires its generated projwfc directory.")
+    files=sorted({item for pattern in ("*.pdos_atm#*","pdos_atm#*") for item in root.glob(pattern) if item.is_file()})
+    if len(files)>4096: raise ResultParseError("PDOS component count exceeds the safe parser limit (4096).")
+    if not files: raise ResultParseError("No QE PDOS component files were found in the generated task directory.")
+    pattern=re.compile(r"(?:^|\.)pdos_atm#(\d+)\(([^)]+)\)_wfc#(\d+)\(([^)]+)\)")
+    components=[]; energy=None; warnings=[]
+    lmap={"s":0,"p":1,"d":2,"f":3}
+    for item in files:
+        match=pattern.search(item.name)
+        if not match:
+            warnings.append("Ignored malformed PDOS filename: "+item.name); continue
+        try: data=_numeric_rows(item)
+        except ResultParseError as error:
+            warnings.append(item.name+": "+str(error)); continue
+        if data.shape[1] < 3:
+            warnings.append(item.name+": QE non-spin PDOS requires energy, integrated DOS, and total projected DOS columns."); continue
+        axis=data[:,0]
+        try: _monotonic_energy(axis)
+        except ResultParseError as error:
+            warnings.append(item.name+": "+str(error)); continue
+        if energy is not None and (len(axis)!=len(energy) or not np.allclose(axis,energy,rtol=1e-8,atol=1e-6)):
+            raise ResultParseError("PDOS energy grids are incompatible; components are not interpolated.")
+        energy=axis
+        orbital=match.group(4).strip(); shell=orbital[:1].lower()
+        component={"atom_index":int(match.group(1)),"atom":int(match.group(1)),"species":match.group(2).strip(),"orbital_index":int(match.group(3)),"orbital":shell if shell in lmap else orbital,"orbital_label":orbital,"l":lmap.get(shell),"label":f"{match.group(2).strip()}({int(match.group(1))}) — {shell if shell in lmap else orbital}","array_index":len(components),"source_filename":item.name,"raw_component_columns":max(0,int(data.shape[1]-3))}
+        components.append((component,data[:,2],data[:,1]))
+    if not components: raise ResultParseError("No parseable QE PDOS components were found. "+" ".join(warnings))
+    components.sort(key=lambda item:(item[0]["species"],item[0]["atom_index"],item[0]["l"] if item[0]["l"] is not None else 99,item[0]["orbital_index"],item[0]["source_filename"]))
+    component_metadata=[]; component_values=[]; component_integrated=[]
+    for index,(component,values,integrated) in enumerate(components):
+        component["array_index"]=index; component_metadata.append(component); component_values.append(values.tolist())
+        if integrated is not None: component_integrated.append(integrated.tolist())
+    metadata={"contract_version":"v0.21-e2","components":component_metadata,"component_values":component_values,"units":{"energy":"eV","pdos":"states/eV/cell","integrated_pdos":"states/cell"},"energy_unit":"eV","normalization":"PER_CELL","source_energy_unit":"eV","spin_semantics":"NON_SPIN","parser_diagnostics":warnings,"energy_reference":{"raw":"engine_output","display_default":"Absolute"}}
+    if component_integrated: metadata["component_integrated_values"]=component_integrated
+    p=_prov_many(files,tool_id="projwfc.x",parser_id="qe.projwfc",**kwargs)
+    status=ResultStatus.PARTIAL if warnings else ResultStatus.VALID
+    return ScientificResult("PDOSResult",status,p,arrays={"energy":energy},metadata=metadata,warnings=warnings)
 
 def parse_wannier_wout(path, **kwargs):
  text=Path(path).read_text(errors="replace"); p=_prov(path,tool_id="wannier90.x",parser_id="wannier90.wout",**kwargs)

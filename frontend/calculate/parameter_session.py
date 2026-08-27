@@ -4,8 +4,8 @@ import json
 from backend.parameters.defaults import CALCULATION_DEFAULTS
 
 PRESETS={"FAST":"low","INTERMEDIATE":"standard","PRECISE":"high","CUSTOM":"custom"}
-UNITS={"ecutwfc":"Ry","ecutrho":"Ry","degauss":"Ry","conv_thr":"","tr2_ph":"","nbnd":"","dense_kpoints":"mesh","qmesh":"mesh","energy_window":"eV","transport_k_mesh":"mesh"}
-LABELS={"ecutwfc":"Plane-wave cutoff","ecutrho":"Charge-density cutoff","conv_thr":"SCF convergence threshold","dense_kpoints":"Dense k mesh","qmesh":"Phonon q mesh","kpath":"Band path","nbnd":"Number of bands","spin":"Spin polarized","soc":"Spin-orbit coupling"}
+UNITS={"ecutwfc":"Ry","ecutrho":"Ry","degauss":"Ry","conv_thr":"","tr2_ph":"","nbnd":"","dense_kpoints":"mesh","qmesh":"mesh","energy_window":"eV","delta_e":"eV","transport_k_mesh":"mesh"}
+LABELS={"ecutwfc":"Plane-wave cutoff","ecutrho":"Charge-density cutoff","conv_thr":"SCF convergence threshold","dense_kpoints":"Dense k mesh","qmesh":"Phonon q mesh","kpath":"Band path","nbnd":"Number of bands","spin":"Spin polarized","soc":"Spin-orbit coupling","delta_e":"DOS energy spacing","degauss":"DOS broadening"}
 def preset_parameters(calculation_ids, mode, custom=None):
     mode=str(mode).upper(); values={}
     if mode not in PRESETS: raise ValueError("Unknown accuracy preset.")

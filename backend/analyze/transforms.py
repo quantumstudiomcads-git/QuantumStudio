@@ -20,7 +20,7 @@ def tabular_data(result):
         x=_values(result,"energy")
         cols=["energy"]
         values=[]
-        for key in ("dos","total_dos"):
+        for key in ("dos","total_dos","integrated_dos","dos_up","dos_down"):
             if key in result.arrays: cols.append(key); values.append(_values(result,key))
         components=result.metadata.get("components",[])
         for index, component in enumerate(components):
@@ -46,7 +46,7 @@ def pdos_channels(result, *, species=None, atom=None, orbital=None, component=No
         if spin not in (None,"All") and str(channel.get("spin", "")) != str(spin): continue
         if index < len(values): selected.append((channel, values[index]))
     if aggregation in (None,"None") or not selected: return selected
-    key={"By species":"species","By atom":"atom","By orbital":"orbital"}.get(aggregation)
+    key={"By species":"species","By atom":"atom","By orbital":"orbital","By spin":"spin"}.get(aggregation)
     if key is None: return selected
     groups={}
     for channel, data in selected: groups.setdefault(str(channel.get(key, channel.get("element", channel.get("label", "channel")))), []).append(data)
@@ -60,7 +60,7 @@ def energy_reference(result, reference):
     energy=np.asarray(result.arrays.get("energy", result.arrays.get("path_coordinate", [])), dtype=float).copy()
     if reference == "Absolute": return energy
     key="fermi_energy" if reference == "Fermi = 0" else "vbm"
-    value=result.metadata.get(key)
+    value=result.metadata.get(key, result.metadata.get(key+"_eV") if key=="fermi_energy" else None)
     if value is None: value=result.scalars.get(key, {}).get("value") if isinstance(result.scalars.get(key),dict) else result.scalars.get(key)
     if value is None: raise ValueError(f"{reference} is unavailable for this Result.")
     return energy-float(value)

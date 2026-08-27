@@ -19,6 +19,15 @@ class QEPostprocessingTests(unittest.TestCase):
    contract=task.metadata["private_nscf_contract"]; self.assertEqual(task.depends_on_task_ids,(scf.id,)); self.assertEqual(contract["parent_scf_task_id"],scf.id); self.assertEqual(contract["state_inputs"],["qe_charge_density","qe_save"]); self.assertTrue(contract["requires_shared_prefix_outdir"]); self.assertEqual(task.structure_reference,"request_snapshot")
   generated=QuantumEspressoAdapter().compile_plan(d); generated_nscf=[x for x in generated.tasks if x.metadata["semantic_task_type"]=="qe_pw_nscf"]; self.assertEqual({x.metadata["qe_prefix"] for x in generated_nscf},{generated.context.prefix}); self.assertEqual({x.metadata["qe_outdir"] for x in generated_nscf},{generated.context.outdir}); self.assertEqual({x.metadata["qe_pseudo_dir"] for x in generated_nscf},{"../pseudos"})
 
+ def test_e2_dos_parameters_and_public_nscf_status(self):
+  from frontend.calculations.catalog import CALCULATIONS
+  first=plan(["dos"],{"energy_window":[-8,7],"delta_e":0.05}); second=plan(["dos"],{"energy_window":[-8,7],"delta_e":0.10})
+  terminal=next(item for item in first.tasks if item.semantic_task_type=="qe_dos"); changed=next(item for item in second.tasks if item.semantic_task_type=="qe_dos")
+  self.assertNotEqual(terminal.parameter_signature,changed.parameter_signature)
+  input_text=next(item for item in QuantumEspressoAdapter().compile_plan(first).tasks if item.metadata["semantic_task_type"]=="qe_dos").input_text
+  self.assertIn("Emin = -8",input_text); self.assertIn("Emax = 7",input_text); self.assertIn("DeltaE = 0.05",input_text)
+  self.assertEqual(next(item for item in CALCULATIONS if item.id=="nscf").status,"partial")
+
  def test_spin_validation_phonon_chain_and_commands(self):
   with self.assertRaises(Exception): plan(["spin_density"])
   ph=plan(["phonon_dos"]); self.assertEqual([x.semantic_task_type for x in ph.tasks],["scf","qe_ph","qe_q2r","qe_matdyn"]); generated=QuantumEspressoAdapter().compile_plan(ph); self.assertEqual([x.executable for x in generated.tasks][-3:],["ph.x","q2r.x","matdyn.x"])

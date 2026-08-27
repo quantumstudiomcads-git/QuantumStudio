@@ -3,7 +3,7 @@
 | Task | Primary model / reasoning | Reason |
 |---|---|---|
 | E1 SCF completeness and NSCF public/private contract | Terra / High | QE/output semantics and scientific artifact contract |
-| E2 Relax/VC-relax final-state contract | Terra / High | Geometry, cell, convergence and provenance semantics |
+| E2 DOS and PDOS end-to-end contracts | Terra / High | QE column, unit, provenance, ResultService, Analyze, and validation semantics |
 | E3 Bands combinations and derived quantities | Terra / High | spin/SOC/hybrid correctness and real validation |
 | E4 DOS/PDOS parser and Analyze completion | Terra / High | known workflow with nontrivial column/spin/unit semantics |
 | E5 VolumetricResult and pp.x field contracts | Terra / High | new scientific data model and QE quantity semantics |

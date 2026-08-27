@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from backend.execution import ExecutionStore
 from backend.execution.models import TaskState
-from backend.results import DEFAULT_PARSERS, ResultStore, ResultStoreError, ResultParseError
+from backend.results import DEFAULT_PARSERS, ResultStore, ResultStoreError, ResultParseError, ResultStatus
 
 
 class ResultService:
@@ -31,10 +31,10 @@ class ResultService:
   """Pick only the completed task's current attempt output or bounded raw contract."""
   workflow=Path(root).resolve(); directory=(workflow/str(task.get("working_directory",""))).resolve()
   if workflow not in directory.parents and directory != workflow: raise ResultStoreError("Task directory escapes generated workflow root.")
-  names={"qe_bands":("bands.dat",), "qe_dos":("dos.dat",), "qe_matdyn":("phdos.dat","phonon.dos"), "qe_projwfc":("pdos_atm#",)}
+  names={"qe_bands":("bands.dat",), "qe_dos":("dos.dat",), "qe_matdyn":("phdos.dat","phonon.dos"), "qe_projwfc":("*.pdos_atm#*","pdos_atm#*")}
   for name in names.get(semantic,()):
-   if name.endswith("#"):
-    candidates=sorted(directory.glob(name+"*"))
+   if "*" in name:
+    candidates=sorted(directory.glob(name))
     if candidates and all(directory in candidate.resolve().parents for candidate in candidates): return directory
    else:
     candidate=(directory/name).resolve()
@@ -48,10 +48,20 @@ class ResultService:
   """Parse terminal task artifacts for one C7 attempt without running engines."""
   root=Path(workflow_root).resolve(); record=ExecutionStore(root).load(execution_id); manifest=self._manifest(root); store=ResultStore(root,execution_id)
   parsed=[]; errors=[]
+  parsed_by_task={}
+  def ancestors(task_id):
+   seen=set(); stack=list(manifest.get(task_id,{}).get("dependencies",()) or ())
+   while stack:
+    parent=str(stack.pop())
+    if parent in seen: continue
+    seen.add(parent); stack.extend(manifest.get(parent,{}).get("dependencies",()) or ())
+   return tuple(sorted(seen))
   routes={"scf":"QE_SCF_STDOUT","relax":"QE_RELAX_STDOUT","vc_relax":"QE_RELAX_STDOUT","qe_bands":"BAND_STRUCTURE_RAW_DATA","qe_dos":"DOS_RAW_DATA","qe_matdyn":"PHONON_DOS_RAW_DATA","qe_projwfc":"PDOS_RAW_DATA","wannier90_run":"WANNIER_WOUT","epw":"EPW_SUMMARY"}
-  for task_id,runtime in record.tasks.items():
-   if runtime.state is not TaskState.COMPLETED: continue
-   task=manifest.get(task_id,{}) ; semantic=str(task.get("semantic_task_type") or (task.get("metadata") or {}).get("semantic_task_type", "")); route=routes.get(semantic)
+  # Manifest order is generated DAG order, so downstream Results can retain SCF scientific state.
+  for task_id,task in manifest.items():
+   runtime=record.tasks.get(task_id)
+   if runtime is None or runtime.state is not TaskState.COMPLETED: continue
+   semantic=str(task.get("semantic_task_type") or (task.get("metadata") or {}).get("semantic_task_type", "")); route=routes.get(semantic)
    if route is None: continue
    source=self._source(root,task,runtime,semantic)
    if source is None:
@@ -60,7 +70,24 @@ class ResultService:
     parse_kwargs={"request_id":record.request_id,"execution_id":execution_id,"task_id":task_id};
     if semantic == "qe_bands": parse_kwargs["band_path"]=(task.get("metadata") or {}).get("band_path");
     result=DEFAULT_PARSERS.parse(route,source,**parse_kwargs)
+    task_metadata=task.get("metadata",{}) or {}
+    lineage=ancestors(task_id)
+    result.metadata.setdefault("workflow_provenance",{"terminal_task_id":task_id,"terminal_semantic_task":semantic,"parent_task_ids":list(task.get("dependencies",())) if isinstance(task.get("dependencies",()),(list,tuple)) else [],"ancestor_task_ids":list(lineage),"purpose":(task_metadata.get("task_metadata",{}) or {}).get("purpose"),"structure_fingerprint":task_metadata.get("structure_fingerprint",""),"pseudopotentials":task_metadata.get("pseudopotentials",{}),"qe_prefix":task_metadata.get("qe_prefix"),"qe_outdir":task_metadata.get("qe_outdir"),"task_parameter_signatures":{parent:(manifest.get(parent,{}).get("metadata",{}) or {}).get("parameter_signature") for parent in (*lineage,task_id)}})
+    if semantic in {"qe_dos","qe_projwfc"}:
+     upstream=[parsed_by_task[parent] for parent in lineage if manifest.get(parent,{}).get("calculation_id")=="scf" and parent in parsed_by_task]
+     # The terminal dos.x header wins. Otherwise use only the parent SCF Result,
+     # never an unrelated prior execution or a sibling public calculation.
+     if "fermi_energy_eV" not in result.metadata:
+      parent_fermi=next((item.scalars.get("fermi_energy",{}).get("value") for item in upstream if isinstance(item.scalars.get("fermi_energy"),dict) and item.scalars["fermi_energy"].get("value") is not None),None)
+      if parent_fermi is not None:
+       result.metadata["fermi_energy_eV"]=float(parent_fermi)
+       result.metadata["fermi_reference"]={"source":"parent SCF GroundStateResult","source_task":next(item.provenance.source_task_id for item in upstream if isinstance(item.scalars.get("fermi_energy"),dict) and item.scalars["fermi_energy"].get("value") is not None),"value_eV":float(parent_fermi)}
+       result.metadata.setdefault("energy_reference",{})["display_default"]="Fermi = 0"
+     if any(item.status is ResultStatus.NOT_CONVERGED for item in upstream):
+      result.status=ResultStatus.NOT_CONVERGED
+      result.warnings.append("The parent SCF execution completed but did not scientifically converge.")
     if reparse or result.result_id not in store.list(): store.save(result)
+    parsed_by_task[task_id]=result
     parsed.append(result.result_id)
    except (ResultParseError,ResultStoreError,ValueError) as error:
     errors.append(f"{semantic}: {error}")

@@ -34,3 +34,10 @@ Quantum Studio QE 7.6 validation used bcc one-atom Fe with managed SSSP Efficien
 A PBE+U Fe workflow with QE 7.6 `HUBBARD (ortho-atomic)` and `U Fe-3d 3.0` completed SCF → private DOS NSCF → dos.x. SCF converged in 17 iterations, parsed -328.93403679 Ry (-4475.375562272358 eV), and total magnetization 3.05 Bohr magneton/cell. This U is an integration test value, not a scientific recommendation.
 
 A one-atom simple Te SOC SCF → Bands workflow used the bundled QE 7.6 fully relativistic PBE NC `Te.rel-pbe-n-nc.UPF` (SHA-256 `55a014358f7d98269dc977768a42b5af01fe8e2db67cc6e126da86fed964f876`), `noncolin=.true.`, and `lspinorb=.true.`. SCF, pw.x Bands, and bands.x stages completed exit 0 with JOB DONE; Results are method-labeled SOC and have no false UP/DOWN claim. These are integration, not numerical-reference, validations.
+
+
+## E4 runtime integration evidence
+
+QE 7.6 direct single-process/OMP=1 runs exercised the full Quantum Studio workflow-local pseudo, execution, automatic ResultService, ResultStore, and offscreen Analyze path. Diamond Si PBE using the managed SSSP Efficiency Si pseudo completed SCF then pp.x `plot_num=0`, `8`, and `11`; each emitted a 40×40×40 Gaussian cube and a VALID VolumetricResult. Charge density was 0.0029651–0.15244 e/bohr³ and integrated to 7.999974 electrons over the reconstructed cell (expected eight valence electrons). ELF was 0.0097371–0.99985 and dimensionless. Bare-plus-Hartree potential was -3.5408–0.71071 Ry; it is raw-gauge field evidence, not a work-function result.
+
+Collinear bcc Fe PBE with starting_magnetization=0.5 completed SCF then `plot_num=6`; its VALID 25×25×25 spin-polarization cube ranged -0.003926 to 0.87684 e/bohr³. These are integration and artifact-format validations, not numerical-reference validation.

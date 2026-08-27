@@ -21,6 +21,8 @@ class ScientificResult:
     def summary(self):
         if self.result_type=="GroundStateResult" and "total_energy" in self.scalars: return f"{self.status.value}, E = {self.scalars['total_energy']['value']:.8g} eV"
         if "energy" in self.arrays: return f"{self.status.value}, {len(self.arrays['energy'])} samples"
+        if self.result_type=="VolumetricResult" and "values" in self.arrays: return f"{self.status.value}, grid {tuple(self.arrays['values'].shape)}"
+        if self.result_type=="VolumetricResult" and "values" in self.arrays: return f"{self.status.value}, grid {tuple(self.arrays['values'].shape)}"
         if "frequency" in self.arrays: return f"{self.status.value}, {len(self.arrays['frequency'])} samples"
         return self.status.value
 

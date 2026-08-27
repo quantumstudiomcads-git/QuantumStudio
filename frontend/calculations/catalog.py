@@ -300,6 +300,7 @@ register(
     "Quantum ESPRESSO",
     "Calculate electron localization function.",
     ["elf", "charge"],
+    "ready",
 )
 
 register(
@@ -1378,6 +1379,7 @@ register(
     "Quantum ESPRESSO",
     "Calculate electrostatic potential.",
     ["potential"],
+    "ready",
 )
 
 register(

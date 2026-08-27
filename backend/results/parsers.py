@@ -4,6 +4,7 @@ import hashlib, re
 from pathlib import Path
 import numpy as np
 from .models import ResultProvenance, ResultStatus, ScientificResult
+from .volumetric import FIELD_SPECS, VolumetricParseError, parse_gaussian_cube
 RY_TO_EV=13.605693122994
 class ResultParseError(RuntimeError): pass
 def _prov(path, *, request_id="", execution_id="", task_id="", tool_id="", parser_id="qe", **_context):
@@ -166,6 +167,16 @@ def parse_bands(path, **kwargs):
     provenance={key:value for key,value in kwargs.items() if key in {"request_id","execution_id","task_id"}}
     return ScientificResult("BandStructureResult",ResultStatus.VALID,_prov(path,tool_id="bands.x",parser_id="qe.bands",**provenance),arrays={"path_coordinate":path_coordinate,"energies":values},metadata=metadata)
 
+def parse_volumetric_cube(path, **kwargs):
+    """Parse only a workflow-declared QE pp.x Gaussian cube artifact."""
+    kind=str((kwargs.get("field_metadata") or {}).get("kind", "")).lower()
+    if kind not in FIELD_SPECS: raise ResultParseError("Volumetric artifact has no supported declared field quantity.")
+    try: values,cell,origin,shape=parse_gaussian_cube(path)
+    except VolumetricParseError as error: raise ResultParseError(str(error)) from error
+    spec=FIELD_SPECS[kind]; metadata={"contract_version":"v0.21-e4","quantity_kind":spec["quantity_kind"],"quantity_definition":spec["definition"],"source_format":"GAUSSIAN_CUBE","source_unit":spec["source_unit"],"unit":spec["unit"],"cell":cell.tolist(),"origin":origin.tolist(),"grid_shape":list(shape),"grid_coordinate_convention":"fractional i/n, j/n, k/n; periodic endpoint omitted","coordinate_convention":"row_vector r = origin + fractional @ cell","periodic":list((kwargs.get("field_metadata") or {}).get("periodic", [True,True,True])),"signed":spec["signed"],"pp_plot_num":spec["plot_num"],"electronic_method":kwargs.get("method_metadata",{}),"parser_diagnostics":[]}
+    if kind=="elf" and (float(values.min()) < -1e-6 or float(values.max()) > 1.000001): metadata["parser_diagnostics"].append("ELF values fall outside the conventional [0, 1] range; raw values were preserved.")
+    return ScientificResult("VolumetricResult",ResultStatus.VALID,_prov(path,tool_id="pp.x",parser_id="qe.pp.cube",**kwargs),arrays={"values":values},metadata=metadata)
+
 class ParserRegistry:
  def __init__(self): self._parsers={}
  def register(self,key,parser):
@@ -176,7 +187,7 @@ class ParserRegistry:
   return self._parsers[key](path,**kwargs)
  def validate(self): return tuple(sorted(self._parsers))
 DEFAULT_PARSERS=ParserRegistry()
-for key,parser in (("QE_SCF_STDOUT",parse_scf_output),("BAND_STRUCTURE_RAW_DATA",parse_bands),("DOS_RAW_DATA",parse_dos),("PHONON_DOS_RAW_DATA",parse_phonon_dos)): DEFAULT_PARSERS.register(key,parser)
+for key,parser in (("QE_SCF_STDOUT",parse_scf_output),("BAND_STRUCTURE_RAW_DATA",parse_bands),("DOS_RAW_DATA",parse_dos),("PHONON_DOS_RAW_DATA",parse_phonon_dos),("VOLUMETRIC_RAW_DATA",parse_volumetric_cube)): DEFAULT_PARSERS.register(key,parser)
 
 def parse_relax_output(path, **kwargs):
  text=Path(path).read_text(encoding="utf-8",errors="replace"); p=_prov(path,tool_id="pw.x",parser_id="qe.pw.relax",**kwargs)

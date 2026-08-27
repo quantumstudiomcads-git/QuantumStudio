@@ -33,3 +33,14 @@ Within one request the compiler creates a deterministic DAG and shares its priva
 ## E2 DOS/PDOS Result boundary
 
 DOSResult preserves the raw engine energy array in eV, total DOS, optional integrated DOS, optional QE EFermi, PER_CELL normalization metadata, source hashes, and task lineage. Fermi provenance is deterministic: a dos.x header wins; otherwise only the parent SCF GroundStateResult may supply it. PDOS uses that same parent-SCF fallback and never searches an unrelated sibling or prior workflow. Analyze derives E minus EF only as a display axis. PDOSResult preserves original component arrays plus deterministic atom/species/orbital identities and validates a common energy grid before aggregation; it never normalizes its sum to total DOS. E2 intentionally supports scalar/non-spin DOS and PDOS semantics only. Collinear-spin column contracts and SOC/noncollinear spinor projection semantics remain E3 work.
+
+## E4 real-space field DAGs
+
+```text
+Charge density: SCF → pp.x (plot_num=0) → Gaussian cube → VolumetricResult
+Spin density: collinear SCF → pp.x (plot_num=6) → Gaussian cube → VolumetricResult
+ELF: SCF → pp.x (plot_num=8) → Gaussian cube → VolumetricResult
+Potential: SCF → pp.x (plot_num=11) → Gaussian cube → VolumetricResult
+```
+
+Each pp.x task is private, purpose-signed, consumes the parent SCF `prefix/outdir/save` state, and never becomes a public standalone result task.

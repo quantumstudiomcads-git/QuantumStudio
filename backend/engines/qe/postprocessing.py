@@ -18,7 +18,7 @@ def post_input(kind, parameters, context):
         return serialize_namelist("DOS",{"prefix":prefix,"outdir":outdir,"fildos":"dos.dat","Emin":float(window[0]),"Emax":float(window[1]),"DeltaE":parameters.get("delta_e",0.01),"degauss":parameters.get("degauss")})+"\n"
     if kind=="qe_projwfc": return serialize_namelist("PROJWFC",{"prefix":prefix,"outdir":outdir,"Emin":parameters.get("energy_window",[-10,10])[0],"Emax":parameters.get("energy_window",[-10,10])[1],"DeltaE":parameters.get("delta_e",0.01),"degauss":parameters.get("degauss")})+"\n"
     if kind=="qe_pp":
-        plot={"charge":0,"spin":6,"potential":11}[parameters["plot_kind"]]
+        plot={"charge":0,"spin":6,"elf":8,"potential":11}[parameters["plot_kind"]]
         return serialize_namelist("INPUTPP",{"prefix":prefix,"outdir":outdir,"plot_num":plot,"filplot":parameters["plot_kind"]+".dat"})+"\n\n"+serialize_namelist("PLOT",{"iflag":3,"output_format":6,"fileout":parameters["plot_kind"]+".cube"})+"\n"
     if kind=="qe_q2r": return serialize_namelist("INPUT",parameters)+"\n"
     if kind=="qe_matdyn":

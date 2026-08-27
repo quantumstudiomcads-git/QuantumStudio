@@ -31,7 +31,11 @@ class ResultService:
   """Pick only the completed task's current attempt output or bounded raw contract."""
   workflow=Path(root).resolve(); directory=(workflow/str(task.get("working_directory",""))).resolve()
   if workflow not in directory.parents and directory != workflow: raise ResultStoreError("Task directory escapes generated workflow root.")
-  names={"qe_bands":("bands.dat",), "qe_dos":("dos.dat",), "qe_matdyn":("phdos.dat","phonon.dos"), "qe_projwfc":("*.pdos_atm#*","pdos_atm#*")}
+  names={"qe_bands":("bands.dat",), "qe_dos":("dos.dat",), "qe_matdyn":("phdos.dat","phonon.dos"), "qe_projwfc":("*.pdos_atm#*","pdos_atm#*"), "qe_pp":()}
+  if semantic=="qe_pp":
+   field=((task.get("metadata") or {}).get("task_metadata") or {}).get("field",{})
+   candidate=(directory/str(field.get("artifact",""))).resolve()
+   if candidate.is_file() and directory in candidate.parents: return candidate
   for name in names.get(semantic,()):
    if "*" in name:
     candidates=sorted(directory.glob(name))
@@ -56,7 +60,7 @@ class ResultService:
     if parent in seen: continue
     seen.add(parent); stack.extend(manifest.get(parent,{}).get("dependencies",()) or ())
    return tuple(sorted(seen))
-  routes={"scf":"QE_SCF_STDOUT","relax":"QE_RELAX_STDOUT","vc_relax":"QE_RELAX_STDOUT","qe_bands":"BAND_STRUCTURE_RAW_DATA","qe_dos":"DOS_RAW_DATA","qe_matdyn":"PHONON_DOS_RAW_DATA","qe_projwfc":"PDOS_RAW_DATA","wannier90_run":"WANNIER_WOUT","epw":"EPW_SUMMARY"}
+  routes={"scf":"QE_SCF_STDOUT","relax":"QE_RELAX_STDOUT","vc_relax":"QE_RELAX_STDOUT","qe_bands":"BAND_STRUCTURE_RAW_DATA","qe_dos":"DOS_RAW_DATA","qe_matdyn":"PHONON_DOS_RAW_DATA","qe_projwfc":"PDOS_RAW_DATA","qe_pp":"VOLUMETRIC_RAW_DATA","wannier90_run":"WANNIER_WOUT","epw":"EPW_SUMMARY"}
   # Manifest order is generated DAG order, so downstream Results can retain SCF scientific state.
   for task_id,task in manifest.items():
    runtime=record.tasks.get(task_id)
@@ -68,6 +72,7 @@ class ResultService:
     errors.append(f"{semantic}: declared result source is missing."); continue
    try:
     parse_kwargs={"request_id":record.request_id,"execution_id":execution_id,"task_id":task_id,"method_metadata":(task.get("metadata") or {}).get("electronic_method",{})};
+    if semantic == "qe_pp": parse_kwargs["field_metadata"]=((task.get("metadata") or {}).get("task_metadata") or {}).get("field",{})
     if semantic == "qe_bands": parse_kwargs["band_path"]=(task.get("metadata") or {}).get("band_path");
     result=DEFAULT_PARSERS.parse(route,source,**parse_kwargs)
     result.metadata.setdefault("electronic_method",(task.get("metadata") or {}).get("electronic_method",{}))

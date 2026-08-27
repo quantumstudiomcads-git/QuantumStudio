@@ -44,6 +44,16 @@ registry.register(CalculationDefinition(
 ))
 registry.register(CalculationDefinition(
     id="spin_density", name="Spin Density", category="Electronic Properties",
-    description="Real-space spin density.", requires=("scf",), workflow="electronic.spin_density",
+    description="Collinear real-space spin polarization.", requires=("scf",), workflow="electronic.spin_density",
     engine="quantum_espresso", tags=("electronic", "spin", "real_space"), parameters=_POST_SCF_PARAMETERS,
+))
+registry.register(CalculationDefinition(
+    id="electron_localization", name="Electron Localization Function", category="Electronic Properties",
+    description="Real-space electron localization function.", requires=("scf",), workflow="electronic.elf",
+    engine="quantum_espresso", tags=("electronic", "elf", "real_space"), parameters=_POST_SCF_PARAMETERS,
+))
+registry.register(CalculationDefinition(
+    id="electrostatic_potential", name="Electrostatic Potential", category="Electronic Properties",
+    description="Bare-ionic plus Hartree potential field.", requires=("scf",), workflow="electronic.potential",
+    engine="quantum_espresso", tags=("electronic", "potential", "real_space"), parameters=_POST_SCF_PARAMETERS,
 ))

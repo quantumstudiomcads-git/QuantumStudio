@@ -61,10 +61,10 @@ class CatalogRegistryReconciliationTests(unittest.TestCase):
     def test_active_catalog_has_exact_implemented_mapping_and_explicit_nonimplemented_entries(self):
         report = CalculationService(CALCULATIONS).get_catalog_reconciliation_report()
         self.assertEqual(report.frontend_count, 147)
-        self.assertEqual(report.backend_count, 20)
+        self.assertEqual(report.backend_count, 22)
         self.assertEqual(report.invalid_mappings, ())
         self.assertEqual(set(report.implemented_ids), {item.id for item in active_registry.all()})
-        self.assertEqual(len(report.planned_ids), 126)
+        self.assertEqual(len(report.planned_ids), 124)
         nscf = next(item for item in report.descriptors if item.id == "nscf")
         self.assertEqual(nscf.execution_support, ExecutionSupport.UNAVAILABLE)
         self.assertFalse(nscf.backend_supported)

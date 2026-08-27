@@ -26,7 +26,7 @@ def _path(value, label):
 def expand(request, tasks, parameters):
     selected=set(request.selected_calculations); by={task.calculation_id:task for task in tasks}; scf=by.get("scf")
     if not scf: return tasks
-    result=[task for task in tasks if task.calculation_id not in {"bands","dos","pdos","charge_density","spin_density","electron_localization","electrostatic_potential","phonon_dos"}]
+    result=[task for task in tasks if task.calculation_id not in {"bands","dos","pdos","charge_density","spin_density","electron_localization","electrostatic_potential","work_function","phonon_dos"}]
     def add(name, semantic, tool, deps, params, inputs, outputs, metadata=None):
         signature=_sig({"semantic":semantic,"calculation_id":name,"purpose":(metadata or {}).get("purpose"),"structure":request.structure,"pseudopotentials":_pseudo_identity(request.parameters.get("pseudopotentials",{})),"parameters":params}); task=PlannedTask(id=f"{request.id}:{semantic}:{signature}",calculation_id=name,semantic_task_type=semantic,engine_id="quantum_espresso",tool_id=tool,parameter_signature=signature,depends_on_task_ids=tuple(dep.id for dep in deps),parameters=params,structure_reference="request_snapshot",artifact_inputs=tuple(inputs),artifact_outputs=tuple(outputs),metadata=metadata or {}); result.append(task); return task
     if "bands" in selected:
@@ -49,12 +49,13 @@ def expand(request, tasks, parameters):
             if not isinstance(mesh,(list,tuple)) or len(mesh)!=3: raise InvalidQEParameterError(f"{public} requires dense_kpoints mesh.")
             nscf=add(f"qe_pw_nscf_{public}","qe_pw_nscf","pw.x",[scf],{**values,"kpoints":{"mode":"automatic","mesh":list(mesh),"shifts":[0,0,0]},"occupations":"tetrahedra"},["qe_save"],["qe_wavefunctions","qe_eigenvalues"],{"purpose":public,"private_nscf_contract":{"version":"v0.21-e1","parent_scf_task_id":scf.id,"state_inputs":["qe_charge_density","qe_save"],"required_outputs":["qe_wavefunctions","qe_eigenvalues"],"structure_reference":"request_snapshot","requires_shared_prefix_outdir":True}})
             add(terminal,terminal,tool,[nscf],values,["qe_save","qe_wavefunctions"],[output],{"purpose":public})
-    for public, kind, output in (("charge_density","charge","VOLUMETRIC_RAW_DATA"),("spin_density","spin","VOLUMETRIC_RAW_DATA"),("electron_localization","elf","VOLUMETRIC_RAW_DATA"),("electrostatic_potential","potential","VOLUMETRIC_RAW_DATA")):
+    for public, kind, output in (("charge_density","charge","VOLUMETRIC_RAW_DATA"),("spin_density","spin","VOLUMETRIC_RAW_DATA"),("electron_localization","elf","VOLUMETRIC_RAW_DATA"),("electrostatic_potential","potential","VOLUMETRIC_RAW_DATA"),("work_function","potential","VOLUMETRIC_RAW_DATA")):
 
         if public in selected:
             values=dict(parameters[public])
             if kind=="spin" and str(values.get("spin_treatment", "")).upper() not in {"COLLINEAR_SPIN", "COLLINEAR"}: raise InvalidQEParameterError("Spin density requires collinear spin treatment.")
-            add("qe_pp","qe_pp","pp.x",[scf],{**values,"plot_kind":kind},["qe_save"],[output],{"purpose":kind,"field":{"kind":kind,"artifact":kind+".cube","periodic":list(request.structure.get("periodic",[True,True,True]))}})
+            analysis={key:values.pop(key) for key in ("surface_normal","macro_window_A") if key in values}
+            add("qe_pp","qe_pp","pp.x",[scf],{**values,"plot_kind":kind},["qe_save"],[output],{"purpose":public,"field":{"kind":kind,"artifact":kind+".cube","periodic":list(request.structure.get("periodic",[True,True,True])),"atoms":list(request.structure.get("atoms",[]))},"analysis":analysis})
     if "phonon_dos" in selected:
         ph=by.get("phonons")
         if ph is None: raise InvalidQEParameterError("phonon_dos requires phonons.")

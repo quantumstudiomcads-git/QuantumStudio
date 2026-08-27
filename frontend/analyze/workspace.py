@@ -12,6 +12,7 @@ from frontend.analyze.plots.compare import ComparisonPlot
 from frontend.analyze.plots.bands import BandPlot
 from frontend.analyze.plots.dos import DOSPlot
 from frontend.analyze.plots.volumetric import VolumetricPlot
+from frontend.analyze.plots.work_function import WorkFunctionPlot
 from frontend.analyze.plots.base import ScientificPlotWidget
 from frontend.analyze.table_model import ScientificTableModel, ScientificTableView
 
@@ -353,7 +354,7 @@ class AnalyzeWorkspace(QWidget):
         Path(filename).write_text(json.dumps(payload,indent=2,sort_keys=True),encoding="utf-8")
 
     def _show_plot(self):
-        if self.current_result.result_type not in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","VolumetricResult"}:
+        if self.current_result.result_type not in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","VolumetricResult","WorkFunctionResult"}:
             self.views.setCurrentWidget(self.overview); return
         if self.current_result.result_type == "PDOSResult":
             selected=pdos_channels(self.current_result, species=self.pdos_species.currentText(), atom=self.pdos_atom.currentText(), orbital=self.pdos_orbital.currentText(), component=self.pdos_component.currentText(), spin=self.pdos_spin.currentText(), aggregation=self.pdos_aggregation.currentText())
@@ -364,7 +365,7 @@ class AnalyzeWorkspace(QWidget):
         self.views.removeWidget(old)
         old.figure.clear()
         old.deleteLater()
-        self.plot = BandPlot(self) if self.current_result.result_type == "BandStructureResult" else VolumetricPlot(self) if self.current_result.result_type == "VolumetricResult" else DOSPlot(self)
+        self.plot = BandPlot(self) if self.current_result.result_type == "BandStructureResult" else WorkFunctionPlot(self) if self.current_result.result_type == "WorkFunctionResult" else VolumetricPlot(self) if self.current_result.result_type == "VolumetricResult" else DOSPlot(self)
         self.views.insertWidget(1,self.plot)
         if self.current_result.result_type == "BandStructureResult":
             analysis=self._electronic_analysis(); self.plot.configure_electronic_analysis(analysis,show_edges=self._show_band_edges,energy_offset=self._reference_offset(analysis),reference_label=self._electronic_reference)

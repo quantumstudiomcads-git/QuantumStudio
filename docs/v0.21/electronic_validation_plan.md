@@ -41,3 +41,8 @@ A one-atom simple Te SOC SCF → Bands workflow used the bundled QE 7.6 fully re
 QE 7.6 direct single-process/OMP=1 runs exercised the full Quantum Studio workflow-local pseudo, execution, automatic ResultService, ResultStore, and offscreen Analyze path. Diamond Si PBE using the managed SSSP Efficiency Si pseudo completed SCF then pp.x `plot_num=0`, `8`, and `11`; each emitted a 40×40×40 Gaussian cube and a VALID VolumetricResult. Charge density was 0.0029651–0.15244 e/bohr³ and integrated to 7.999974 electrons over the reconstructed cell (expected eight valence electrons). ELF was 0.0097371–0.99985 and dimensionless. Bare-plus-Hartree potential was -3.5408–0.71071 Ry; it is raw-gauge field evidence, not a work-function result.
 
 Collinear bcc Fe PBE with starting_magnetization=0.5 completed SCF then `plot_num=6`; its VALID 25×25×25 spin-polarization cube ranged -0.003926 to 0.87684 e/bohr³. These are integration and artifact-format validations, not numerical-reference validation.
+
+
+## E5 surface-electrostatics evidence
+
+Al(111) scalar PBE integration run: SCF → pp.x `plot_num=11` → 30×30×360 potential cube → automatic slab/vacuum analysis. The 3-layer, 34.6765 Å cell had a 16.664 Å validated shared boundary-wrapped vacuum plateau. QE reported E_F=-1.7765 eV; E_vac=2.417519 eV with 5.28e-06 eV standard deviation and effectively zero fitted slope, yielding Phi=4.194019 eV. This is integration evidence, not a converged numerical reference value.

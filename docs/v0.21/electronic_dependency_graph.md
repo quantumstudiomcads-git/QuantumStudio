@@ -44,3 +44,12 @@ Potential: SCF → pp.x (plot_num=11) → Gaussian cube → VolumetricResult
 ```
 
 Each pp.x task is private, purpose-signed, consumes the parent SCF `prefix/outdir/save` state, and never becomes a public standalone result task.
+
+
+## E5 Work Function
+
+```text
+Work Function
+  ├─ SCF → GroundStateResult(E_F)
+  └─ pp.x potential → VolumetricResult → planar profile → vacuum plateau → Phi = E_vac - E_F
+```

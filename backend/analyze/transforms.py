@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 def result_kind(result):
-    return {"BandStructureResult":"Band Structure", "DOSResult":"Density of States", "PDOSResult":"Projected DOS", "PhononDOSResult":"Phonon DOS", "GroundStateResult":"Ground State", "RelaxationResult":"Relaxation", "WannierizationResult":"Wannier", "ElectronPhononResult":"EPW", "VolumetricResult":"Volumetric Field"}.get(result.result_type, result.result_type)
+    return {"BandStructureResult":"Band Structure", "DOSResult":"Density of States", "PDOSResult":"Projected DOS", "PhononDOSResult":"Phonon DOS", "GroundStateResult":"Ground State", "RelaxationResult":"Relaxation", "WannierizationResult":"Wannier", "ElectronPhononResult":"EPW", "VolumetricResult":"Volumetric Field", "WorkFunctionResult":"Work Function"}.get(result.result_type, result.result_type)
 
 def _values(result, key):
     value = result.arrays.get(key, ())
@@ -28,6 +28,8 @@ def tabular_data(result):
             values.append(list(result.metadata.get("component_values", [])[index]))
         rows=[[x[i]]+[column[i] if i<len(column) else "" for column in values] for i in range(len(x))]
         return cols, rows
+    if t=="WorkFunctionResult":
+        x=_values(result,"distance_A"); raw=_values(result,"potential_raw_Ry"); ev=_values(result,"potential_eV"); macro=_values(result,"macroscopic_eV"); return ["distance_A","potential_raw_Ry","potential_eV","macroscopic_eV"], [[x[i],raw[i] if i<len(raw) else "",ev[i] if i<len(ev) else "",macro[i] if i<len(macro) else ""] for i in range(len(x))]
     if t=="PhononDOSResult":
         x=_values(result,"frequency"); y=_values(result,"dos")
         return ["frequency","dos"], [[x[i],y[i]] for i in range(min(len(x),len(y)))]

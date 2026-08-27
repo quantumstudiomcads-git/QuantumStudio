@@ -5,6 +5,7 @@ from pathlib import Path
 from backend.execution import ExecutionStore
 from backend.execution.models import TaskState
 from backend.results import DEFAULT_PARSERS, ResultStore, ResultStoreError, ResultParseError, ResultStatus
+from backend.results.models import ScientificResult
 
 
 class ResultService:
@@ -92,6 +93,17 @@ class ResultService:
      if any(item.status is ResultStatus.NOT_CONVERGED for item in upstream):
       result.status=ResultStatus.NOT_CONVERGED
       result.warnings.append("The parent SCF execution completed but did not scientifically converge.")
+    if semantic == "qe_pp" and (task_metadata.get("task_metadata",{}) or {}).get("purpose") == "work_function":
+     from backend.analyze.work_function import derive_work_function
+     parents=[parsed_by_task[parent] for parent in lineage if manifest.get(parent,{}).get("calculation_id")=="scf" and parent in parsed_by_task]
+     if parents:
+      field=((task_metadata.get("task_metadata",{}) or {}).get("field") or {})
+      settings=(task_metadata.get("task_metadata",{}) or {}).get("analysis",{})
+      analysis=derive_work_function(result,parents[0],field.get("atoms",[]),axis_override=settings.get("surface_normal"),window_A=settings.get("macro_window_A"))
+      payload={key:value for key,value in analysis.items() if key not in {"profile","macroscopic_eV","vacuum_levels"}}
+      payload["vacuum_levels"]=[item.__dict__ for item in analysis.get("vacuum_levels",[])]
+      derived=ScientificResult("WorkFunctionResult",analysis["status"],result.provenance,scalars={"fermi_energy":{"value":analysis.get("fermi_energy_eV"),"unit":"eV"}} if analysis.get("fermi_energy_eV") is not None else {},arrays={key:value for key,value in {"distance_A":analysis.get("profile",{}).get("distance_A"),"potential_raw_Ry":analysis.get("profile",{}).get("potential_raw_Ry"),"potential_eV":analysis.get("profile",{}).get("potential_eV"),"macroscopic_eV":analysis.get("macroscopic_eV")} .items() if value is not None},metadata={"work_function_analysis":payload,"source_potential_result_id":result.result_id},warnings=list(analysis.get("diagnostics",[])))
+      store.save(derived); parsed.append(derived.result_id)
     if reparse or result.result_id not in store.list(): store.save(result)
     parsed_by_task[task_id]=result
     parsed.append(result.result_id)

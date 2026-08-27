@@ -291,6 +291,7 @@ register(
     "Quantum ESPRESSO",
     "Calculate the work function of a material or surface.",
     ["surface", "electronic"],
+    "ready",
 )
 
 register(

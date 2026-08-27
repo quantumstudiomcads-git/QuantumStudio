@@ -48,6 +48,11 @@ registry.register(CalculationDefinition(
     engine="quantum_espresso", tags=("electronic", "spin", "real_space"), parameters=_POST_SCF_PARAMETERS,
 ))
 registry.register(CalculationDefinition(
+    id="work_function", name="Work Function", category="Electronic Properties",
+    description="Fermi-referenced slab vacuum work function.", requires=("scf",), workflow="electronic.work_function",
+    engine="quantum_espresso", tags=("electronic", "surface", "work_function"), parameters=_POST_SCF_PARAMETERS + ("surface_normal", "macro_window_A"),
+))
+registry.register(CalculationDefinition(
     id="electron_localization", name="Electron Localization Function", category="Electronic Properties",
     description="Real-space electron localization function.", requires=("scf",), workflow="electronic.elf",
     engine="quantum_espresso", tags=("electronic", "elf", "real_space"), parameters=_POST_SCF_PARAMETERS,

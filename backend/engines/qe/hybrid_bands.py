@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Mapping, Sequence
 from .models import InvalidQEParameterError
 
+# QE 7.6 reports this compile-time capacity at startup (``npk`` in pwcom).
+# Keep it centralized so a future capability probe can replace the contract.
+QE_76_MAX_KPOINTS = 40000
+
 def _mesh(value, periodic):
     if not isinstance(value, (list, tuple)) or len(value) != 3:
         raise InvalidQEParameterError("Hybrid EXX q mesh requires exactly three integers.")
@@ -46,3 +50,22 @@ def hybrid_band_contract(path, exx_q_mesh, periodic):
 def additional_k_points_card(contract):
     rows=[" ".join(format(value, ".12g") for value in point)+" 0.0" for point in contract["visible_points"]]
     return "ADDITIONAL_K_POINTS crystal\n"+str(len(rows))+"\n"+"\n".join(rows)
+
+
+def validate_hybrid_kpoint_capacity(contract, max_kpoints=QE_76_MAX_KPOINTS):
+    """Reject direct hybrid band paths that exceed QE's expanded k-point limit."""
+    mesh = tuple(contract["exx_q_mesh"])
+    additional = len(contract["visible_points"])
+    estimated = mesh[0] * mesh[1] * mesh[2] * additional
+    if estimated > int(max_kpoints):
+        grid = " × ".join(str(value) for value in mesh)
+        raise InvalidQEParameterError(
+            "Hybrid band calculation exceeds the Quantum ESPRESSO k-point capacity.\n"
+            f"Exact-exchange q-grid: {grid} = {mesh[0] * mesh[1] * mesh[2]}\n"
+            f"Additional band-path points: {additional}\n"
+            f"Estimated required k points: {estimated:,}\n"
+            f"QE limit: {int(max_kpoints):,}\n\n"
+            "Reduce the hybrid q-grid or band-path sampling, or use a QE build "
+            "with a larger npk limit."
+        )
+    return estimated

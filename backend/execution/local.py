@@ -7,6 +7,7 @@ from backend.pseudopotentials.models import sha256
 from .errors import ArtifactUnavailableError, ExecutionPreflightError, UnsupportedExecutionModeError
 from .models import TaskExecutionRecord, TaskState, WorkflowExecutionRecord, now
 from .tools import LocalToolConfiguration
+from .diagnostics import extract_qe_failure
 
 def _failure_tail(stderr_path, stdout_path):
  for path in (stderr_path, stdout_path):
@@ -112,8 +113,14 @@ class LocalExecutionManager:
     runtime.return_code=process.poll()
     if runtime.state is TaskState.RUNNING: runtime.state=TaskState.COMPLETED if runtime.return_code==0 else TaskState.FAILED
     if runtime.state is TaskState.FAILED and not runtime.error_message:
-     stdout.flush(); stderr.flush(); detail=_failure_tail(stderr_path,stdout_path)
-     runtime.error_message=f"Process exited with code {runtime.return_code}." + (("\n" + detail) if detail else "")
+     stdout.flush(); stderr.flush()
+     try:
+      stdout_text=stdout_path.read_text(encoding="utf-8", errors="replace")
+      stderr_text=stderr_path.read_text(encoding="utf-8", errors="replace")
+     except OSError:
+      stdout_text=stderr_text=""
+     detail=extract_qe_failure(stdout_text, stderr_text, runtime.return_code)
+     runtime.error_message=detail or f"Process exited with code {runtime.return_code}."
   finally:
    if stdin:stdin.close()
    with self._lock:self._process=None

@@ -5,7 +5,7 @@ from backend.compiler.execution_plan import PlannedTask
 from backend.engines.qe.models import InvalidQEParameterError
 from backend.dft.functionals import resolve
 from dataclasses import replace
-from backend.engines.qe.hybrid_bands import hybrid_band_contract
+from backend.engines.qe.hybrid_bands import hybrid_band_contract, validate_hybrid_kpoint_capacity
 
 def _sig(value): return hashlib.sha256(json.dumps(value,sort_keys=True,default=str).encode()).hexdigest()[:16]
 
@@ -36,6 +36,7 @@ def expand(request, tasks, parameters):
             scf_parameters=dict(scf.parameters); scf_parameters.update({"xc_functional": functional.id, "hybrid_band_path": path})
             mesh=scf_parameters.get("exx_q_mesh") or scf_parameters.get("kpoints", [1,1,1])
             contract=hybrid_band_contract(path, mesh, request.structure.get("periodic"))
+            validate_hybrid_kpoint_capacity(contract)
             scf_parameters["hybrid_band_contract"]=contract
             scf=replace(scf, parameters=scf_parameters, parameter_signature=_sig({"semantic":"hybrid_scf_bands","structure":request.structure,"pseudopotentials":_pseudo_identity(request.parameters.get("pseudopotentials",{})),"parameters":scf_parameters}), artifact_outputs=tuple(sorted(set(scf.artifact_outputs+("qe_band_eigenvalues",)))), metadata={**scf.metadata, "hybrid_band":contract})
             result=[scf if task.calculation_id=="scf" else task for task in result]

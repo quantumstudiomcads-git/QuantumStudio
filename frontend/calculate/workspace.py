@@ -1211,10 +1211,16 @@ class CalculateWorkspace(QWidget):
         dialog=QDialog(self); dialog.setWindowTitle("Scientific Parameters"); layout=QVBoxLayout(dialog)
         preset=QComboBox(dialog)
         for mode,label in (("FAST","Fast"),("INTERMEDIATE","Intermediate"),("PRECISE","Precise"),("CUSTOM","Custom")): preset.addItem(label,mode)
-        existing=json.loads(self.parameters_input.text() or "{}")
+        configured_request = self.project.get_calculation(self._selected_configured_request_id())
+        # A newly selected catalog calculation must start from its own defaults;
+        # never carry scientific method state from the previously selected request.
+        same_request = configured_request is not None and list(configured_request.selected_calculations) == list(self.selected_ids)
+        existing = json.loads(self.parameters_input.text() or "{}") if same_request else {}
+        if not isinstance(existing, dict):
+            existing = {}
         preset.setCurrentIndex(max(0,preset.findData(existing.get("accuracy_preset","INTERMEDIATE"))))
         layout.addWidget(QLabel("Accuracy preset")); layout.addWidget(preset)
-        structure=(self.calculation_request.backend_request.structure if self.calculation_request is not None else self.project.get_structure().to_dict())
+        structure=(self.calculation_request.backend_request.structure if same_request and self.calculation_request is not None else self.project.get_structure().to_dict())
         species=tuple(dict.fromkeys(str(atom.get("element", "")) for atom in structure.get("atoms", ()) if atom.get("element")))
         scientific_state={key: existing[key] for key in ("xc_functional", "exx_fraction", "screening_parameter", "exx_q_mesh", "ace", "exxdiv_treatment", "pseudopotentials") if key in existing}
         configure_science=QPushButton("Configure XC & Pseudopotentials…", dialog)

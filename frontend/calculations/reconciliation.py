@@ -13,6 +13,9 @@ from frontend.calculations.catalog import CalculationInfo
 class ExecutionSupport(str, Enum):
     IMPLEMENTED = "implemented"
     PLANNED = "planned"
+    PARTIAL = "partial"
+    EXTERNAL_BACKEND_REQUIRED = "external_backend_required"
+    UNSUPPORTED = "unsupported"
     UNAVAILABLE = "unavailable"
 
 
@@ -34,8 +37,11 @@ class CalculationDescriptor:
     @property
     def status_label(self) -> str:
         return {
-            ExecutionSupport.IMPLEMENTED: "Implemented",
+            ExecutionSupport.IMPLEMENTED: "Ready",
             ExecutionSupport.PLANNED: "Planned",
+            ExecutionSupport.PARTIAL: "Partial",
+            ExecutionSupport.EXTERNAL_BACKEND_REQUIRED: "External backend required",
+            ExecutionSupport.UNSUPPORTED: "Unsupported",
             ExecutionSupport.UNAVAILABLE: "Unavailable",
         }[self.execution_support]
 
@@ -86,9 +92,11 @@ def reconcile_catalog(
             if has_backend:
                 errors.append(f"Backend calculation '{entry.id}' is marked planned in the frontend catalog.")
         elif raw_status == "partial":
-            support = ExecutionSupport.UNAVAILABLE
-            if has_backend:
-                errors.append(f"Backend calculation '{entry.id}' is marked partial in the frontend catalog.")
+            support = ExecutionSupport.PARTIAL
+        elif raw_status == "external_backend_required":
+            support = ExecutionSupport.EXTERNAL_BACKEND_REQUIRED
+        elif raw_status == "unsupported":
+            support = ExecutionSupport.UNSUPPORTED
         else:
             support = ExecutionSupport.UNAVAILABLE
             errors.append(f"Frontend calculation '{entry.id}' has unknown support status '{entry.status}'.")

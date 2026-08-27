@@ -262,8 +262,9 @@ register(
     "Fermi Surface",
     "Electronic Properties",
     "Quantum ESPRESSO",
-    "Calculate and visualize the Fermi surface.",
+    "Generate a dense reciprocal-space Fermi surface for metallic systems using QE fs.x.",
     ["fermi", "electronic"],
+    "partial",
 )
 
 register(
@@ -271,8 +272,9 @@ register(
     "Band Gap Analysis",
     "Electronic Properties",
     "Post-processing",
-    "Extract fundamental and direct band gaps.",
+    "Extract sampled fundamental and direct band gaps from an automatic Bands prerequisite.",
     ["band_gap"],
+    "ready",
 )
 
 register(
@@ -280,8 +282,9 @@ register(
     "Effective Mass",
     "Electronic Properties",
     "Post-processing",
-    "Calculate carrier effective masses from band curvature.",
+    "Calculate carrier effective masses from an automatic Bands prerequisite.",
     ["effective_mass", "transport"],
+    "ready",
 )
 
 register(
@@ -311,24 +314,27 @@ register(
     "Bader",
     "Partition electron density into atomic charges.",
     ["charge", "bader"],
+    "ready",
 )
 
 register(
     "mulliken_population",
-    "Mulliken Population",
+    "Löwdin Population Analysis",
     "Electronic Properties",
     "Post-processing",
-    "Calculate orbital population analysis.",
+    "Atomic-orbital population analysis using QE projwfc.x Löwdin projections.",
     ["population"],
+    "partial",
 )
 
 register(
     "charge_transfer",
-    "Charge Transfer Analysis",
+    "Atomic Charge Transfer (Bader)",
     "Electronic Properties",
     "Post-processing",
-    "Analyze charge redistribution between fragments.",
+    "Atomic net charge transfer derived from Bader pseudo-valence populations.",
     ["charge", "interface"],
+    "ready",
 )
 
 register(
@@ -338,6 +344,7 @@ register(
     "Quantum ESPRESSO",
     "Calculate charge density associated with selected states.",
     ["bands", "charge"],
+    "partial",
 )
 
 register(
@@ -345,8 +352,9 @@ register(
     "Spin Texture",
     "Electronic Properties",
     "Quantum ESPRESSO",
-    "Calculate momentum-dependent spin orientation.",
+    "k- and band-resolved spin expectation values for SOC/noncollinear states.",
     ["spin", "soc"],
+    "partial",
 )
 
 register(
@@ -354,8 +362,9 @@ register(
     "Orbital Texture",
     "Electronic Properties",
     "Post-processing",
-    "Analyze momentum-dependent orbital character.",
+    "k- and band-resolved atomic-orbital projection character; not orbital angular momentum.",
     ["orbital"],
+    "partial",
 )
 
 register(
@@ -363,8 +372,9 @@ register(
     "Magnetic Moments",
     "Electronic Properties",
     "Quantum ESPRESSO",
-    "Calculate local and total magnetic moments.",
+    "Total QE magnetization and projected local moments where collinear projections are available.",
     ["magnetism"],
+    "partial",
 )
 
 register(
@@ -372,8 +382,9 @@ register(
     "Exchange Parameters",
     "Electronic Properties",
     "Quantum ESPRESSO",
-    "Calculate magnetic exchange interactions.",
+    "Heisenberg exchange parameters; requires an external exchange backend such as TB2J.",
     ["magnetism", "exchange"],
+    "external_backend_required",
 )
 
 register(
@@ -381,8 +392,9 @@ register(
     "Hubbard U Determination",
     "Electronic Properties",
     "Quantum ESPRESSO",
-    "Calculate Hubbard interaction parameters.",
+    "First-principles linear-response Hubbard parameters using QE hp.x.",
     ["dft_u", "correlation"],
+    "partial",
 )
 
 register(
@@ -392,6 +404,7 @@ register(
     "Quantum ESPRESSO",
     "Electronic structure using hybrid exchange-correlation.",
     ["hybrid", "hse", "pbe0"],
+    "partial",
 )
 
 

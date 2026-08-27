@@ -46,4 +46,4 @@ class ResultTests(unittest.TestCase):
    result=DEFAULT_PARSERS.parse("QE_SCF_STDOUT",source); self.assertEqual(result.status,ResultStatus.PARTIAL); self.assertNotIn("total_energy",result.scalars)
 
  def test_registry_is_unambiguous(self):
-  self.assertEqual(DEFAULT_PARSERS.validate(),("BAND_STRUCTURE_RAW_DATA","DOS_RAW_DATA","EPW_SUMMARY","PDOS_RAW_DATA","PHONON_DOS_RAW_DATA","QE_RELAX_STDOUT","QE_SCF_STDOUT","VOLUMETRIC_RAW_DATA","WANNIER_WOUT"))
+  self.assertEqual(DEFAULT_PARSERS.validate(),("BADER_ACF","BAND_STRUCTURE_RAW_DATA","DOS_RAW_DATA","EPW_SUMMARY","FERMI_SURFACE_BXSF","HUBBARD_PARAMETER_RAW_DATA","LOWDIN_POPULATION","PDOS_RAW_DATA","PHONON_DOS_RAW_DATA","QE_RELAX_STDOUT","QE_SCF_STDOUT","VOLUMETRIC_RAW_DATA","WANNIER_WOUT"))

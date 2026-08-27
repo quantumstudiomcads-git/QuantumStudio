@@ -45,7 +45,7 @@ class CalculationCompiler:
         elif set(self.request.selected_calculations) & {"boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration"}:
             from backend.compiler.boltztrap2 import expand_boltztrap2
             tasks = expand_boltztrap2(self.request, tasks, parameters)
-        if (set(self.request.selected_calculations) & {"bands","dos","pdos","charge_density","spin_density","electron_localization","electrostatic_potential","work_function","phonon_dos"}) and self.request.parameters.get("postprocessing"):
+        if (set(self.request.selected_calculations) & {"bands","dos","pdos","charge_density","spin_density","electron_localization","electrostatic_potential","work_function","fermi_surface","hubbard_u","band_gap","effective_mass","bader_charge","charge_transfer","mulliken_population","magnetic_moment","band_decomposed_charge","hybrid_electronic","phonon_dos"}) and self.request.parameters.get("postprocessing"):
             from backend.compiler.postprocessing import expand
             tasks = expand(self.request, tasks, parameters)
         plan = ExecutionPlan(calculation_id=self.request.id, selected_calculations=list(self.request.selected_calculations), resolved_calculations=[task.calculation_id for task in tasks], execution_target=self.request.execution_target, parameters=dict(self.request.parameters), calculation_parameters=parameters, structure=dict(self.request.structure), tasks=tasks)

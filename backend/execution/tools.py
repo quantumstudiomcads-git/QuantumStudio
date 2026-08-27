@@ -44,6 +44,10 @@ class LocalToolConfiguration:
   if found:candidates.append(Path(found))
   for candidate in candidates:
    if candidate.is_file() and os.access(candidate,os.X_OK): return candidate.resolve()
+  if program == "bader":
+   from .discovery import discover_bader
+   found = discover_bader(environment=self.environment)
+   if found: return Path(found[0]).resolve()
   raise ExecutableNotFoundError(f"Local executable for {tool_id!r} ({program!r}) is not configured or executable.")
  def mpi_capable(self,tool_id): return tool_id in MPI_CAPABLE_TOOLS
  def resolved_mpi_launcher(self):

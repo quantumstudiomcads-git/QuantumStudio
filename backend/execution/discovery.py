@@ -11,7 +11,7 @@ from typing import Iterable
 
 QE_TOOLS = (
     "pw.x", "ph.x", "bands.x", "dos.x", "projwfc.x", "pp.x", "q2r.x",
-    "matdyn.x", "pw2wannier90.x", "neb.x", "cp.x", "epw.x",
+    "matdyn.x", "pw2wannier90.x", "fs.x", "hp.x", "neb.x", "cp.x", "epw.x",
 )
 
 
@@ -133,6 +133,21 @@ def _bounded_deep_candidates(roots: Iterable[Path], *, max_depth: int = 5, max_d
             if "pw.x" in filenames:
                 found.append(Path(directory) / "pw.x")
     return tuple(found)
+
+
+def discover_bader(**kwargs):
+    """Discover Bader from PATH and shared Quantum Studio engine roots."""
+    environment=kwargs.get("environment") or {}
+    path_value=environment.get("PATH") or os.environ.get("PATH", "")
+    candidates=[]
+    found=shutil.which("bader", path=path_value)
+    if found: candidates.append(Path(found))
+    home=Path.home(); repo=_repo_root()
+    for root in (repo, home / "QuantumStudio", home / "software", home / "Software", home / "Desktop"):
+        if root.is_dir():
+            candidates.extend(root.glob("**/software/engines/bader/*/bader"))
+            candidates.extend(root.glob("**/engines/bader/*/bader"))
+    return tuple(dict.fromkeys(str(item.resolve()) for item in candidates if item.is_file() and os.access(item, os.X_OK)))
 
 
 def discover_quantum_espresso(*, existing_directory: str | None = None, environment: dict[str, str] | None = None, deep: bool = False) -> ToolDiscoveryResult:

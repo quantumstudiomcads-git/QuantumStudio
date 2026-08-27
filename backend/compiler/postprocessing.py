@@ -26,11 +26,12 @@ def _path(value, label):
 def expand(request, tasks, parameters):
     selected=set(request.selected_calculations); by={task.calculation_id:task for task in tasks}; scf=by.get("scf")
     if not scf: return tasks
-    result=[task for task in tasks if task.calculation_id not in {"bands","dos","pdos","charge_density","spin_density","electron_localization","electrostatic_potential","work_function","phonon_dos"}]
+    result=[task for task in tasks if task.calculation_id not in {"bands","dos","pdos","charge_density","spin_density","electron_localization","electrostatic_potential","work_function","fermi_surface","hubbard_u","band_gap","effective_mass","bader_charge","charge_transfer","mulliken_population","magnetic_moment","band_decomposed_charge","hybrid_electronic","phonon_dos"}]
     def add(name, semantic, tool, deps, params, inputs, outputs, metadata=None):
         signature=_sig({"semantic":semantic,"calculation_id":name,"purpose":(metadata or {}).get("purpose"),"structure":request.structure,"pseudopotentials":_pseudo_identity(request.parameters.get("pseudopotentials",{})),"parameters":params}); task=PlannedTask(id=f"{request.id}:{semantic}:{signature}",calculation_id=name,semantic_task_type=semantic,engine_id="quantum_espresso",tool_id=tool,parameter_signature=signature,depends_on_task_ids=tuple(dep.id for dep in deps),parameters=params,structure_reference="request_snapshot",artifact_inputs=tuple(inputs),artifact_outputs=tuple(outputs),metadata=metadata or {}); result.append(task); return task
-    if "bands" in selected:
+    if set(selected) & {"bands", "band_gap", "effective_mass", "hybrid_electronic"}:
         values=dict(parameters["bands"]); path=_path(values.get("kpath"),"Band structure")
+        bands_purpose = "band_gap" if "band_gap" in selected else "effective_mass" if "effective_mass" in selected else "hybrid_electronic" if "hybrid_electronic" in selected else "bands"
         functional=resolve(request.parameters.get("xc_functional", request.parameters.get("functional", values.get("functional", "pbe"))))
         if functional.hybrid:
             scf_parameters=dict(scf.parameters); scf_parameters.update({"xc_functional": functional.id, "hybrid_band_path": path})
@@ -43,13 +44,31 @@ def expand(request, tasks, parameters):
             add("qe_bands","qe_bands","bands.x",[scf],{"filband":"bands.dat","hybrid_band_method":contract["method"]},["qe_save","qe_band_eigenvalues"],["BAND_STRUCTURE_RAW_DATA"],{"purpose":"hybrid_bands", "hybrid_band":contract})
         else:
             pw=add("qe_pw_bands","qe_pw_bands","pw.x",[scf],{**values,"band_path":path},["qe_save"],["qe_band_eigenvalues"],{"purpose":"bands"})
-            add("qe_bands","qe_bands","bands.x",[pw],{"filband":"bands.dat"},["qe_save","qe_band_eigenvalues"],["BAND_STRUCTURE_RAW_DATA"],{"purpose":"bands","band_path":path})
+            add("qe_bands","qe_bands","bands.x",[pw],{"filband":"bands.dat"},["qe_save","qe_band_eigenvalues"],["BAND_STRUCTURE_RAW_DATA"],{"purpose":bands_purpose,"band_path":path})
     for public, terminal, tool, output in (("dos","qe_dos","dos.x","DOS_RAW_DATA"),("pdos","qe_projwfc","projwfc.x","PDOS_RAW_DATA")):
         if public in selected:
             values=dict(parameters[public]); mesh=values.get("dense_kpoints");
             if not isinstance(mesh,(list,tuple)) or len(mesh)!=3: raise InvalidQEParameterError(f"{public} requires dense_kpoints mesh.")
             nscf=add(f"qe_pw_nscf_{public}","qe_pw_nscf","pw.x",[scf],{**values,"kpoints":{"mode":"automatic","mesh":list(mesh),"shifts":[0,0,0]},"occupations":"tetrahedra"},["qe_save"],["qe_wavefunctions","qe_eigenvalues"],{"purpose":public,"private_nscf_contract":{"version":"v0.21-e1","parent_scf_task_id":scf.id,"state_inputs":["qe_charge_density","qe_save"],"required_outputs":["qe_wavefunctions","qe_eigenvalues"],"structure_reference":"request_snapshot","requires_shared_prefix_outdir":True}})
             add(terminal,terminal,tool,[nscf],values,["qe_save","qe_wavefunctions"],[output],{"purpose":public})
+    if "band_decomposed_charge" in selected:
+        values=dict(parameters.get("band_decomposed_charge", {}))
+        if int(values.get("kpoint", 0)) < 1 or int(values.get("kband", 0)) < 1: raise InvalidQEParameterError("Band-decomposed charge density requires positive kpoint and kband indices.")
+        add("qe_pp_band_decomposed","qe_pp","pp.x",[scf],{**values,"plot_kind":"band_decomposed_charge","artifact":"band_decomposed_charge.cube"},["qe_save"],["VOLUMETRIC_RAW_DATA"],{"purpose":"band_decomposed_charge","field":{"kind":"band_decomposed_charge","artifact":"band_decomposed_charge.cube","periodic":list(request.structure.get("periodic",[True,True,True])),"atoms":list(request.structure.get("atoms",[]))}})
+    if "fermi_surface" in selected:
+        values=dict(parameters.get("fermi_surface", {})); mesh=values.get("mesh", values.get("kmesh", [8,8,8]))
+        nscf=add("qe_pw_nscf_fermi_surface","qe_pw_nscf","pw.x",[scf],{**values,"kpoints":{"mode":"automatic","mesh":list(mesh),"shifts":[0,0,0]},"occupations":"tetrahedra"},["qe_save"],["qe_wavefunctions","qe_eigenvalues"],{"purpose":"fermi_surface","private_nscf_contract":{"uniform_mesh":list(mesh)}})
+        add("qe_fs","qe_fs","fs.x",[nscf],{**values,"mesh":list(mesh)},["qe_save","qe_eigenvalues"],["FERMI_SURFACE_BXSF"],{"purpose":"fermi_surface","result_type":"FermiSurfaceResult"})
+    if "hubbard_u" in selected:
+        values=dict(parameters.get("hubbard_u", {})); add("qe_hp","qe_hp","hp.x",[scf],values,["qe_save"],["HUBBARD_PARAMETER_RAW_DATA"],{"purpose":"hubbard_u","result_type":"HubbardParameterResult"})
+    if set(selected) & {"bader_charge", "charge_transfer"}:
+        values=dict(parameters.get("bader_charge", parameters.get("charge_transfer", {})))
+        purpose = "charge_transfer" if "charge_transfer" in selected else "bader_charge"
+        pp=add("qe_pp_bader","qe_pp","pp.x",[scf],{**values,"plot_kind":"charge","artifact":"bader_charge.cube"},["qe_save"],["BADER_CHARGE_CUBE"],{"purpose":purpose,"field":{"kind":"charge","artifact":"bader_charge.cube","periodic":list(request.structure.get("periodic",[True,True,True])),"atoms":list(request.structure.get("atoms",[]))}})
+        add("qe_bader","qe_bader","bader",[pp],{"density_file":"../bader_charge.cube"},["BADER_CHARGE_CUBE"],["BADER_ACF"],{"purpose":purpose,"result_type":"BaderChargeResult"})
+    if set(selected) & {"mulliken_population", "magnetic_moment"}:
+        values=dict(parameters.get("mulliken_population", parameters.get("magnetic_moment", {})))
+        add("qe_lowdin","qe_lowdin","projwfc.x",[scf],values,["qe_save"],["LOWDIN_POPULATION"],{"purpose":"lowdin_population","result_type":"LowdinPopulationResult"})
     for public, kind, output in (("charge_density","charge","VOLUMETRIC_RAW_DATA"),("spin_density","spin","VOLUMETRIC_RAW_DATA"),("electron_localization","elf","VOLUMETRIC_RAW_DATA"),("electrostatic_potential","potential","VOLUMETRIC_RAW_DATA"),("work_function","potential","VOLUMETRIC_RAW_DATA")):
 
         if public in selected:

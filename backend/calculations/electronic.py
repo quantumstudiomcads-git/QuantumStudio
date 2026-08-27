@@ -58,6 +58,54 @@ registry.register(CalculationDefinition(
     engine="quantum_espresso", tags=("electronic", "elf", "real_space"), parameters=_POST_SCF_PARAMETERS,
 ))
 registry.register(CalculationDefinition(
+    id="band_decomposed_charge", name="Band-Decomposed Charge Density", category="Electronic Properties",
+    description="Selected-state probability density |psi_nk(r)|² from QE pp.x.", requires=("scf",), workflow="electronic.band_decomposed_charge", engine="quantum_espresso", tags=("electronic","volumetric","band"), parameters=_POST_SCF_PARAMETERS + ("kpoint", "kband", "spin_component"),
+))
+registry.register(CalculationDefinition(
+    id="fermi_surface", name="Fermi Surface", category="Electronic Properties",
+    description="Dense reciprocal-space Fermi-surface sampling using QE fs.x.", requires=("scf",), workflow="electronic.fermi_surface", engine="quantum_espresso", tags=("electronic","fermi_surface","metal"), parameters=_POST_SCF_PARAMETERS + ("mesh", "deltaE", "spin_channel"),
+))
+registry.register(CalculationDefinition(
+    id="bader_charge", name="Bader Charge Analysis", category="Electronic Properties",
+    description="Topological partition of QE pseudo-valence charge density using Bader.", requires=("scf",),
+    workflow="electronic.bader", engine="quantum_espresso", tags=("electronic", "bader", "charge"), parameters=_POST_SCF_PARAMETERS,
+))
+registry.register(CalculationDefinition(
+    id="charge_transfer", name="Atomic Charge Transfer (Bader)", category="Electronic Properties",
+    description="Atomic pseudo-valence charge transfer derived from a Bader result.", requires=("bader_charge",),
+    workflow="electronic.charge_transfer", engine="quantum_espresso", tags=("electronic", "derived", "bader"), parameters=_POST_SCF_PARAMETERS,
+))
+registry.register(CalculationDefinition(
+    id="mulliken_population", name="Löwdin Population Analysis", category="Electronic Properties",
+    description="Atomic-orbital population analysis using QE projwfc.x Löwdin projections.", requires=("scf",),
+    workflow="electronic.lowdin", engine="quantum_espresso", tags=("electronic", "projection", "lowdin"), parameters=_POST_SCF_PARAMETERS + ("projection",),
+))
+registry.register(CalculationDefinition(
+    id="magnetic_moment", name="Magnetic Moments", category="Electronic Properties",
+    description="Cell and collinear Löwdin-projected local magnetic moments.", requires=("mulliken_population",),
+    workflow="electronic.magnetic_moment", engine="quantum_espresso", tags=("electronic", "magnetism", "projection"), parameters=_POST_SCF_PARAMETERS,
+))
+registry.register(CalculationDefinition(
+    id="band_gap", name="Band Gap Analysis", category="Electronic Properties",
+    description="Sampled band-edge analysis derived from a compatible band structure.", requires=("bands",),
+    workflow="electronic.band_gap", engine="quantum_espresso", tags=("electronic", "derived", "band_gap"),
+    parameters=_POST_SCF_PARAMETERS + ("kpath", "kpoint_density"),
+))
+registry.register(CalculationDefinition(
+    id="effective_mass", name="Effective Mass", category="Electronic Properties",
+    description="Local carrier effective-mass fit derived from a compatible band structure.", requires=("bands",),
+    workflow="electronic.effective_mass", engine="quantum_espresso", tags=("electronic", "derived", "effective_mass"),
+    parameters=_POST_SCF_PARAMETERS + ("kpath", "kpoint_density", "carrier", "edge", "fit_points", "band_index"),
+))
+registry.register(CalculationDefinition(
+    id="hybrid_electronic", name="Hybrid Functional Electronic Structure", category="Electronic Properties",
+    description="HSE06 or B3LYP self-consistent electronic structure and band dispersion.", requires=("bands",), workflow="electronic.hybrid_bands", engine="quantum_espresso", tags=("electronic","hybrid","bands"), parameters=_POST_SCF_PARAMETERS + ("kpath", "kpoint_density", "exx_q_mesh"),
+))
+registry.register(CalculationDefinition(
+    id="hubbard_u", name="Hubbard U Determination", category="Electronic Properties",
+    description="Linear-response Hubbard parameters using QE hp.x.", requires=("scf",), workflow="electronic.hubbard_u", engine="quantum_espresso", tags=("electronic","hubbard","linear_response"), parameters=_POST_SCF_PARAMETERS + ("hubbard_species", "hubbard_manifold", "qmesh", "conv_thr"),
+))
+registry.register(CalculationDefinition(
     id="electrostatic_potential", name="Electrostatic Potential", category="Electronic Properties",
     description="Bare-ionic plus Hartree potential field.", requires=("scf",), workflow="electronic.potential",
     engine="quantum_espresso", tags=("electronic", "potential", "real_space"), parameters=_POST_SCF_PARAMETERS,

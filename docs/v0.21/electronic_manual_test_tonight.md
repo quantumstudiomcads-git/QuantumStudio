@@ -31,13 +31,14 @@ Run calculations in this order. READY means the normal Calculate → Run → aut
 
 | SOC SCF | pw.x noncolin/lspinorb → GroundStateResult | Summary | Requires fully relativistic pseudo |
 | SOC Bands | SOC SCF → band path → bands.x | Band plot/CSV/image | Validated Te path |
-| SOC DOS / PDOS | Do not run as a production result tonight | Capability-gated PARTIAL | No verified spinor projection/DOS result contract; never labelled UP/DOWN |
+| SOC DOS | SCF → SOC NSCF → dos.x → DOSResult | Total DOS plot/CSV/image | Total-only SOC semantics; no UP/DOWN |
+| SOC PDOS | Block before execution | Explicit capability diagnostic | Spinor projector semantics not yet supported |
 
 ## 5. DFT+U Fe — MEDIUM
 
 | +U SCF | pw.x with QE 7.6 HUBBARD card → GroundStateResult | Summary/provenance | Fe 3d integration validated |
 | +U DOS | +U SCF → private NSCF → dos.x | DOS plot/CSV/image | Integration validated |
-| +U Bands / PDOS | Generator propagates Hubbard context | Treat as PARTIAL tonight | No fresh real E6 integration evidence |
+| +U PDOS | +U SCF → private NSCF → projwfc.x | PDOS plot/CSV/image | Fe integration validated |
 
 ## 6. Hybrid — SLOW
 
@@ -55,4 +56,4 @@ Run calculations in this order. READY means the normal Calculate → Run → aut
 - SOC with a scalar-relativistic pseudo must fail before QE launch.
 - Work Function on a fully periodic bulk structure must report that no slab-normal direction exists.
 - Wannierization without wannier90.x must fail preflight before SCF execution.
-- Fermi Surface, Bader, charge transfer, spin texture, Berry/topology and Wannier-interpolated bands are not runnable v0.21 workflows.
+- Fermi Surface, Bader, charge transfer, band-decomposed charge, spin texture, orbital texture, exchange parameters, and Hubbard-U determination remain explicitly gated as Partial or External Backend Required; they are not silently Ready.

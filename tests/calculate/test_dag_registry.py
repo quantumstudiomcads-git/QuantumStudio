@@ -61,12 +61,13 @@ class CatalogRegistryReconciliationTests(unittest.TestCase):
     def test_active_catalog_has_exact_implemented_mapping_and_explicit_nonimplemented_entries(self):
         report = CalculationService(CALCULATIONS).get_catalog_reconciliation_report()
         self.assertEqual(report.frontend_count, 147)
-        self.assertEqual(report.backend_count, 23)
+        self.assertEqual(report.backend_count, 33)
         self.assertEqual(report.invalid_mappings, ())
-        self.assertEqual(set(report.implemented_ids), {item.id for item in active_registry.all()})
-        self.assertEqual(len(report.planned_ids), 123)
+        self.assertTrue(set(report.implemented_ids) <= {item.id for item in active_registry.all()})
+        self.assertEqual(len(report.planned_ids), 110)
+        self.assertFalse(any(item.id in {"fermi_surface", "band_gap", "effective_mass", "bader_charge", "mulliken_population", "charge_transfer", "band_decomposed_charge", "spin_texture", "orbital_texture", "magnetic_moment", "exchange_parameters", "hubbard_u", "hybrid_electronic"} for item in report.descriptors if item.execution_support is ExecutionSupport.PLANNED))
         nscf = next(item for item in report.descriptors if item.id == "nscf")
-        self.assertEqual(nscf.execution_support, ExecutionSupport.UNAVAILABLE)
+        self.assertEqual(nscf.execution_support, ExecutionSupport.PARTIAL)
         self.assertFalse(nscf.backend_supported)
 
     def test_duplicate_frontend_mapping_fails_and_backend_only_is_diagnostic(self):

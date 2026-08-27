@@ -6,6 +6,7 @@ from backend.execution import ExecutionStore
 from backend.execution.models import TaskState
 from backend.results import DEFAULT_PARSERS, ResultStore, ResultStoreError, ResultParseError, ResultStatus
 from backend.results.models import ScientificResult
+from backend.results.derived import derive_band_gap, derive_effective_mass, derive_charge_transfer, derive_magnetic_moments
 
 
 class ResultService:
@@ -32,7 +33,7 @@ class ResultService:
   """Pick only the completed task's current attempt output or bounded raw contract."""
   workflow=Path(root).resolve(); directory=(workflow/str(task.get("working_directory",""))).resolve()
   if workflow not in directory.parents and directory != workflow: raise ResultStoreError("Task directory escapes generated workflow root.")
-  names={"qe_bands":("bands.dat",), "qe_dos":("dos.dat",), "qe_matdyn":("phdos.dat","phonon.dos"), "qe_projwfc":("*.pdos_atm#*","pdos_atm#*"), "qe_pp":()}
+  names={"qe_bands":("bands.dat",), "qe_fs":("fermi_surface.bxsf","*_fs.bxsf","*.bxsf"), "qe_dos":("dos.dat",), "qe_matdyn":("phdos.dat","phonon.dos"), "qe_projwfc":("*.pdos_atm#*","pdos_atm#*"), "qe_pp":(), "qe_bader":("ACF.dat",)}
   if semantic=="wannier90_run":
    candidates=sorted(directory.glob("*.wout"))
    if len(candidates)==1 and directory in candidates[0].resolve().parents: return candidates[0]
@@ -44,7 +45,8 @@ class ResultService:
   for name in names.get(semantic,()):
    if "*" in name:
     candidates=sorted(directory.glob(name))
-    if candidates and all(directory in candidate.resolve().parents for candidate in candidates): return directory
+    if candidates and all(directory in candidate.resolve().parents for candidate in candidates):
+     return directory if semantic == "qe_projwfc" else candidates[0]
    else:
     candidate=(directory/name).resolve()
     if candidate.is_file() and directory in candidate.parents: return candidate
@@ -65,7 +67,7 @@ class ResultService:
     if parent in seen: continue
     seen.add(parent); stack.extend(manifest.get(parent,{}).get("dependencies",()) or ())
    return tuple(sorted(seen))
-  routes={"scf":"QE_SCF_STDOUT","relax":"QE_RELAX_STDOUT","vc_relax":"QE_RELAX_STDOUT","qe_bands":"BAND_STRUCTURE_RAW_DATA","qe_dos":"DOS_RAW_DATA","qe_matdyn":"PHONON_DOS_RAW_DATA","qe_projwfc":"PDOS_RAW_DATA","qe_pp":"VOLUMETRIC_RAW_DATA","wannier90_run":"WANNIER_WOUT","epw":"EPW_SUMMARY"}
+  routes={"scf":"QE_SCF_STDOUT","relax":"QE_RELAX_STDOUT","vc_relax":"QE_RELAX_STDOUT","qe_bands":"BAND_STRUCTURE_RAW_DATA","qe_fs":"FERMI_SURFACE_BXSF","qe_bader":"BADER_ACF","qe_lowdin":"LOWDIN_POPULATION","qe_hp":"HUBBARD_PARAMETER_RAW_DATA","qe_dos":"DOS_RAW_DATA","qe_matdyn":"PHONON_DOS_RAW_DATA","qe_projwfc":"PDOS_RAW_DATA","qe_pp":"VOLUMETRIC_RAW_DATA","wannier90_run":"WANNIER_WOUT","epw":"EPW_SUMMARY"}
   # Manifest order is generated DAG order, so downstream Results can retain SCF scientific state.
   for task_id,task in manifest.items():
    runtime=record.tasks.get(task_id)
@@ -77,6 +79,18 @@ class ResultService:
     errors.append(f"{semantic}: declared result source is missing."); continue
    try:
     parse_kwargs={"request_id":record.request_id,"execution_id":execution_id,"task_id":task_id,"method_metadata":(task.get("metadata") or {}).get("electronic_method",{})};
+    if semantic == "qe_bader":
+     field=((task.get("metadata") or {}).get("task_metadata") or {}).get("field",{})
+     if not field:
+      for parent_id in ancestors(task_id):
+       parent_meta=manifest.get(parent_id,{}).get("metadata",{}) or {}
+       field=((parent_meta.get("task_metadata") or {}).get("field",{}))
+       if field: break
+     atoms=field.get("atoms",[]) if isinstance(field,dict) else []
+     parse_kwargs["species"]=[str(atom.get("element", "")) for atom in atoms if isinstance(atom,dict)]
+     parse_kwargs["expected_atom_count"] = len(atoms)
+     pseudo=(task.get("metadata") or {}).get("pseudopotentials", {})
+     parse_kwargs["z_valence"]=[(pseudo.get(str(atom.get("element", "")), {}) or {}).get("z_valence") for atom in atoms if isinstance(atom,dict)]
     if semantic == "qe_pp": parse_kwargs["field_metadata"]=((task.get("metadata") or {}).get("task_metadata") or {}).get("field",{})
     if semantic == "qe_bands": parse_kwargs["band_path"]=(task.get("metadata") or {}).get("band_path");
     result=DEFAULT_PARSERS.parse(route,source,**parse_kwargs)
@@ -109,6 +123,22 @@ class ResultService:
       derived=ScientificResult("WorkFunctionResult",analysis["status"],result.provenance,scalars={"fermi_energy":{"value":analysis.get("fermi_energy_eV"),"unit":"eV"}} if analysis.get("fermi_energy_eV") is not None else {},arrays={key:value for key,value in {"distance_A":analysis.get("profile",{}).get("distance_A"),"potential_raw_Ry":analysis.get("profile",{}).get("potential_raw_Ry"),"potential_eV":analysis.get("profile",{}).get("potential_eV"),"macroscopic_eV":analysis.get("macroscopic_eV")} .items() if value is not None},metadata={"work_function_analysis":payload,"source_potential_result_id":result.result_id},warnings=list(analysis.get("diagnostics",[])))
       store.save(derived); parsed.append(derived.result_id)
     if reparse or result.result_id not in store.list(): store.save(result)
+    if semantic == "qe_bands" and (task_metadata.get("task_metadata",{}) or {}).get("purpose") in {"band_gap", "effective_mass"}:
+     # Public derived workflows share the signed bands terminal without making
+     # ordinary Band Structure requests emit surprise auxiliary Results.
+     derived_values=(derive_band_gap(result),) if (task_metadata.get("task_metadata",{}) or {}).get("purpose") == "band_gap" else (derive_effective_mass(result, carrier="electron"),)
+     for derived in derived_values:
+      if reparse or derived.result_id not in store.list(): store.save(derived)
+      parsed.append(derived.result_id)
+    if result.result_type == "LowdinPopulationResult":
+     parent=next((parsed_by_task[parent] for parent in lineage if parsed_by_task.get(parent) is not None and parsed_by_task[parent].result_type == "GroundStateResult"),None)
+     derived=derive_magnetic_moments(result,parent)
+     if reparse or derived.result_id not in store.list(): store.save(derived)
+     parsed.append(derived.result_id)
+    if result.result_type == "BaderChargeResult" and (task_metadata.get("task_metadata", {}) or {}).get("purpose") == "charge_transfer":
+     derived=derive_charge_transfer(result)
+     if reparse or derived.result_id not in store.list(): store.save(derived)
+     parsed.append(derived.result_id)
     parsed_by_task[task_id]=result
     parsed.append(result.result_id)
    except (ResultParseError,ResultStoreError,ValueError) as error:

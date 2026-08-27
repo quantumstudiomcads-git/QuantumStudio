@@ -12,6 +12,9 @@ from frontend.analyze.plots.compare import ComparisonPlot
 from frontend.analyze.plots.bands import BandPlot
 from frontend.analyze.plots.dos import DOSPlot
 from frontend.analyze.plots.volumetric import VolumetricPlot
+from frontend.analyze.plots.fermi_surface import FermiSurfacePlot
+from frontend.analyze.plots.derived_electronic import DerivedElectronicPlot
+from frontend.analyze.plots.bader import BaderChargePlot
 from frontend.analyze.plots.work_function import WorkFunctionPlot
 from frontend.analyze.plots.base import ScientificPlotWidget
 from frontend.analyze.table_model import ScientificTableModel, ScientificTableView
@@ -193,12 +196,14 @@ class AnalyzeWorkspace(QWidget):
         try:
             if not self.service.summaries(root, execution):
                 self.service.parse(root, execution)
-            preferred_index = -1
-            primary_types = {"BandStructureResult", "DOSResult", "PDOSResult", "PhononDOSResult", "VolumetricResult", "WorkFunctionResult"}
+            preferred_index = -1; preferred_rank = 99
+            primary_types = {"BandGapResult", "EffectiveMassResult", "BandStructureResult", "DOSResult", "PDOSResult", "PhononDOSResult", "VolumetricResult", "WorkFunctionResult", "FermiSurfaceResult", "BaderChargeResult", "ChargeTransferResult"}
+            ranks = {"BandGapResult": 0, "EffectiveMassResult": 0, "ChargeTransferResult": 0, "BaderChargeResult": 1, "BandStructureResult": 2}
             for row in self.service.summaries(root,execution):
                 self.result.addItem(f"{result_kind(type('R',(),{'result_type':row['type']})())} — {row['status']}",row['result_id'])
-                if preferred_index < 0 and row["type"] in primary_types:
-                    preferred_index = self.result.count() - 1
+                rank = ranks.get(row["type"], 1)
+                if row["type"] in primary_types and rank < preferred_rank:
+                    preferred_rank = rank; preferred_index = self.result.count() - 1
             if preferred_index >= 0:
                 self.result.setCurrentIndex(preferred_index)
         except Exception as error: self.empty.setText("Results unavailable.\n"+str(error)); self.views.setCurrentWidget(self.empty)
@@ -214,12 +219,12 @@ class AnalyzeWorkspace(QWidget):
         except Exception as error: self.empty.setText("Result unavailable.\n"+str(error)); self.views.setCurrentWidget(self.empty); return
         self._populate_pdos_filters()
         self.navigation.clear(); items=["Overview",result_kind(self.current_result)]
-        if self.current_result.result_type == "BandStructureResult": items.append("Electronic Analysis")
+        if self.current_result.result_type in {"BandStructureResult","BandGapResult","EffectiveMassResult"}: items.append("Electronic Analysis")
         items += ["Data","Provenance"]; self.navigation.addItems(items)
         # A plottable terminal Result should open directly in its primary view.
         # Previously every selection was forced to Overview, leaving a completed
         # DOS/PDOS run without a visible graph until secondary navigation.
-        if self.current_result.result_type in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","VolumetricResult","WorkFunctionResult"}:
+        if self.current_result.result_type in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","VolumetricResult","WorkFunctionResult","FermiSurfaceResult","BandGapResult","EffectiveMassResult","BaderChargeResult","ChargeTransferResult"}:
             self.navigation.setCurrentRow(1)
         else:
             self.navigation.setCurrentRow(0); self._show_overview()
@@ -239,7 +244,7 @@ class AnalyzeWorkspace(QWidget):
         if self.current_result is None:return
         label=self.navigation.item(row).text() if row >= 0 else ""
         if label=="Overview":self._show_overview()
-        elif label in {"Band Structure","Density of States","Projected DOS","Phonon DOS","Volumetric Field","Work Function"}:self._show_plot()
+        elif label in {"Band Structure","Density of States","Projected DOS","Phonon DOS","Volumetric Field","Work Function","Bader Charge Analysis","Atomic Charge Transfer (Bader)"}:self._show_plot()
         elif label=="Electronic Analysis":self._show_electronic()
         elif label=="Data":self._show_table()
         elif label=="Provenance":self._show_provenance()
@@ -250,6 +255,10 @@ class AnalyzeWorkspace(QWidget):
         if method: lines.append("Method: "+str(method.get("spin_treatment","SCALAR_NONSPIN")).replace("_"," ")+(" + U" if method.get("dft_plus_u") else ""))
         if r.metadata.get("final_structure"):
             structure=r.metadata["final_structure"]; lines.append(f"Final structure available (read-only), atoms: {len(structure.get('atoms',()))}")
+        if r.result_type == "BaderChargeResult":
+            lines.extend([f"Total pseudo-valence Bader electrons: {r.metadata.get('total_bader_electrons', '—')}", f"Expected pseudo-valence electrons: {r.metadata.get('expected_valence_electrons', '—')}", f"Conservation difference: {r.metadata.get('charge_conservation_difference', '—')}"])
+        if r.result_type == "ChargeTransferResult":
+            lines.extend(["Sign convention: positive = electron deficiency; negative = electron accumulation", f"Total charge transfer: {r.metadata.get('total_transfer', '—')}", "Species transfer: "+str(r.metadata.get('species_transfer', {}))])
         if r.warnings: lines.extend(["","Warnings:"]+r.warnings)
         self.overview.setPlainText("\n".join(lines)); self.views.setCurrentWidget(self.overview)
     def _electronic_analysis(self):
@@ -368,7 +377,7 @@ class AnalyzeWorkspace(QWidget):
         Path(filename).write_text(json.dumps(payload,indent=2,sort_keys=True),encoding="utf-8")
 
     def _show_plot(self):
-        if self.current_result.result_type not in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","VolumetricResult","WorkFunctionResult"}:
+        if self.current_result.result_type not in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","VolumetricResult","WorkFunctionResult","FermiSurfaceResult","BandGapResult","EffectiveMassResult","BaderChargeResult","ChargeTransferResult"}:
             self.views.setCurrentWidget(self.overview); return
         if self.current_result.result_type == "PDOSResult":
             selected=pdos_channels(self.current_result, species=self.pdos_species.currentText(), atom=self.pdos_atom.currentText(), orbital=self.pdos_orbital.currentText(), component=self.pdos_component.currentText(), spin=self.pdos_spin.currentText(), aggregation=self.pdos_aggregation.currentText())
@@ -392,7 +401,7 @@ class AnalyzeWorkspace(QWidget):
         self.views.removeWidget(old)
         old.figure.clear()
         old.deleteLater()
-        self.plot = BandPlot(self) if self.current_result.result_type == "BandStructureResult" else WorkFunctionPlot(self) if self.current_result.result_type == "WorkFunctionResult" else VolumetricPlot(self) if self.current_result.result_type == "VolumetricResult" else DOSPlot(self)
+        self.plot = BandPlot(self) if self.current_result.result_type == "BandStructureResult" else WorkFunctionPlot(self) if self.current_result.result_type == "WorkFunctionResult" else VolumetricPlot(self) if self.current_result.result_type == "VolumetricResult" else FermiSurfacePlot(self) if self.current_result.result_type == "FermiSurfaceResult" else DerivedElectronicPlot(self) if self.current_result.result_type in {"BandGapResult","EffectiveMassResult"} else BaderChargePlot(self) if self.current_result.result_type in {"BaderChargeResult","ChargeTransferResult"} else DOSPlot(self)
         self.views.insertWidget(1,self.plot)
         if self.current_result.result_type == "BandStructureResult":
             analysis=self._electronic_analysis(); self.plot.configure_electronic_analysis(analysis,show_edges=self._show_band_edges,energy_offset=self._reference_offset(analysis),reference_label=self._electronic_reference)

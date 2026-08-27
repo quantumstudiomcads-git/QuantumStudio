@@ -25,6 +25,15 @@ class ResultCoverageTests(unittest.TestCase):
    (pdos/"sample.pdos_atm#3(Si)_wfc#1(s)").write_text("-1 0 1\n.1 1 2\n")
    with self.assertRaisesRegex(Exception,"grids are incompatible"): DEFAULT_PARSERS.parse("PDOS_RAW_DATA",pdos)
 
+ def test_e3_real_format_collinear_dos_and_pdos(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp); dos=root/"fe.dos"; dos.write_text("# E (eV) dosup(E) dosdw(E) Int dos(E) EFermi = 7.174 eV\n-1 1 2 3\n0 4 5 6\n")
+   method={"spin_treatment":"COLLINEAR_SPIN"}; result=DEFAULT_PARSERS.parse("DOS_RAW_DATA",dos,method_metadata=method)
+   self.assertEqual(result.metadata["spin_semantics"],"COLLINEAR_SPIN"); self.assertEqual(result.arrays["dos_up"].tolist(),[1.,4.]); self.assertEqual(result.arrays["dos_down"].tolist(),[2.,5.]); self.assertEqual(result.scalars["fermi_energy"]["value"],7.174)
+   pdos=root/"pdos"; pdos.mkdir(); (pdos/"fe.pdos_atm#1(Fe)_wfc#5(d)").write_text("# E ldosup ldosdw pdosup pdosdw m1u m1d\n-1 10 20 1 2 .1 .2\n0 11 21 3 4 .3 .4\n")
+   projected=DEFAULT_PARSERS.parse("PDOS_RAW_DATA",pdos,method_metadata=method)
+   self.assertEqual([(c["orbital"],c["spin"]) for c in projected.metadata["components"]],[("d","UP"),("d","DOWN")]); self.assertEqual(projected.metadata["component_values"],[[1.0,3.0],[2.0,4.0]])
+
  def test_wannier_and_epw_are_conservative(self):
   with tempfile.TemporaryDirectory() as tmp:
    root=Path(tmp); w=root/"x.wout"; w.write_text("Number of Wannier Functions : 4\nFinal State Spread 2.5\nAll done\n"); self.assertEqual(DEFAULT_PARSERS.parse("WANNIER_WOUT",w).status,ResultStatus.VALID)

@@ -28,6 +28,22 @@ class QEPostprocessingTests(unittest.TestCase):
   self.assertIn("Emin = -8",input_text); self.assertIn("Emax = 7",input_text); self.assertIn("DeltaE = 0.05",input_text)
   self.assertEqual(next(item for item in CALCULATIONS if item.id=="nscf").status,"partial")
 
+ def test_e3_method_writer_and_hubbard_propagation(self):
+  from backend.engines.qe.writer import electronic_method
+  collinear=plan(["dos","pdos"],{"spin_treatment":"COLLINEAR_SPIN","starting_magnetization":{"Si":0.5},"hubbard_terms":[{"species":"Si","manifold":"3d","u_eV":3.0}]})
+  generated=QuantumEspressoAdapter().compile_plan(collinear)
+  for task in generated.tasks:
+   if task.metadata["semantic_task_type"] in {"scf","qe_pw_nscf"}: self.assertIn("nspin = 2",task.input_text); self.assertIn("starting_magnetization(1) = 0.5",task.input_text); self.assertIn("HUBBARD (ortho-atomic)",task.input_text); self.assertIn("U Si-3d 3",task.input_text)
+  self.assertEqual(electronic_method({"spin_treatment":"SOC"}),"SOC")
+  with self.assertRaises(Exception): electronic_method({"spin_treatment":"COLLINEAR_SPIN","soc":True})
+  with self.assertRaises(Exception): QuantumEspressoAdapter().compile_plan(plan(["dos"],{"hubbard_terms":[{"species":"X","manifold":"3d","u_eV":3.0}]}))
+  first=next(x for x in collinear.tasks if x.semantic_task_type=="qe_pw_nscf").parameter_signature; changed=plan(["dos"],{"spin_treatment":"COLLINEAR_SPIN","starting_magnetization":{"Si":0.5},"hubbard_terms":[{"species":"Si","manifold":"3d","u_eV":4.0}]}).tasks[-2].parameter_signature; self.assertNotEqual(first,changed)
+
+ def test_e3_hubbard_request_persistence_round_trip(self):
+  request=CalculationRequest(id="e3-u",structure=S,selected_calculations=["dos"],parameters={**P,"spin_treatment":"COLLINEAR_SPIN","hubbard_terms":[{"species":"Si","manifold":"3d","u_eV":3.0}],"hubbard_projector":"ortho-atomic"})
+  restored=CalculationRequest.from_persistence_dict(request.to_persistence_dict())
+  self.assertEqual(restored.parameters["hubbard_terms"],[{"species":"Si","manifold":"3d","u_eV":3.0}]); self.assertEqual(restored.parameters["hubbard_projector"],"ortho-atomic"); self.assertEqual(restored.parameters["spin_treatment"],"COLLINEAR_SPIN")
+
  def test_spin_validation_phonon_chain_and_commands(self):
   with self.assertRaises(Exception): plan(["spin_density"])
   ph=plan(["phonon_dos"]); self.assertEqual([x.semantic_task_type for x in ph.tasks],["scf","qe_ph","qe_q2r","qe_matdyn"]); generated=QuantumEspressoAdapter().compile_plan(ph); self.assertEqual([x.executable for x in generated.tasks][-3:],["ph.x","q2r.x","matdyn.x"])

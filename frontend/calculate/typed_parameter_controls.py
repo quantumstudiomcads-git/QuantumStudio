@@ -10,6 +10,8 @@ ENUMS = {
     "smearing": ("gaussian", "mp", "mv", "fd"),
     "relaxation_time_model": ("constant", "unspecified"),
     "zasr": ("simple", "crystal", "one-dim", "zero-dim"),
+    "spin_treatment": ("SCALAR_NONSPIN", "COLLINEAR_SPIN", "NONCOLLINEAR", "SOC"),
+    "hubbard_projector": ("ortho-atomic", "atomic", "norm-atomic", "pseudo"),
 }
 
 

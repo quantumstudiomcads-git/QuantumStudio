@@ -11,8 +11,12 @@ def export_dos_pdos_csv(result, path, *, reference="Absolute", channels=None):
     with target.open("w",newline="",encoding="utf-8") as stream:
         writer=csv.writer(stream)
         if result.result_type=="DOSResult":
-            headers=["energy_raw_eV","energy_display_eV","dos_total_states_per_eV_cell"]
-            columns=[raw,display,np.asarray(result.arrays.get("dos",result.arrays.get("total_dos",())),dtype=float)]
+            if "dos_up" in result.arrays and "dos_down" in result.arrays:
+                headers=["energy_raw_eV","energy_display_eV","dos_up_states_per_eV_cell","dos_down_states_per_eV_cell"]
+                columns=[raw,display,np.asarray(result.arrays["dos_up"],dtype=float),np.asarray(result.arrays["dos_down"],dtype=float)]
+            else:
+                headers=["energy_raw_eV","energy_display_eV","dos_total_states_per_eV_cell"]
+                columns=[raw,display,np.asarray(result.arrays.get("dos",result.arrays.get("total_dos",())),dtype=float)]
             if "integrated_dos" in result.arrays: headers.append("integrated_dos_states_per_cell"); columns.append(np.asarray(result.arrays["integrated_dos"],dtype=float))
             writer.writerow(headers); writer.writerows(zip(*columns))
         elif result.result_type=="PDOSResult":

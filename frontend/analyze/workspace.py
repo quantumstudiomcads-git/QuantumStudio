@@ -230,6 +230,8 @@ class AnalyzeWorkspace(QWidget):
     def _show_overview(self):
         r=self.current_result; p=r.provenance; lines=[f"Result: {result_kind(r)}",f"Status: {r.status.value}",f"Request: {p.request_id}",f"Execution: {p.execution_id}",f"Engine: {p.engine_id}",f"Tool: {p.tool_id}","", "Summary: "+r.summary()]
         if r.scalars: lines.extend(f"{k}: {v.get('value',v)} {v.get('units','')}" for k,v in r.scalars.items())
+        method=r.metadata.get("electronic_method",{})
+        if method: lines.append("Method: "+str(method.get("spin_treatment","SCALAR_NONSPIN")).replace("_"," ")+(" + U" if method.get("dft_plus_u") else ""))
         if r.metadata.get("final_structure"):
             structure=r.metadata["final_structure"]; lines.append(f"Final structure available (read-only), atoms: {len(structure.get('atoms',()))}")
         if r.warnings: lines.extend(["","Warnings:"]+r.warnings)
@@ -379,4 +381,7 @@ class AnalyzeWorkspace(QWidget):
         self.table.resizeColumnsToContents()
         self.views.setCurrentWidget(self.table)
     def _show_provenance(self):
-        p=self.current_result.provenance; self.provenance.setPlainText("\n".join(f"{k}: {v}" for k,v in p.__dict__.items())); self.views.setCurrentWidget(self.provenance)
+        p=self.current_result.provenance; rows=[f"{k}: {v}" for k,v in p.__dict__.items()]
+        method=self.current_result.metadata.get("electronic_method",{})
+        if method: rows.append("electronic_method: "+str(method))
+        self.provenance.setPlainText("\n".join(rows)); self.views.setCurrentWidget(self.provenance)

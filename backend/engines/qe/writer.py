@@ -149,6 +149,80 @@ def k_points_card(parameters: Mapping[str, Any], periodic: object) -> str:
     return "K_POINTS automatic\n" + " ".join(str(item) for item in numbers)
 
 
+def electronic_method(parameters: Mapping[str, Any]) -> str:
+    """Resolve one unambiguous QE electronic method, preserving legacy booleans."""
+    raw = str(parameters.get("spin_treatment", "")).strip().upper().replace(" ", "_")
+    aliases = {"NONSPIN": "SCALAR_NONSPIN", "NON_SPIN": "SCALAR_NONSPIN", "SCALAR": "SCALAR_NONSPIN", "COLLINEAR": "COLLINEAR_SPIN", "SPIN": "COLLINEAR_SPIN", "NONCOLLINEAR": "NONCOLLINEAR", "SOC": "SOC"}
+    legacy_spin = bool(parameters.get("spin", False))
+    legacy_soc = bool(parameters.get("soc", False))
+    legacy_noncolin = bool(parameters.get("noncolin", False))
+    method = aliases.get(raw, raw) if raw else ("SOC" if legacy_soc else "NONCOLLINEAR" if legacy_noncolin else "COLLINEAR_SPIN" if legacy_spin else "SCALAR_NONSPIN")
+    if method == "SCALAR_NONSPIN" and (legacy_spin or legacy_soc or legacy_noncolin):
+        method = "SOC" if legacy_soc else "NONCOLLINEAR" if legacy_noncolin else "COLLINEAR_SPIN"
+    if method not in {"SCALAR_NONSPIN", "COLLINEAR_SPIN", "NONCOLLINEAR", "SOC"}:
+        raise InvalidQEParameterError("Spin treatment must be Non-spin, Collinear, Noncollinear, or SOC.")
+    if method == "COLLINEAR_SPIN" and (legacy_soc or legacy_noncolin):
+        raise InvalidQEParameterError("Collinear spin cannot be combined with noncolin or lspinorb/SOC.")
+    if method == "SCALAR_NONSPIN" and (legacy_spin or legacy_soc or legacy_noncolin):
+        raise InvalidQEParameterError("Scalar non-spin treatment contradicts requested spin flags.")
+    if method in {"NONCOLLINEAR", "SOC"} and legacy_spin:
+        raise InvalidQEParameterError("nspin=2 collinear spin cannot be combined with noncollinear or SOC treatment.")
+    return method
+
+def method_metadata(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    method = electronic_method(parameters)
+    terms = parameters.get("hubbard_terms", [])
+    return {"spin_treatment": method, "soc": method == "SOC", "noncollinear": method in {"NONCOLLINEAR", "SOC"}, "dft_plus_u": bool(terms), "hubbard_terms": list(terms) if isinstance(terms, list) else [], "hubbard_projector": parameters.get("hubbard_projector") if terms else None, "qe_hubbard_syntax": "HUBBARD_CARD_QE_7_6" if terms else None}
+
+def _species_order(structure: Mapping[str, Any]) -> list[str]:
+    order=[]
+    for atom in structure.get("atoms", []):
+        if isinstance(atom, Mapping):
+            label=str(atom.get("element", "")).strip()
+            if label and label not in order: order.append(label)
+    return order
+
+def _magnetization_values(parameters: Mapping[str, Any], structure: Mapping[str, Any], method: str) -> dict[str, Any]:
+    initial=parameters.get("starting_magnetization", {})
+    if initial is None: initial={}
+    if not isinstance(initial, Mapping): raise InvalidQEParameterError("starting_magnetization must map atomic species to dimensionless QE values.")
+    species=_species_order(structure); values={}
+    for label,value in initial.items():
+        if str(label) not in species: raise InvalidQEParameterError(f"Starting magnetization species is absent from structure: {label}.")
+        try: numeric=float(value)
+        except (TypeError,ValueError) as error: raise InvalidQEParameterError(f"Starting magnetization for {label} must be numeric.") from error
+        if not isfinite(numeric): raise InvalidQEParameterError(f"Starting magnetization for {label} must be finite.")
+        values[f"starting_magnetization({species.index(str(label))+1})"]=numeric
+    total=parameters.get("tot_magnetization")
+    if total is not None:
+        if method != "COLLINEAR_SPIN": raise InvalidQEParameterError("tot_magnetization is only supported for collinear spin in E3.")
+        if values: raise InvalidQEParameterError("Do not combine tot_magnetization with starting_magnetization.")
+        try: total=float(total)
+        except (TypeError,ValueError) as error: raise InvalidQEParameterError("tot_magnetization must be numeric.") from error
+        if not isfinite(total): raise InvalidQEParameterError("tot_magnetization must be finite.")
+        values["tot_magnetization"]=total
+    return values
+
+def hubbard_card(parameters: Mapping[str, Any], structure: Mapping[str, Any]) -> str | None:
+    terms=parameters.get("hubbard_terms", [])
+    if terms in (None,[]): return None
+    if not isinstance(terms, list): raise InvalidQEParameterError("hubbard_terms must be a list of structured Hubbard U terms.")
+    projector=str(parameters.get("hubbard_projector", "ortho-atomic")).strip().lower()
+    if projector not in {"atomic", "ortho-atomic", "norm-atomic", "pseudo"}: raise InvalidQEParameterError("Unsupported QE 7.6 Hubbard projector type.")
+    species=set(_species_order(structure)); seen=set(); lines=[f"HUBBARD ({projector})"]
+    for term in terms:
+        if not isinstance(term, Mapping): raise InvalidQEParameterError("Each Hubbard term must be a species/manifold/U mapping.")
+        label=str(term.get("species", "")).strip(); manifold=str(term.get("manifold", "")).strip().lower()
+        if label not in species: raise InvalidQEParameterError(f"Hubbard species is absent from structure: {label}.")
+        if not __import__("re").fullmatch(r"[1-7][spdf]", manifold): raise InvalidQEParameterError(f"Invalid Hubbard manifold for {label}: {manifold!r}.")
+        try: value=float(term.get("u_eV"))
+        except (TypeError,ValueError) as error: raise InvalidQEParameterError(f"Hubbard U for {label}-{manifold} must be numeric eV.") from error
+        if not isfinite(value) or value < 0: raise InvalidQEParameterError(f"Hubbard U for {label}-{manifold} must be finite and non-negative eV.")
+        identity=(label,manifold)
+        if identity in seen: raise InvalidQEParameterError(f"Duplicate Hubbard U term for {label}-{manifold}.")
+        seen.add(identity); lines.append(f"U {label}-{manifold} {format_number(value)}")
+    return "\n".join(lines)
+
 def pw_input(calculation_id: str, parameters: Mapping[str, Any], structure: Mapping[str, Any], context, pseudopotentials: Mapping[str, object]) -> str:
     """Build a valid C4 pw.x input for SCF, relax, or vc-relax."""
     qe_calculation = {"scf": "scf", "nscf": "nscf", "qe_pw_nscf": "nscf", "relax": "relax", "vc_relax": "vc-relax"}[calculation_id]
@@ -156,7 +230,9 @@ def pw_input(calculation_id: str, parameters: Mapping[str, Any], structure: Mapp
     atoms = structure.get("atoms", [])
     species_count = len({str(atom.get("element", "")) for atom in atoms if isinstance(atom, Mapping)})
     control = {"calculation": qe_calculation, "prefix": context.prefix, "outdir": context.outdir, "pseudo_dir": context.pseudo_dir}
-    system = {"ibrav": 0, "nat": len(atoms), "ntyp": species_count, "nbnd": parameters.get("nbnd"), "ecutwfc": parameters.get("ecutwfc"), "ecutrho": parameters.get("ecutrho"), "input_dft": functional.qe_input_dft, "exx_fraction": parameters.get("exx_fraction", functional.exx_fraction) if functional.hybrid else None, "screening_parameter": parameters.get("screening_parameter", functional.screening) if functional.screening is not None else None, "ace": parameters.get("ace", True) if functional.hybrid else None, "nqx1": (parameters.get("exx_q_mesh") or ((parameters.get("kpoints") or {}).get("mesh") if isinstance(parameters.get("kpoints"), Mapping) else parameters.get("kpoints")) or [1,1,1])[0] if functional.hybrid else None, "nqx2": (parameters.get("exx_q_mesh") or ((parameters.get("kpoints") or {}).get("mesh") if isinstance(parameters.get("kpoints"), Mapping) else parameters.get("kpoints")) or [1,1,1])[1] if functional.hybrid else None, "nqx3": (parameters.get("exx_q_mesh") or ((parameters.get("kpoints") or {}).get("mesh") if isinstance(parameters.get("kpoints"), Mapping) else parameters.get("kpoints")) or [1,1,1])[2] if functional.hybrid else None, "exxdiv_treatment": parameters.get("exxdiv_treatment", "gygi-baldereschi") if functional.hybrid else None, "nspin": 2 if parameters.get("spin") else None, "lspinorb": True if parameters.get("soc") else None, "noncolin": True if parameters.get("soc") else None, "occupations": parameters.get("occupations"), "smearing": parameters.get("smearing"), "degauss": parameters.get("degauss")}
+    method = electronic_method(parameters)
+    magnetization = _magnetization_values(parameters, structure, method)
+    system = {"ibrav": 0, "nat": len(atoms), "ntyp": species_count, "nbnd": parameters.get("nbnd"), "ecutwfc": parameters.get("ecutwfc"), "ecutrho": parameters.get("ecutrho"), "input_dft": functional.qe_input_dft, "exx_fraction": parameters.get("exx_fraction", functional.exx_fraction) if functional.hybrid else None, "screening_parameter": parameters.get("screening_parameter", functional.screening) if functional.screening is not None else None, "ace": parameters.get("ace", True) if functional.hybrid else None, "nqx1": (parameters.get("exx_q_mesh") or ((parameters.get("kpoints") or {}).get("mesh") if isinstance(parameters.get("kpoints"), Mapping) else parameters.get("kpoints")) or [1,1,1])[0] if functional.hybrid else None, "nqx2": (parameters.get("exx_q_mesh") or ((parameters.get("kpoints") or {}).get("mesh") if isinstance(parameters.get("kpoints"), Mapping) else parameters.get("kpoints")) or [1,1,1])[1] if functional.hybrid else None, "nqx3": (parameters.get("exx_q_mesh") or ((parameters.get("kpoints") or {}).get("mesh") if isinstance(parameters.get("kpoints"), Mapping) else parameters.get("kpoints")) or [1,1,1])[2] if functional.hybrid else None, "exxdiv_treatment": parameters.get("exxdiv_treatment", "gygi-baldereschi") if functional.hybrid else None, "nspin": 2 if method == "COLLINEAR_SPIN" else None, "lspinorb": True if method == "SOC" else None, "noncolin": True if method in {"NONCOLLINEAR", "SOC"} else None, **magnetization, "occupations": parameters.get("occupations"), "smearing": parameters.get("smearing"), "degauss": parameters.get("degauss")}
     electrons = {"conv_thr": parameters.get("conv_thr")}
     sections = [serialize_namelist("CONTROL", control), serialize_namelist("SYSTEM", system), serialize_namelist("ELECTRONS", electrons)]
     if calculation_id in {"relax", "vc_relax"}:
@@ -168,6 +244,8 @@ def pw_input(calculation_id: str, parameters: Mapping[str, Any], structure: Mapp
     if contract is not None:
         if not functional.hybrid or calculation_id != "scf": raise InvalidQEParameterError("ADDITIONAL_K_POINTS direct band route requires a hybrid SCF task.")
         sections.append(additional_k_points_card(contract))
+    hubbard = hubbard_card(parameters, structure)
+    if hubbard is not None: sections.append(hubbard)
     return "\n\n".join(sections) + "\n"
 
 

@@ -6,7 +6,7 @@ from backend.calculations.registry import registry
 
 _COMMON_ELECTRONIC_PARAMETERS = (
     "accuracy", "functional", "pseudopotential", "ecutwfc", "ecutrho",
-    "conv_thr", "kpoints", "spin", "soc",
+    "conv_thr", "kpoints", "spin", "soc", "spin_treatment", "starting_magnetization", "tot_magnetization", "hubbard_terms", "hubbard_projector", "occupations", "smearing", "degauss",
 )
 
 registry.register(CalculationDefinition(

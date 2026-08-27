@@ -55,6 +55,12 @@ class AnalyzeA1Tests(unittest.TestCase):
             ppath=export_dos_pdos_csv(pdos,os.path.join(d,"pdos.csv"),channels=pdos_channels(pdos,aggregation="By species")); self.assertIn("aggregation_label",ppath.read_text().splitlines()[0])
             image=os.path.join(d,"plot.svg"); from matplotlib.figure import Figure; figure=Figure(); figure.savefig(image); self.assertTrue(os.path.getsize(image)>0)
 
+    def test_e3_collinear_spin_plot_mirrors_display_only(self):
+        from frontend.analyze.plots.dos import DOSPlot
+        app=QApplication.instance() or QApplication([]); p=ResultProvenance("r","e","t","qe","dos.x",(),{},"fixture")
+        result=ScientificResult("DOSResult",ResultStatus.VALID,p,arrays={"energy":[-1.,0.],"dos_up":[1.,2.],"dos_down":[3.,4.]},metadata={"spin_semantics":"COLLINEAR_SPIN"})
+        plot=DOSPlot(); plot.set_result(result); app.processEvents(); self.assertEqual(plot.axes.lines[1].get_ydata().tolist(),[-3.,-4.]); self.assertEqual(result.arrays["dos_down"],[3.,4.]); plot.spin_mode.setCurrentText("Both positive"); app.processEvents(); self.assertEqual(plot.axes.lines[1].get_ydata().tolist(),[3.,4.]); plot.close()
+
     def test_shared_energy_alignment_does_not_mutate_result(self):
         from backend.analyze.transforms import energy_reference, exact_difference, frequency_convert
         p=ResultProvenance("r","e","t","qe","pw.x",(),{},"f")

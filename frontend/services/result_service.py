@@ -67,9 +67,10 @@ class ResultService:
    if source is None:
     errors.append(f"{semantic}: declared result source is missing."); continue
    try:
-    parse_kwargs={"request_id":record.request_id,"execution_id":execution_id,"task_id":task_id};
+    parse_kwargs={"request_id":record.request_id,"execution_id":execution_id,"task_id":task_id,"method_metadata":(task.get("metadata") or {}).get("electronic_method",{})};
     if semantic == "qe_bands": parse_kwargs["band_path"]=(task.get("metadata") or {}).get("band_path");
     result=DEFAULT_PARSERS.parse(route,source,**parse_kwargs)
+    result.metadata.setdefault("electronic_method",(task.get("metadata") or {}).get("electronic_method",{}))
     task_metadata=task.get("metadata",{}) or {}
     lineage=ancestors(task_id)
     result.metadata.setdefault("workflow_provenance",{"terminal_task_id":task_id,"terminal_semantic_task":semantic,"parent_task_ids":list(task.get("dependencies",())) if isinstance(task.get("dependencies",()),(list,tuple)) else [],"ancestor_task_ids":list(lineage),"purpose":(task_metadata.get("task_metadata",{}) or {}).get("purpose"),"structure_fingerprint":task_metadata.get("structure_fingerprint",""),"pseudopotentials":task_metadata.get("pseudopotentials",{}),"qe_prefix":task_metadata.get("qe_prefix"),"qe_outdir":task_metadata.get("qe_outdir"),"task_parameter_signatures":{parent:(manifest.get(parent,{}).get("metadata",{}) or {}).get("parameter_signature") for parent in (*lineage,task_id)}})

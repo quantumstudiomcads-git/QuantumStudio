@@ -25,6 +25,7 @@ def inspect_upf(path,library_id="local",library_version=""):
   functional_line=next((line for line in legacy_text.splitlines() if "functional" in line.lower()),"")
   xc_value=next((name for name in ("PBE","PW91","BLYP","PZ","LDA") if name in functional_line.upper()),None)
  xc=(xc_value or "unknown").lower().replace("_","-")
+ if "pbx" in xc and "pbc" in xc: xc="pbe"
  aliases={"lda":"pz","perdew-zunger":"pz","perdew-zunger-lda":"pz","perdew-burke-ernzerhof":"pbe","pbe":"pbe","pw91":"pw91","perdew-wang-91":"pw91","blyp":"blyp","becke-lee-yang-parr":"blyp"}; xc=aliases.get(xc,xc)
  kind=(attr("pseudo_type","pp_type","is-ultrasoft") or "UNKNOWN").upper()
  if kind == "UNKNOWN" and legacy:

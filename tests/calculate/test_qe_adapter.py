@@ -82,6 +82,18 @@ class QEAdapterTests(unittest.TestCase):
             with self.assertRaisesRegex(UnsupportedQECalculationError, calculation_id):
                 QuantumEspressoAdapter().compile_plan(plan)
 
+    def test_e3_soc_requires_every_species_be_fully_relativistic(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); scalar=root/"C.UPF"; scalar.write_text("<UPF><PP_HEADER element=\"C\" functional=\"PBE\" pseudo_type=\"NC\" relativistic=\"scalar-relativistic\"/></UPF>")
+            import hashlib
+            selected={"C":{"filename":scalar.name,"source":str(scalar),"sha256":hashlib.sha256(scalar.read_bytes()).hexdigest()}}
+            with self.assertRaisesRegex(InvalidQEParameterError,"fully relativistic pseudopotential for C"):
+                QuantumEspressoAdapter().compile_plan(CalculationCompiler(request(["scf"],parameters={"pseudopotentials":selected,"spin_treatment":"SOC"})).compile())
+            full=root/"C_rel.UPF"; full.write_text("<UPF><PP_HEADER element=\"C\" functional=\"PBE\" pseudo_type=\"NC\" relativistic=\"fully-relativistic\" has_so=\"T\"/></UPF>")
+            selected={"C":{"filename":full.name,"source":str(full),"sha256":hashlib.sha256(full.read_bytes()).hexdigest()}}
+            generated=QuantumEspressoAdapter().compile_plan(CalculationCompiler(request(["scf"],parameters={"pseudopotentials":selected,"spin_treatment":"SOC"})).compile())
+            self.assertIn("noncolin = .true.",generated.tasks[0].input_text); self.assertIn("lspinorb = .true.",generated.tasks[0].input_text); self.assertNotIn("nspin = 2",generated.tasks[0].input_text)
+
     def test_missing_pseudo_is_typed_and_transactional(self):
         structure = json.loads(json.dumps(STRUCTURE_A))
         structure["atoms"].append({"element": "N", "x": 1.0, "y": 1.0, "z": 1.0})

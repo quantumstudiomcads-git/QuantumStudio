@@ -6,7 +6,7 @@ import numpy as np
 from .models import ResultProvenance, ResultStatus, ScientificResult
 RY_TO_EV=13.605693122994
 class ResultParseError(RuntimeError): pass
-def _prov(path, *, request_id="", execution_id="", task_id="", tool_id="", parser_id="qe"):
+def _prov(path, *, request_id="", execution_id="", task_id="", tool_id="", parser_id="qe", **_context):
  p=Path(path).resolve();
  if not p.is_file(): raise ResultParseError("Result source artifact is missing.")
  return ResultProvenance(request_id,execution_id,task_id,"quantum_espresso",tool_id,(str(p),),{str(p):hashlib.sha256(p.read_bytes()).hexdigest()},parser_id)
@@ -102,6 +102,18 @@ def _source_headers(path):
 def parse_dos(path, **kwargs):
     """Parse QE dos.x scalar/non-spin output without changing its raw energy axis."""
     data=_numeric_rows(path)
+    method=(kwargs.get("method_metadata") or {}).get("spin_treatment", "SCALAR_NONSPIN")
+    if method == "COLLINEAR_SPIN":
+        headers="\n".join(_source_headers(path)).lower()
+        if data.shape[1] != 4 or "dosup" not in headers or "dosdw" not in headers: raise ResultParseError("QE 7.6 collinear dos.x requires E, dosup(E), dosdw(E), Int dos(E).")
+        energy=data[:,0]; _monotonic_energy(energy)
+        fermi=re.search(r"EFermi\s*=\s*("+_QE_NUMBER+r")\s*eV",headers,re.I)
+        scalars={}; metadata={"contract_version":"v0.21-e3","units":{"energy":"eV","dos_up":"states/eV/cell","dos_down":"states/eV/cell","integrated_dos":"states/cell"},"energy_reference":{"raw":"engine_output","display_default":"Fermi = 0" if fermi else "Absolute"},"normalization":"PER_CELL","source_energy_unit":"eV","spin_semantics":"COLLINEAR_SPIN","parser_diagnostics":[],"electronic_method":kwargs.get("method_metadata",{})}
+        if fermi:
+            value=_qe_float(fermi.group(1)); scalars["fermi_energy"]={"value":value,"unit":"eV"}; metadata["fermi_energy_eV"]=value; metadata["fermi_reference"]={"source":"dos.x header","source_task":"qe_dos","value_eV":value}
+        integrated=data[:,3]
+        if np.any(np.diff(integrated)<-1e-7): raise ResultParseError("Integrated DOS is not monotonic.")
+        return ScientificResult("DOSResult",ResultStatus.VALID,_prov(path,tool_id="dos.x",parser_id="qe.dos",**kwargs),scalars=scalars,arrays={"energy":energy,"dos_up":data[:,1],"dos_down":data[:,2],"integrated_dos":integrated},metadata=metadata)
     if data.shape[1] not in (2,3): raise ResultParseError("QE non-spin dos.x output requires E, DOS(E), and optional integrated DOS columns.")
     energy=data[:,0]; _monotonic_energy(energy)
     headers="\n".join(_source_headers(path)); fermi=re.search(r"EFermi\s*=\s*("+_QE_NUMBER+r")\s*eV",headers,re.I)
@@ -202,6 +214,7 @@ def parse_pdos(path, **kwargs):
     if not files: raise ResultParseError("No QE PDOS component files were found in the generated task directory.")
     pattern=re.compile(r"(?:^|\.)pdos_atm#(\d+)\(([^)]+)\)_wfc#(\d+)\(([^)]+)\)")
     components=[]; energy=None; warnings=[]
+    method=(kwargs.get("method_metadata") or {}).get("spin_treatment", "SCALAR_NONSPIN"); collinear=method == "COLLINEAR_SPIN"
     lmap={"s":0,"p":1,"d":2,"f":3}
     for item in files:
         match=pattern.search(item.name)
@@ -210,8 +223,8 @@ def parse_pdos(path, **kwargs):
         try: data=_numeric_rows(item)
         except ResultParseError as error:
             warnings.append(item.name+": "+str(error)); continue
-        if data.shape[1] < 3:
-            warnings.append(item.name+": QE non-spin PDOS requires energy, integrated DOS, and total projected DOS columns."); continue
+        if data.shape[1] < (5 if collinear else 3):
+            warnings.append(item.name+(": QE 7.6 collinear PDOS requires E, ldosup, ldosdw, pdosup, pdosdw columns." if collinear else ": QE non-spin PDOS requires energy, integrated DOS, and total projected DOS columns.")); continue
         axis=data[:,0]
         try: _monotonic_energy(axis)
         except ResultParseError as error:
@@ -220,6 +233,11 @@ def parse_pdos(path, **kwargs):
             raise ResultParseError("PDOS energy grids are incompatible; components are not interpolated.")
         energy=axis
         orbital=match.group(4).strip(); shell=orbital[:1].lower()
+        if collinear:
+            for spin,values,integrated in (("UP",data[:,3],data[:,1]),("DOWN",data[:,4],data[:,2])):
+                component={"atom_index":int(match.group(1)),"atom":int(match.group(1)),"species":match.group(2).strip(),"orbital_index":int(match.group(3)),"orbital":shell if shell in lmap else orbital,"orbital_label":orbital,"l":lmap.get(shell),"spin":spin,"label":f"{match.group(2).strip()}({int(match.group(1))}) — {shell if shell in lmap else orbital} {"↑" if spin == "UP" else "↓"}","array_index":len(components),"source_filename":item.name,"raw_component_columns":max(0,int(data.shape[1]-5))}
+                components.append((component,values,integrated))
+            continue
         component={"atom_index":int(match.group(1)),"atom":int(match.group(1)),"species":match.group(2).strip(),"orbital_index":int(match.group(3)),"orbital":shell if shell in lmap else orbital,"orbital_label":orbital,"l":lmap.get(shell),"label":f"{match.group(2).strip()}({int(match.group(1))}) — {shell if shell in lmap else orbital}","array_index":len(components),"source_filename":item.name,"raw_component_columns":max(0,int(data.shape[1]-3))}
         components.append((component,data[:,2],data[:,1]))
     if not components: raise ResultParseError("No parseable QE PDOS components were found. "+" ".join(warnings))
@@ -228,7 +246,7 @@ def parse_pdos(path, **kwargs):
     for index,(component,values,integrated) in enumerate(components):
         component["array_index"]=index; component_metadata.append(component); component_values.append(values.tolist())
         if integrated is not None: component_integrated.append(integrated.tolist())
-    metadata={"contract_version":"v0.21-e2","components":component_metadata,"component_values":component_values,"units":{"energy":"eV","pdos":"states/eV/cell","integrated_pdos":"states/cell"},"energy_unit":"eV","normalization":"PER_CELL","source_energy_unit":"eV","spin_semantics":"NON_SPIN","parser_diagnostics":warnings,"energy_reference":{"raw":"engine_output","display_default":"Absolute"}}
+    metadata={"contract_version":"v0.21-e2","components":component_metadata,"component_values":component_values,"units":{"energy":"eV","pdos":"states/eV/cell","integrated_pdos":"states/cell"},"energy_unit":"eV","normalization":"PER_CELL","source_energy_unit":"eV","spin_semantics":"COLLINEAR_SPIN" if collinear else "NON_SPIN","electronic_method":kwargs.get("method_metadata",{}),"parser_diagnostics":warnings,"energy_reference":{"raw":"engine_output","display_default":"Absolute"}}
     if component_integrated: metadata["component_integrated_values"]=component_integrated
     p=_prov_many(files,tool_id="projwfc.x",parser_id="qe.projwfc",**kwargs)
     status=ResultStatus.PARTIAL if warnings else ResultStatus.VALID

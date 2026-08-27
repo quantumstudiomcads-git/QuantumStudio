@@ -10,13 +10,15 @@ class DOSPlot(ScientificPlotWidget):
         super().__init__(parent); self._pdos_channels=None
         self.reference=QComboBox(self); self.reference.addItem("Absolute"); self.reference.currentIndexChanged.connect(self._redraw)
         self.integrated=QCheckBox("Show integrated DOS",self); self.integrated.setVisible(False); self.integrated.toggled.connect(self._redraw)
-        self.toolbar.insertWidget(1,QLabel("Energy reference:",self)); self.toolbar.insertWidget(2,self.reference); self.toolbar.insertWidget(3,self.integrated)
+        self.spin_mode=QComboBox(self); self.spin_mode.addItems(["Mirrored", "Both positive"]); self.spin_mode.setVisible(False); self.spin_mode.currentIndexChanged.connect(self._redraw)
+        self.toolbar.insertWidget(1,QLabel("Energy reference:",self)); self.toolbar.insertWidget(2,self.reference); self.toolbar.insertWidget(3,self.integrated); self.toolbar.insertWidget(4,self.spin_mode)
     def set_pdos_channels(self,channels): self._pdos_channels=list(channels)
     def set_result(self,result):
         self.reference.blockSignals(True); self.reference.clear(); self.reference.addItem("Absolute")
         if result.metadata.get("fermi_energy_eV") is not None or result.metadata.get("fermi_energy") is not None or result.scalars.get("fermi_energy") is not None: self.reference.addItem("Fermi = 0")
         self.reference.setCurrentText(result.metadata.get("energy_reference",{}).get("display_default","Absolute")); self.reference.blockSignals(False)
         self.integrated.setVisible(result.result_type=="DOSResult" and "integrated_dos" in result.arrays)
+        self.spin_mode.setVisible(result.metadata.get("spin_semantics")=="COLLINEAR_SPIN")
         super().set_result(result)
     def _redraw(self,*_):
         if self._result is not None: super().set_result(self._result)
@@ -27,12 +29,20 @@ class DOSPlot(ScientificPlotWidget):
         fg="#D9DCE3"; self.axes.set_xlabel("Energy − E_F (eV)" if reference=="Fermi = 0" else "Energy (eV)",color=fg); self.axes.set_ylabel("DOS (states/eV/cell)",color=fg)
         if result.result_type=="PDOSResult":
             channels=self._pdos_channels if self._pdos_channels is not None else pdos_channels(result)
-            for component,values in channels: self.axes.plot(x,values,linewidth=1.2,label=str(component.get("label") or component.get("orbital") or "PDOS"))
+            for component,values in channels:
+                displayed=-__import__("numpy").asarray(values) if component.get("spin")=="DOWN" and self.spin_mode.currentText()=="Mirrored" else values
+                self.axes.plot(x,displayed,linewidth=1.2,label=str(component.get("label") or component.get("orbital") or "PDOS"))
             self.axes.set_title("Projected Density of States",color=fg)
             if len(channels)<=12:self.axes.legend(facecolor="#17191F",labelcolor=fg)
         else:
-            values=result.arrays.get("dos",result.arrays.get("total_dos"))
-            if values is not None:self.axes.plot(x,values,color="#55C7D9",linewidth=1.3,label="DOS")
+            if "dos_up" in result.arrays and "dos_down" in result.arrays:
+                up=result.arrays["dos_up"]; down=result.arrays["dos_down"]; display_down=-__import__("numpy").asarray(down) if self.spin_mode.currentText()=="Mirrored" else down
+                self.axes.plot(x,up,color="#55C7D9",linewidth=1.3,label="Spin up ↑")
+                self.axes.plot(x,display_down,color="#E8A85C",linewidth=1.3,label="Spin down ↓" + (" (mirrored)" if self.spin_mode.currentText()=="Mirrored" else ""))
+                self.axes.legend(facecolor="#17191F",labelcolor=fg)
+            else:
+                values=result.arrays.get("dos",result.arrays.get("total_dos"))
+                if values is not None:self.axes.plot(x,values,color="#55C7D9",linewidth=1.3,label="DOS")
             if self.integrated.isChecked() and "integrated_dos" in result.arrays:self.axes.plot(x,result.arrays["integrated_dos"],color="#E8A85C",linewidth=1.1,label="N(E)"); self.axes.legend(facecolor="#17191F",labelcolor=fg)
             self.axes.set_title("Density of States",color=fg)
         fermi=result.metadata.get("fermi_energy_eV",result.metadata.get("fermi_energy"))

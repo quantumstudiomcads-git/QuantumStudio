@@ -15,6 +15,16 @@ CALCULATION_DEFAULTS = {
         "spin": False,
 
         "soc": False,
+
+        "spin_treatment": "SCALAR_NONSPIN",
+
+        "starting_magnetization": {},
+
+        "tot_magnetization": None,
+
+        "hubbard_terms": [],
+
+        "hubbard_projector": "ortho-atomic",
     },
 
 
@@ -35,6 +45,16 @@ CALCULATION_DEFAULTS = {
         "spin": False,
 
         "soc": False,
+
+        "spin_treatment": "SCALAR_NONSPIN",
+
+        "starting_magnetization": {},
+
+        "tot_magnetization": None,
+
+        "hubbard_terms": [],
+
+        "hubbard_projector": "ortho-atomic",
     },
 
 
@@ -49,6 +69,16 @@ CALCULATION_DEFAULTS = {
         "spin": False,
 
         "soc": False,
+
+        "spin_treatment": "SCALAR_NONSPIN",
+
+        "starting_magnetization": {},
+
+        "tot_magnetization": None,
+
+        "hubbard_terms": [],
+
+        "hubbard_projector": "ortho-atomic",
 
         "kpath_density": "medium",
     },
@@ -71,6 +101,16 @@ CALCULATION_DEFAULTS = {
         "spin": False,
 
         "soc": False,
+
+        "spin_treatment": "SCALAR_NONSPIN",
+
+        "starting_magnetization": {},
+
+        "tot_magnetization": None,
+
+        "hubbard_terms": [],
+
+        "hubbard_projector": "ortho-atomic",
     },
 
 
@@ -91,6 +131,16 @@ CALCULATION_DEFAULTS = {
         "spin": False,
 
         "soc": False,
+
+        "spin_treatment": "SCALAR_NONSPIN",
+
+        "starting_magnetization": {},
+
+        "tot_magnetization": None,
+
+        "hubbard_terms": [],
+
+        "hubbard_projector": "ortho-atomic",
     },
 
 

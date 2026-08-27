@@ -4,7 +4,7 @@
 |---|---|---|
 | E1 SCF completeness and NSCF public/private contract | Terra / High | QE/output semantics and scientific artifact contract |
 | E2 DOS and PDOS end-to-end contracts | Terra / High | QE column, unit, provenance, ResultService, Analyze, and validation semantics |
-| E3 Bands combinations and derived quantities | Terra / High | spin/SOC/hybrid correctness and real validation |
+| E3 collinear spin, SOC/noncollinear, and DFT+U method contracts | Terra / High | QE 7.6 method syntax, parser semantics, provenance, and real validation |
 | E4 DOS/PDOS parser and Analyze completion | Terra / High | known workflow with nontrivial column/spin/unit semantics |
 | E5 VolumetricResult and pp.x field contracts | Terra / High | new scientific data model and QE quantity semantics |
 | E5 Analyze volumetric viewer/export | Terra / High | Qt/rendering after Result contract is fixed |

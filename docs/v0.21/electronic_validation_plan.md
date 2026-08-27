@@ -1,4 +1,4 @@
-# Quantum Studio v0.21 — Electronic Validation Plan (E2)
+# Quantum Studio v0.21 — Electronic Validation Plan (E3)
 
 E1 runtime integration evidence used QE 7.6 discovered through Quantum Studio, direct single-process execution with OMP_NUM_THREADS=1, and the managed SSSP Efficiency 1.3.0 Si pseudo (SHA-256 ae3aefd0811f9499dbc4a72f1f9ae02ef4fc7f3568bf6f559b68668719c69e2b). A two-atom diamond-Si primitive PBE workflow completed SCF → private DOS-purpose 6x6x6 NSCF → dos.x in a temporary workflow-local pseudo directory. SCF produced JOB DONE, its convergence marker, total energy -22.82588915 Ry (-310.56204303437835 eV), and 8.0 electrons; Fermi and magnetization were correctly absent because QE did not print them. NSCF and dos.x each exited 0 with JOB DONE, reused prefix `qs_e1_si_dos`, outdir `../qe_out`, and the generated `qs_e1_si_dos.save` state. This is runtime integration evidence, not a numerical-reference validation.
 
@@ -25,3 +25,12 @@ Runtime success (`JOB DONE`) is necessary but not sufficient. Numerical comparis
 E2 ran the scalar PBE Si chain through CalculationRequest, compiler, QE adapter, workflow-local pseudo provisioning, local execution, automatic ResultService parsing, ResultStore, and offscreen Analyze/export smoke. QE 7.6 used direct execution with MPI ranks 1 and OMP threads 1, a two-atom diamond-Si primitive cell, 6x6x6 SCF mesh, distinct purpose-signed 12x12x12 DOS and PDOS NSCF meshes, and SSSP Efficiency 1.3.0 Si.pbe-n-rrkjus_psl.1.0.0.UPF (SHA-256 ae3aefd0811f9499dbc4a72f1f9ae02ef4fc7f3568bf6f559b68668719c69e2b). SCF, both NSCF tasks, dos.x, and projwfc.x each exited 0 and wrote JOB DONE; all reused prefix qs_e2_si_dos_pdos, outdir ../qe_out, the SCF save state, and workflow-local pseudos. dos.x emitted 2001 monotonic samples from -10 to 10 eV with 0.01 eV spacing, total DOS, integrated DOS, and EFermi = 6.691 eV. projwfc.x emitted four Si components (atom 1/2 times s/p) with a common 1574-point grid; bounded discovery, deterministic aggregation, and CSV/SVG/PNG/PDF output were exercised programmatically. This proves runtime/artifact/parser/UI integration, not literature or numerical-reference validation.
 
 E2 does not make a collinear-spin or SOC claim: no real spin-polarized QE output was executed in this milestone, so spin DOS/PDOS semantics are deferred to E3.
+
+
+## E3 method runtime evidence
+
+Quantum Studio QE 7.6 validation used bcc one-atom Fe with managed SSSP Efficiency PBE scalar-relativistic `Fe.pbe-spn-kjpaw_psl.0.2.1.UPF` (SHA-256 `2317a0d3b136c09b6263e1ba328b505fb1ebf33bb4b28dc3df9e39af3184ef19`) and collinear `starting_magnetization(1)=0.5`. Full SCF → private DOS NSCF → dos.x and SCF → private PDOS NSCF → projwfc.x chains completed with exit 0 and JOB DONE. SCF converged in 8 iterations and parsed total magnetization 2.89 Bohr magneton/cell. Real dos.x emitted `E,dosup,dosdw,Int dos`; real projwfc files emitted `E,ldosup,ldosdw,pdosup,pdosdw`.
+
+A PBE+U Fe workflow with QE 7.6 `HUBBARD (ortho-atomic)` and `U Fe-3d 3.0` completed SCF → private DOS NSCF → dos.x. SCF converged in 17 iterations, parsed -328.93403679 Ry (-4475.375562272358 eV), and total magnetization 3.05 Bohr magneton/cell. This U is an integration test value, not a scientific recommendation.
+
+A one-atom simple Te SOC SCF → Bands workflow used the bundled QE 7.6 fully relativistic PBE NC `Te.rel-pbe-n-nc.UPF` (SHA-256 `55a014358f7d98269dc977768a42b5af01fe8e2db67cc6e126da86fed964f876`), `noncolin=.true.`, and `lspinorb=.true.`. SCF, pw.x Bands, and bands.x stages completed exit 0 with JOB DONE; Results are method-labeled SOC and have no false UP/DOWN claim. These are integration, not numerical-reference, validations.

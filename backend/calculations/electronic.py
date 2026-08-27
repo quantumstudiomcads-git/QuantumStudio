@@ -6,11 +6,11 @@ from backend.calculations.registry import registry
 
 _SCF_PARAMETERS = (
     "accuracy", "functional", "pseudopotential", "ecutwfc", "ecutrho",
-    "conv_thr", "kpoints", "spin", "soc",
+    "conv_thr", "kpoints", "spin", "soc", "spin_treatment", "starting_magnetization", "tot_magnetization", "hubbard_terms", "hubbard_projector", "occupations", "smearing", "degauss",
 )
 _POST_SCF_PARAMETERS = (
     "accuracy", "functional", "pseudopotential", "ecutwfc", "ecutrho",
-    "spin", "soc",
+    "spin", "soc", "spin_treatment", "starting_magnetization", "tot_magnetization", "hubbard_terms", "hubbard_projector", "occupations", "smearing", "degauss",
 )
 
 registry.register(CalculationDefinition(

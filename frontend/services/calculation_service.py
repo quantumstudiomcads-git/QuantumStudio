@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
+import json
 from math import isfinite
 from typing import Any
 
@@ -266,11 +268,26 @@ class CalculationService:
             raise TypeError("Expected a PreparedCalculationRequest.")
         return QuantumEspressoAdapter().write_plan(self.compile_request(prepared_request), output_root)
 
+    def materialize_existing_qe_workflow(self, workflow_root):
+        """Repair workflow-local QE pseudopotentials without re-resolving providers."""
+        from backend.engines.qe import QuantumEspressoAdapter
+        return QuantumEspressoAdapter().materialize_existing_workflow(workflow_root)
+
     def execution_workflow(self, prepared_request: PreparedCalculationRequest, workflow_root):
         """Normalize an already exported workflow for the generic local executor."""
         from backend.execution import normalize_adapter_tasks
         if not isinstance(prepared_request, PreparedCalculationRequest):
             raise TypeError("Expected a PreparedCalculationRequest.")
+        root = Path(workflow_root)
+        manifest = root / "manifest.json"
+        if manifest.is_file():
+            try:
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                data = None
+            if isinstance(data, dict) and data.get("engine_id") == "quantum_espresso":
+                from backend.engines.qe import QuantumEspressoAdapter
+                return normalize_adapter_tasks(prepared_request.id, root, QuantumEspressoAdapter.tasks_from_manifest(root))
         return normalize_adapter_tasks(prepared_request.id, workflow_root, self.preview_engine_inputs(prepared_request))
 
     def workflow_input_available(self, plan) -> bool:

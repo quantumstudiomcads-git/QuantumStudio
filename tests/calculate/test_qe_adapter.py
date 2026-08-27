@@ -94,8 +94,12 @@ class QEAdapterTests(unittest.TestCase):
 
     def test_export_is_deterministic_snapshot_bound_and_refuses_replacement(self):
         source_a = json.loads(json.dumps(STRUCTURE_A))
-        plan = CalculationCompiler(request(["scf"], structure=source_a)).compile()
-        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+        with tempfile.TemporaryDirectory() as pseudo_root, tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            source = Path(pseudo_root) / "C.pbe-n-kjpaw_psl.1.0.0.UPF"
+            source.write_text('<UPF version="2"><PP_HEADER element="C" functional="PBE" pseudo_type="NC" relativistic="scalar-relativistic"/></UPF>', encoding="utf-8")
+            import hashlib
+            pseudos = {"C": {"filename": source.name, "source": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest(), "functional": "PBE"}}
+            plan = CalculationCompiler(request(["scf"], structure=source_a, parameters={"pseudopotentials": pseudos})).compile()
             output_a = QuantumEspressoAdapter().write_plan(plan, first)
             output_b = QuantumEspressoAdapter().write_plan(plan, second)
             input_a = (output_a / "001_scf" / "scf.in").read_bytes()
@@ -103,6 +107,7 @@ class QEAdapterTests(unittest.TestCase):
             self.assertEqual(input_a, input_b)
             self.assertIn(b"2.46 0 0", input_a)
             self.assertNotIn(b"99", input_a)
+            self.assertTrue((output_a / "pseudos" / source.name).is_file())
             with self.assertRaises(QEOutputExistsError):
                 QuantumEspressoAdapter().write_plan(plan, first)
 

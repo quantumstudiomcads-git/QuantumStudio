@@ -23,6 +23,7 @@ from backend.engines.qe.models import (
     PseudopotentialSelection,
     UnsupportedQECalculationError,
 )
+from backend.engines.qe.materialization import materialize_workflow_pseudopotentials
 from backend.engines.qe.writer import phonon_input, pw_input
 from backend.engines.qe.postprocessing import post_input, pw_bands_input
 from backend.pseudopotentials import PseudoSet, Relativity, inspect_upf, validate_pseudo_set
@@ -127,6 +128,10 @@ class QuantumEspressoAdapter(EngineAdapter):
                 if configured.is_file(): candidate = configured
             if candidate.is_file():
                 record = inspect_upf(candidate, selection.library_id or "local", selection.library_version or "")
+                if selection.sha256 and record.sha256 != selection.sha256:
+                    raise InvalidQEParameterError(
+                        f"Selected pseudopotential SHA-256 does not match provenance for {element!r}."
+                    )
                 records[element] = record
                 entry.update({"source": record.path, "sha256": record.sha256, "xc_functional": record.xc_functional, "pseudo_type": record.pseudo_type.value, "relativity": record.relativity.value})
             provenance[element] = entry
@@ -165,30 +170,34 @@ class QuantumEspressoAdapter(EngineAdapter):
         pseudo_provenance = self._validate_pseudo_compatibility(plan, pseudos)
         qe_tasks: list[QETaskInput] = []
         for index, task in enumerate(plan.tasks, start=1):
+            directory = f"{index:03d}_{_safe_identifier(task.calculation_id, 'task')}"
+            task_context = QEWorkflowContext(
+                request_id=context.request_id, prefix=context.prefix, outdir=context.outdir,
+                pseudo_dir=Path(os.path.relpath("pseudos", start=directory)).as_posix(),
+            )
             parameters = dict(task.parameters)
             if task.calculation_id in {"scf", "relax", "vc_relax"}:
-                input_text = pw_input(task.calculation_id, parameters, plan.structure, context, pseudos)
+                input_text = pw_input(task.calculation_id, parameters, plan.structure, task_context, pseudos)
                 executable, input_filename = "pw.x", f"{task.calculation_id}.in"
             elif task.semantic_task_type == "qe_pw_bands":
-                input_text, executable, input_filename = pw_bands_input(parameters, plan.structure, context, pseudos), "pw.x", "bands_pw.in"
+                input_text, executable, input_filename = pw_bands_input(parameters, plan.structure, task_context, pseudos), "pw.x", "bands_pw.in"
             elif task.semantic_task_type == "qe_pw_nscf":
-                input_text, executable, input_filename = pw_input("qe_pw_nscf", parameters, plan.structure, context, pseudos), "pw.x", "nscf.in"
+                input_text, executable, input_filename = pw_input("qe_pw_nscf", parameters, plan.structure, task_context, pseudos), "pw.x", "nscf.in"
             elif task.semantic_task_type in {"qe_bands","qe_dos","qe_projwfc","qe_pp","qe_q2r","qe_matdyn"}:
-                input_text, executable, input_filename = post_input(task.semantic_task_type, parameters, context), {"qe_bands":"bands.x","qe_dos":"dos.x","qe_projwfc":"projwfc.x","qe_pp":"pp.x","qe_q2r":"q2r.x","qe_matdyn":"matdyn.x"}[task.semantic_task_type], task.semantic_task_type.removeprefix("qe_") + ".in"
+                input_text, executable, input_filename = post_input(task.semantic_task_type, parameters, task_context), {"qe_bands":"bands.x","qe_dos":"dos.x","qe_projwfc":"projwfc.x","qe_pp":"pp.x","qe_q2r":"q2r.x","qe_matdyn":"matdyn.x"}[task.semantic_task_type], task.semantic_task_type.removeprefix("qe_") + ".in"
             elif task.semantic_task_type == "qe_ph":
-                input_text, executable, input_filename = phonon_input(parameters, context), "ph.x", "phonons.in"
+                input_text, executable, input_filename = phonon_input(parameters, task_context), "ph.x", "phonons.in"
             elif task.calculation_id == "phonons":
-                input_text = phonon_input(parameters, context)
+                input_text = phonon_input(parameters, task_context)
                 executable, input_filename = "ph.x", "phonons.in"
             else:  # validate_plan makes this branch defensive only.
                 raise UnsupportedQECalculationError(self.support_reason(task.calculation_id) or task.calculation_id)
-            directory = f"{index:03d}_{_safe_identifier(task.calculation_id, 'task')}"
             qe_tasks.append(QETaskInput(
                 task_id=task.id, calculation_id=task.calculation_id, executable=executable,
                 input_filename=input_filename, output_filename=input_filename.removesuffix(".in") + ".out",
                 working_directory=directory, input_text=input_text,
                 depends_on_task_ids=tuple(task.depends_on_task_ids),
-                metadata={"engine_id":task.engine_id,"semantic_task_type":task.semantic_task_type,"parameter_signature":task.parameter_signature,"artifact_inputs":list(task.artifact_inputs),"artifact_outputs":list(task.artifact_outputs),"qe_prefix": context.prefix, "qe_outdir": context.outdir, "structure_fingerprint": structure_fingerprint(plan.structure), "pseudopotentials": pseudo_provenance, "task_metadata": task.metadata},
+                metadata={"engine_id":task.engine_id,"semantic_task_type":task.semantic_task_type,"parameter_signature":task.parameter_signature,"artifact_inputs":list(task.artifact_inputs),"artifact_outputs":list(task.artifact_outputs),"qe_prefix": task_context.prefix, "qe_outdir": task_context.outdir, "qe_pseudo_dir": task_context.pseudo_dir, "structure_fingerprint": structure_fingerprint(plan.structure), "pseudopotentials": pseudo_provenance, "task_metadata": task.metadata},
             ))
         manifest = {
             "engine_id": self.engine_id,
@@ -202,6 +211,60 @@ class QuantumEspressoAdapter(EngineAdapter):
             ],
         }
         return QEGeneration(self.engine_id, context, tuple(qe_tasks), manifest)
+
+    @classmethod
+    def tasks_from_manifest(cls, workflow_root: str | Path) -> tuple[QETaskInput, ...]:
+        """Rebuild executor task descriptors without touching pseudo source caches."""
+        root = Path(workflow_root)
+        try:
+            manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as error:
+            raise QEInputGenerationError("Generated workflow manifest is missing or invalid.") from error
+        if not isinstance(manifest, Mapping) or manifest.get("engine_id") != ENGINE_ID:
+            raise QEInputGenerationError("Generated workflow manifest is not a Quantum ESPRESSO workflow.")
+        tasks = manifest.get("tasks")
+        if not isinstance(tasks, list):
+            raise QEInputGenerationError("Generated workflow manifest has no task records.")
+        result = []
+        for entry in tasks:
+            if not isinstance(entry, Mapping) or not isinstance(entry.get("metadata"), Mapping):
+                raise QEInputGenerationError("Generated workflow task metadata is invalid.")
+            required = ("task_id", "calculation_id", "executable", "input_filename", "output_filename", "working_directory")
+            if any(not isinstance(entry.get(key), str) or not entry[key] for key in required):
+                raise QEInputGenerationError("Generated workflow task record is invalid.")
+            result.append(QETaskInput(
+                task_id=entry["task_id"], calculation_id=entry["calculation_id"], executable=entry["executable"],
+                input_filename=entry["input_filename"], output_filename=entry["output_filename"],
+                working_directory=entry["working_directory"], input_text="",
+                depends_on_task_ids=tuple(entry.get("dependencies", ())), metadata=dict(entry["metadata"]),
+            ))
+        return tuple(result)
+
+    def materialize_existing_workflow(self, workflow_root: str | Path) -> Path:
+        """Repair a stale exported QE workflow from its selected source provenance."""
+        root = Path(workflow_root).resolve()
+        manifest_path = root / "manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as error:
+            raise QEInputGenerationError("Generated workflow manifest is missing or invalid.") from error
+        if not isinstance(manifest, Mapping) or manifest.get("engine_id") != ENGINE_ID:
+            raise QEInputGenerationError("Generated workflow manifest is not a Quantum ESPRESSO workflow.")
+        pseudos = manifest.get("pseudopotentials")
+        if not isinstance(pseudos, Mapping):
+            raise QEInputGenerationError("Generated workflow has no pseudopotential provenance.")
+        manifest["materialized_pseudopotentials"] = materialize_workflow_pseudopotentials(root, pseudos)
+        temporary = None
+        with tempfile.NamedTemporaryFile(prefix=".manifest.", dir=root, mode="w", encoding="utf-8", delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(manifest, output, indent=2, sort_keys=True)
+            output.write("\n")
+        try:
+            os.replace(temporary, manifest_path)
+        finally:
+            if temporary is not None and temporary.exists():
+                temporary.unlink()
+        return root
 
     def write_plan(self, plan, output_root, *, overwrite: bool = False) -> Path:
         """Write an all-or-nothing derived export; existing request exports are refused.
@@ -225,6 +288,18 @@ class QuantumEspressoAdapter(EngineAdapter):
                 task_dir = staging / task.working_directory
                 task_dir.mkdir()
                 (task_dir / task.input_filename).write_text(task.input_text, encoding="utf-8")
+            materials = materialize_workflow_pseudopotentials(staging, generation.manifest.get("pseudopotentials", {}))
+            generation.manifest["materialized_pseudopotentials"] = materials
+            for task in generation.tasks:
+                if "ATOMIC_SPECIES" not in task.input_text:
+                    continue
+                pseudo_dir = (staging / task.working_directory / task.metadata["qe_pseudo_dir"]).resolve()
+                if pseudo_dir != (staging / "pseudos").resolve():
+                    raise QEInputGenerationError(f"QE pseudo_dir does not resolve to workflow pseudos for {task.input_filename}.")
+                for material in materials.values():
+                    filename = material["filename"]
+                    if filename in task.input_text and not (pseudo_dir / filename).is_file():
+                        raise QEInputGenerationError(f"Generated pseudopotential file is missing: {filename}")
             (staging / "manifest.json").write_text(
                 json.dumps(generation.manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )

@@ -9,6 +9,8 @@ The workspace does not modify the structure.
 """
 
 import json
+import logging
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -45,10 +47,14 @@ from frontend.services.calculation_service import CalculationService
 from frontend.services.result_service import ResultService
 from frontend.calculate.parameter_session import PRESETS, descriptors, parse_value, preset_parameters
 from frontend.calculate.functional_pseudo_dialog import FunctionalPseudoDialog
+from frontend.calculate.preparation import CalculationPreparationWorker
+from frontend.calculate.qe_discovery import QuantumEspressoDiscoveryWorker
 from frontend.calculate.band_path_dialog import BandPathDialog
 from frontend.calculate.results_dialog import ResultsDialog
 from frontend.calculate.typed_parameter_controls import control_value, make_control
 from backend.execution import ExecutionStore, LocalExecutionManager, LocalExecutionService, LocalToolConfiguration, RecoveryState, available_logical_cpus
+
+LOGGER = logging.getLogger(__name__)
 
 
 class CalculateWorkspace(QWidget):
@@ -80,10 +86,21 @@ class CalculateWorkspace(QWidget):
 
         self.execution_plan = None
         self.calculation_request = None
+        # These are read while the UI constructs its initial availability state.
+        self._workflow_compiled = False
+        self._workflow_generated = False
+        self._generated_root_path = None
         self.current_structure_summary = None
         self._local_execution_service = None
         self._active_execution = None
-        self.local_tool_configuration = LocalToolConfiguration()
+        self._last_execution_output_paths = ()
+        self._preparation_worker = None
+        self._preparation_for_run = False
+        self._pseudo_provisioner = None
+        self.local_tool_configuration = LocalToolConfiguration.load_machine_configuration()
+        self._qe_discovery_worker = None
+        self._qe_discovery_resume_run = False
+        self._qe_discovery_started = False
         self.result_service = ResultService()
 
         self._build_ui()
@@ -92,6 +109,16 @@ class CalculateWorkspace(QWidget):
         self._populate_calculations()
         self._refresh_configured_calculations()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._qe_discovery_started:
+            self._qe_discovery_started = True
+            QTimer.singleShot(0, self._start_qe_discovery)
+
+    def closeEvent(self, event):
+        for worker in (self._preparation_worker, self._qe_discovery_worker):
+            if worker is not None and worker.isRunning(): worker.wait()
+        super().closeEvent(event)
 
     # ============================================================
     # QUANTUM STUDIO — CALCULATE WORKSPACE DARK THEME
@@ -459,7 +486,7 @@ class CalculateWorkspace(QWidget):
             1,
         )
 
-        self.catalog_create_button = QPushButton("Create Selected", catalog_panel)
+        self.catalog_create_button = QPushButton("Add Selected Calculations", catalog_panel)
         self.catalog_create_button.setEnabled(False)
         self.catalog_create_button.clicked.connect(self._create_calculation_requested)
         catalog_layout.addWidget(self.catalog_create_button)
@@ -490,7 +517,7 @@ class CalculateWorkspace(QWidget):
 
         selection_layout.setSpacing(10)
 
-        configured_header = QLabel("Configured Calculations")
+        configured_header = QLabel("My Calculations")
         configured_header.setObjectName("panelTitle")
         selection_layout.addWidget(configured_header)
         self.configured_list = QListWidget()
@@ -517,7 +544,7 @@ class CalculateWorkspace(QWidget):
             button.setEnabled(False)
             button.setVisible(False)
         selection_layout.addWidget(self.request_name)
-        self.edit_parameters_button = QPushButton("Configure Parameters…")
+        self.edit_parameters_button = QPushButton("Configure")
         self.edit_parameters_button.clicked.connect(self._configure_parameters)
         selection_layout.addWidget(self.edit_parameters_button)
         self.request_more_button = QToolButton(selection_panel)
@@ -708,21 +735,21 @@ class CalculateWorkspace(QWidget):
 
         # Secondary actions retain their existing handlers/enabling state but live
         # in one contextual menu instead of permanently crowding the action bar.
-        self.create_button = QPushButton("Create Calculation", self); self.create_button.setEnabled(False); self.create_button.clicked.connect(self._create_calculation_requested)
+        self.create_button = QPushButton("Add Calculation", self); self.create_button.setEnabled(False); self.create_button.clicked.connect(self._create_calculation_requested)
         self.compile_button = QPushButton("Compile Workflow", self); self.compile_button.setEnabled(False); self.compile_button.clicked.connect(self._compile_requested)
-        self.preview_qe_button = QPushButton("Preview QE Inputs", self); self.preview_qe_button.setEnabled(False); self.preview_qe_button.clicked.connect(self._preview_qe_inputs)
+        self.preview_qe_button = QPushButton("View QE Inputs", self); self.preview_qe_button.setEnabled(False); self.preview_qe_button.clicked.connect(self._preview_qe_inputs)
         self.configure_tools_button = QPushButton("Local Tools…", self); self.configure_tools_button.clicked.connect(self._configure_local_tools)
         self.view_results_button = QPushButton("Results…", self); self.view_results_button.clicked.connect(self._view_results)
         for secondary in (self.create_button, self.compile_button, self.preview_qe_button, self.configure_tools_button, self.view_results_button):
             secondary.setVisible(False)
         self.more_button = QToolButton(self); self.more_button.setText("More ▾"); self.more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        menu=QMenu(self.more_button); self._more_create_action=menu.addAction("Create Calculation",self.create_button.click); menu.addSeparator(); self._more_preview_action=menu.addAction("Preview QE Inputs",self.preview_qe_button.click); menu.addAction("Local Tools…",self.configure_tools_button.click); menu.addAction("Results…",self.view_results_button.click); self.more_button.setMenu(menu); footer.addWidget(self.more_button)
+        menu=QMenu(self.more_button); self._more_create_action=menu.addAction("Add Calculation",self.create_button.click); menu.addSeparator(); self._more_preview_action=menu.addAction("View QE Inputs",self.preview_qe_button.click); menu.addAction("Local Tools…",self.configure_tools_button.click); menu.addAction("View Last Output…",self._view_last_execution_output); menu.addAction("Results…",self.view_results_button.click); self.more_button.setMenu(menu); footer.addWidget(self.more_button)
 
-        self.compile_button.setVisible(True)
+        self.compile_button.setVisible(False)
         self.compile_button.setText("Compile")
         self.compile_button.setObjectName("compileButton")
         footer.addWidget(self.compile_button)
-        self.generate_qe_button = QPushButton("Generate", self); self.generate_qe_button.setObjectName("compileButton"); self.generate_qe_button.setEnabled(False); self.generate_qe_button.clicked.connect(self._generate_qe_inputs); footer.addWidget(self.generate_qe_button)
+        self.generate_qe_button = QPushButton("Generate QE Inputs", self); self.generate_qe_button.setObjectName("compileButton"); self.generate_qe_button.setEnabled(False); self.generate_qe_button.clicked.connect(self._generate_qe_inputs); footer.addWidget(self.generate_qe_button)
         self.execute_button = QPushButton("Run", self); self.execute_button.setObjectName("executeButton"); self.execute_button.setEnabled(False); self.execute_button.clicked.connect(self._execute_requested); footer.addWidget(self.execute_button)
 
         root.addLayout(footer)
@@ -1032,8 +1059,9 @@ class CalculateWorkspace(QWidget):
                 qe_available = self.calculation_service.workflow_input_available(self.execution_plan)
             self.preview_qe_button.setEnabled(qe_available)
             self._more_preview_action.setEnabled(qe_available)
-            self.generate_qe_button.setEnabled(qe_available and self.execution_plan is not None and self._workflow_compiled and not self._workflow_generated)
-            self.workflow_status.setText("Status: Ready to generate" if qe_available else "Status: Configure and compile the selected calculation")
+            self.generate_qe_button.setEnabled(request_ready and not self._workflow_generated)
+            self.execute_button.setEnabled(request_ready)
+            self.workflow_status.setText("Status: QE inputs ready" if self._workflow_generated else ("Status: Ready to generate QE inputs" if request_ready else "Status: Select a calculation and add it to your project"))
 
     def refresh(self):
         """Refresh derived display state; existing request snapshots are intentionally unchanged."""
@@ -1400,54 +1428,118 @@ class CalculateWorkspace(QWidget):
         self.execution_preview.setText("\n".join(lines))
         self._update_compile_availability()
 
-    def _preview_qe_inputs(self):
-        if self.calculation_request is None:
-            return
-        try:
-            generation = self.calculation_service.preview_engine_inputs(self.calculation_request)
-            dialog = QDialog(self)
-            dialog.setWindowTitle("Quantum ESPRESSO Input Preview")
-            layout = QVBoxLayout(dialog)
-            preview = QPlainTextEdit(dialog)
-            preview.setReadOnly(True)
-            preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-            preview.setStyleSheet("font-family: monospace;")
-            preview.setPlainText("\n\n".join(
-                f"# {task.working_directory}/{task.input_filename} ({task.executable})\n\n{task.input_text}"
-                for task in generation
-            ))
-            layout.addWidget(preview)
-            dialog.resize(840, 680)
-            dialog.exec()
-        except Exception as error:
-            QMessageBox.warning(self, "QE Input Preview", str(error))
+    def _generated_root(self):
+        existing = self.project.execution_roots().get(str(self.calculation_request.id)) if hasattr(self.project, "execution_roots") and self.calculation_request else None
+        if existing: return existing
+        base = Path(self.project.file_path).parent if getattr(self.project, "file_path", None) else Path.cwd()
+        return str(base / ".quantum_studio_workflows" / str(self.calculation_request.id))
 
-    def _generate_qe_inputs(self):
+    def _preview_qe_inputs(self):
+        root = getattr(self, "_generated_root_path", None)
+        if not root or not Path(root).exists():
+            QMessageBox.information(self, "View QE Inputs", "Generate QE inputs first.")
+            return
+        files=sorted(path for path in Path(root).rglob("*") if path.is_file() and path.suffix in {".in", ".win", ".epwin"})
+        if not files:
+            QMessageBox.information(self, "View QE Inputs", "No generated text input files were found.")
+            return
+        dialog=QDialog(self); dialog.setWindowTitle("Quantum ESPRESSO Inputs"); layout=QVBoxLayout(dialog); preview=QPlainTextEdit(dialog); preview.setReadOnly(True); preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap); preview.setStyleSheet("font-family: monospace;")
+        preview.setPlainText("\n\n".join(f"# {path.relative_to(root)}\n\n{path.read_text(encoding='utf-8', errors='replace')}" for path in files)); layout.addWidget(preview); dialog.resize(840,680); dialog.exec()
+
+    def _set_preparation_active(self, active):
+        self.generate_qe_button.setEnabled(not active and self.calculation_request is not None and not self._workflow_generated)
+        self.execute_button.setEnabled(not active and self.calculation_request is not None)
+        self.edit_parameters_button.setEnabled(not active and self.calculation_request is not None)
+        if active:
+            self.execute_button.setText("Preparing…")
+            self.workflow_status.setText("Status: Preparing calculation…")
+        elif self._active_execution is None:
+            self.execute_button.setText("Run")
+
+    def _start_preparation(self, for_run=False, repair_workflow_root=None):
         request_id = self._selected_configured_request_id()
-        if request_id is None or self.calculation_request is None or not self._workflow_compiled:
-            QMessageBox.warning(self, "Generate QE Inputs", "Create and select a saved calculation request first.")
+        if request_id is None or self.calculation_request is None:
+            QMessageBox.warning(self, "Run" if for_run else "Generate QE Inputs", "Add and configure a calculation first.")
             return
-        root = QFileDialog.getExistingDirectory(self, "Choose QE input export directory")
-        if not root:
+        if self._preparation_worker is not None:
+            QMessageBox.information(self, "Preparing Calculation", "Calculation preparation is already in progress.")
             return
-        try:
-            location = self.calculation_service.generate_engine_inputs(self.calculation_request, root)
-            if hasattr(self.project, "register_execution_root"):
-                self.project.register_execution_root(self.calculation_request.id, location)
-            self._workflow_generated = True
-            self.generate_qe_button.setEnabled(False)
-            self.execute_button.setEnabled(True)
-            self.workflow_status.setText("Status: Workflow generated — ready to run")
-            QMessageBox.information(
-                self, "QE Inputs Generated",
-                f"QE inputs were generated at:\n{location}\n\nNo calculation was executed.",
-            )
-        except Exception as error:
-            QMessageBox.warning(self, "Generate QE Inputs", str(error))
+        self._preparation_for_run=bool(for_run)
+        self._set_preparation_active(True)
+        worker=CalculationPreparationWorker(self.calculation_service,self.calculation_request,self._generated_root(),self._pseudo_provisioner,self,repair_workflow_root=repair_workflow_root)
+        self._preparation_worker=worker
+        worker.progress.connect(self._preparation_progress)
+        worker.finished.connect(self._preparation_completed)
+        worker.start()
+
+    def _preparation_completed(self):
+        worker=self._preparation_worker
+        if worker is None: return
+        result=worker.result; error=worker.error
+        self._finish_preparation_worker()
+        if error is not None: self._preparation_failed(*error)
+        elif result is not None: self._preparation_ready(*result)
+
+    def _preparation_progress(self, message):
+        self.workflow_status.setText("Status: "+str(message))
+
+    def _finish_preparation_worker(self):
+        worker=self._preparation_worker
+        if worker is not None:
+            worker.wait()
+            worker.deleteLater()
+            self._preparation_worker=None
+
+    def _preparation_ready(self, prepared, plan, location):
+        run_after=self._preparation_for_run
+        self._preparation_for_run=False
+        self._finish_preparation_worker()
+        self.project.update_calculation(prepared.backend_request)
+        self.calculation_request=prepared
+        self.execution_plan=plan
+        self.parameters_input.setText(json.dumps(prepared.backend_request.parameters,sort_keys=True))
+        if hasattr(self.project,"register_execution_root"):
+            self.project.register_execution_root(prepared.id,location)
+        self._workflow_compiled=True
+        self._workflow_generated=True
+        self._generated_root_path=str(location)
+        self.workflow_status.setText("Status: QE inputs ready")
+        self._set_preparation_active(False)
+        self._update_compile_availability()
+        if run_after:
+            self.workflow_status.setText("Status: Starting calculation…")
+            self._start_prepared_execution()
+        else:
+            QMessageBox.information(self,"QE Inputs Generated",f"QE inputs were generated at:\n{location}\n\nNo calculation was executed.")
+
+    def _preparation_failed(self, message, technical):
+        self._preparation_for_run=False
+        self._finish_preparation_worker()
+        LOGGER.debug("Calculate preparation failed:\n%s",technical)
+        self.workflow_status.setText("Status: Preparation failed")
+        self._set_preparation_active(False)
+        self._update_compile_availability()
+        QMessageBox.warning(self,"Calculation Preparation",str(message))
+
+    def _generate_qe_inputs(self, _checked=False):
+        self._start_preparation(False)
 
     # ============================================================
     # EXECUTE
     # ============================================================
+
+    def _view_last_execution_output(self):
+        paths = tuple(Path(path) for path in self._last_execution_output_paths if Path(path).is_file())
+        if not paths:
+            QMessageBox.information(self, "View Output", "No execution output is available yet.")
+            return
+        dialog = QDialog(self); dialog.setWindowTitle("Execution Output"); layout = QVBoxLayout(dialog)
+        viewer = QPlainTextEdit(dialog); viewer.setReadOnly(True); viewer.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap); viewer.setStyleSheet("font-family: monospace;")
+        blocks = []
+        for path in paths:
+            data = path.read_bytes()[-131072:].decode("utf-8", errors="replace")
+            blocks.append(f"# {path}\n\n{data}")
+        viewer.setPlainText("\n\n".join(blocks)); layout.addWidget(viewer); dialog.resize(900, 680); dialog.exec()
 
     def _view_results(self):
         root=QFileDialog.getExistingDirectory(self, "Choose generated workflow directory")
@@ -1460,41 +1552,95 @@ class CalculateWorkspace(QWidget):
         value = self.mpi_launcher_input.text().strip()
         self.local_tool_configuration.mpi_launcher = value or "auto"
 
-    def _configure_local_tools(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Local Tool Configuration")
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel("Optional absolute executable paths. Blank entries resolve from PATH."))
-        form = QFormLayout()
-        fields = {}
-        for tool_id in ("pw.x", "ph.x", "bands.x", "dos.x", "projwfc.x", "pp.x", "q2r.x", "matdyn.x", "pw2wannier90.x", "wannier90.x", "epw.x"):
-            field = QLineEdit(self.local_tool_configuration.tool_paths.get(tool_id, ""), dialog)
-            fields[tool_id] = field
-            form.addRow(tool_id, field)
-        mpi_field = QLineEdit(self.local_tool_configuration.mpi_launcher if self.local_tool_configuration.mpi_launcher != "auto" else "Auto", dialog)
-        mpi_field.setPlaceholderText("Auto or absolute launcher path")
-        form.addRow("MPI launcher", mpi_field)
-        layout.addLayout(form)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, dialog)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.local_tool_configuration.tool_paths = {tool_id: field.text().strip() for tool_id, field in fields.items() if field.text().strip()}
-            self.mpi_launcher_input.setText(mpi_field.text())
-            self._sync_resource_configuration()
+    def _start_qe_discovery(self, resume_run=False, deep=False):
+        self._qe_discovery_resume_run = self._qe_discovery_resume_run or bool(resume_run)
+        if self._qe_discovery_worker is not None: return
+        worker=QuantumEspressoDiscoveryWorker(self.local_tool_configuration,deep=deep,parent=self)
+        self._qe_discovery_worker=worker
+        worker.progress.connect(self._qe_discovery_progress)
+        worker.finished.connect(self._qe_discovery_completed)
+        worker.start()
 
-    def _execute_requested(self):
+    def _qe_discovery_progress(self, message):
+        if self._workflow_generated: self.workflow_status.setText("Status: QE inputs ready — "+str(message))
+
+    def _qe_discovery_completed(self):
+        worker=self._qe_discovery_worker
+        if worker is None: return
+        result,error=worker.result,worker.error
+        worker.wait(); worker.deleteLater(); self._qe_discovery_worker=None
+        resume=self._qe_discovery_resume_run; self._qe_discovery_resume_run=False
+        if error is not None:
+            LOGGER.debug("QE discovery failed:\n%s",error[1])
+        installation=result.preferred if result is not None else None
+        if installation is None:
+            if self._workflow_generated: self.workflow_status.setText("Status: QE inputs ready — Quantum ESPRESSO not found")
+            if resume: QMessageBox.warning(self,"Quantum ESPRESSO", "Quantum ESPRESSO could not be found automatically.\n\nChoose an installation folder or install Quantum ESPRESSO and try again.")
+            return
+        self.local_tool_configuration.apply_quantum_espresso(installation)
+        try: self.local_tool_configuration.save_machine_configuration()
+        except OSError as save_error: LOGGER.debug("Could not persist local QE configuration: %s",save_error)
+        if self._workflow_generated: self.workflow_status.setText(f"Status: QE inputs ready — Quantum ESPRESSO {installation.version} detected")
+        if resume: self._start_prepared_execution()
+
+    def _choose_qe_installation_folder(self):
+        folder=QFileDialog.getExistingDirectory(self,"Choose Quantum ESPRESSO installation or bin folder")
+        if not folder: return
+        self.local_tool_configuration.qe_bin_directory=folder
+        self._start_qe_discovery()
+
+    def _configure_local_tools(self):
+        self._start_qe_discovery()
+        dialog=QDialog(self); dialog.setWindowTitle("Local Tools"); layout=QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Quantum ESPRESSO"))
+        status=QLabel(dialog); location=QLabel(dialog); tools=QLabel(dialog)
+        def refresh():
+            version=self.local_tool_configuration.qe_version
+            directory=self.local_tool_configuration.qe_bin_directory
+            status.setText(("✓ Quantum ESPRESSO "+version+" detected") if version else "Searching for Quantum ESPRESSO…")
+            location.setText("Installation: "+(directory or "Not detected"))
+            found=sorted(name for name in ("pw.x","ph.x","bands.x","dos.x","projwfc.x","pp.x","q2r.x","matdyn.x","pw2wannier90.x","epw.x") if name in self.local_tool_configuration.tool_paths)
+            tools.setText("Detected tools: "+(", ".join(found) if found else "—"))
+        refresh(); layout.addWidget(status); layout.addWidget(location); layout.addWidget(tools)
+        actions=QHBoxLayout(); rescan=QPushButton("Rescan",dialog); choose=QPushButton("Choose Installation Folder",dialog); actions.addWidget(rescan); actions.addWidget(choose); layout.addLayout(actions)
+        advanced_toggle=QToolButton(dialog); advanced_toggle.setText("Advanced ▸"); advanced_toggle.setCheckable(True); layout.addWidget(advanced_toggle)
+        advanced=QWidget(dialog); advanced_layout=QFormLayout(advanced); fields={}
+        for tool_id in ("pw.x","ph.x","bands.x","dos.x","projwfc.x","pp.x","q2r.x","matdyn.x","pw2wannier90.x","wannier90.x","epw.x"):
+            field=QLineEdit(self.local_tool_configuration.tool_paths.get(tool_id,""),advanced); fields[tool_id]=field; advanced_layout.addRow(tool_id,field)
+        advanced.setVisible(False); advanced_toggle.toggled.connect(lambda checked: (advanced.setVisible(checked),advanced_toggle.setText("Advanced ▾" if checked else "Advanced ▸"))); layout.addWidget(advanced)
+        def rescan_clicked(): self._start_qe_discovery(); status.setText("Searching for Quantum ESPRESSO…")
+        def choose_clicked():
+            folder=QFileDialog.getExistingDirectory(dialog,"Choose Quantum ESPRESSO installation or bin folder")
+            if folder: self.local_tool_configuration.qe_bin_directory=folder; self._start_qe_discovery(); location.setText("Installation: "+folder); status.setText("Searching for Quantum ESPRESSO…")
+        rescan.clicked.connect(rescan_clicked); choose.clicked.connect(choose_clicked)
+        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel,dialog); buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject); layout.addWidget(buttons)
+        dialog.resize(620,480)
+        if dialog.exec()==QDialog.DialogCode.Accepted:
+            for tool_id,field in fields.items():
+                value=field.text().strip()
+                if tool_id=="pw.x" and value and Path(value).is_dir(): self.local_tool_configuration.qe_bin_directory=value
+                elif value: self.local_tool_configuration.tool_paths[tool_id]=value
+            self._sync_resource_configuration(); self.local_tool_configuration.save_machine_configuration()
+            if self.local_tool_configuration.qe_bin_directory: self._start_qe_discovery()
+
+    def _execute_requested(self, _checked=False):
         if self._active_execution is not None and not self._active_execution.done.is_set():
             self._active_execution.cancel()
-            self.execution_preview.setPlainText("Cancelling the active local task; dependent tasks will be blocked.")
+            self.execution_preview.setText("Cancelling the active local task; dependent tasks will be blocked.")
             return
-        if self.execution_plan is None or self.calculation_request is None or not self._workflow_generated:
-            QMessageBox.warning(self, "No Generated Workflow", "Compile and generate the selected workflow before local execution.")
+        if self.calculation_request is None:
+            QMessageBox.warning(self,"Run","Add and configure a calculation first.")
             return
-        root = QFileDialog.getExistingDirectory(self, "Choose generated workflow directory")
-        if not root:
+        if self._preparation_worker is not None:
+            QMessageBox.information(self,"Preparing Calculation","Calculation preparation is already in progress.")
             return
+        if not self._workflow_generated:
+            self._start_preparation(True)
+            return
+        self._start_prepared_execution()
+
+    def _start_prepared_execution(self):
+        root = self._generated_root_path or self._generated_root()
         try:
             workflow = self.calculation_service.execution_workflow(self.calculation_request, root)
             if hasattr(self.project, "register_execution_root"):
@@ -1502,7 +1648,15 @@ class CalculateWorkspace(QWidget):
             manager = LocalExecutionManager(self.local_tool_configuration)
             errors = manager.preflight(workflow)
             if errors:
-                QMessageBox.warning(self, "Local Execution Preflight", "Cannot run this workflow:\n\n" + "\n".join(errors))
+                if any("Generated pseudopotential" in error for error in errors):
+                    self.workflow_status.setText("Status: Repairing workflow pseudopotentials…")
+                    self._start_preparation(True, repair_workflow_root=root)
+                    return
+                if any("pw.x" in error and "not configured or executable" in error for error in errors):
+                    self.workflow_status.setText("Status: QE inputs ready — searching for Quantum ESPRESSO…")
+                    self._start_qe_discovery(resume_run=True)
+                    return
+                QMessageBox.warning(self,"Local Execution Preflight","Cannot run this workflow:\n\n"+"\n".join(errors))
                 return
             if QMessageBox.question(self, "Run Local Workflow", "Preflight passed. Run the generated workflow serially using configured tools/PATH?") != QMessageBox.StandardButton.Yes:
                 return
@@ -1519,7 +1673,7 @@ class CalculateWorkspace(QWidget):
             self._active_execution = self._local_execution_service.start(workflow, record=record, store=store)
             self.execute_button.setText("Cancel")
             self.workflow_status.setText(f"Status: Running — {self.local_tool_configuration.cpu_cores} cores")
-            self.execution_preview.setPlainText("Local execution started. The request snapshot and generated inputs are locked for this run.")
+            self.execution_preview.setText("Local execution started. Generated inputs are locked for this run.")
             QTimer.singleShot(100, self._poll_local_execution)
         except Exception as error:
             QMessageBox.warning(self, "Local Execution", str(error))
@@ -1547,5 +1701,8 @@ class CalculateWorkspace(QWidget):
                 line += f"\n  stdout: {task.stdout_path}"
             if task.stderr_path:
                 line += f"\n  stderr: {task.stderr_path}"
+            if task.error_message:
+                line += f"\n  error: {task.error_message}"
             lines.append(line)
-        self.execution_preview.setPlainText("\n".join(lines))
+        self._last_execution_output_paths = tuple(task.stdout_path for task in result.tasks.values() if task.stdout_path)
+        self.execution_preview.setText("\n".join(lines))

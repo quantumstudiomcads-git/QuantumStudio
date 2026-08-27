@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
-import os, shutil
+import json, os, shutil
 from .errors import ExecutableNotFoundError
 
 MPI_CAPABLE_TOOLS=frozenset({"pw.x","ph.x","bands.x","dos.x","projwfc.x","pp.x","q2r.x","matdyn.x","pw2wannier90.x","wannier90.x","epw.x"})
@@ -17,10 +17,28 @@ def available_logical_cpus():
 @dataclass
 class LocalToolConfiguration:
  tool_paths:dict[str,str]=field(default_factory=dict); engine_directories:dict[str,str]=field(default_factory=dict); environment:dict[str,str]=field(default_factory=dict)
- cpu_cores:int=1; omp_threads:int=1; mpi_launcher:str="auto"
+ cpu_cores:int=1; omp_threads:int=1; mpi_launcher:str="auto"; qe_bin_directory:str=""; qe_version:str=""
+
+ @staticmethod
+ def machine_config_path(): return Path(os.environ.get("QUANTUM_STUDIO_LOCAL_TOOLS","~/.local/share/QuantumStudio/local_tools.json")).expanduser()
+
+ @classmethod
+ def load_machine_configuration(cls):
+  path=cls.machine_config_path()
+  try:
+   data=json.loads(path.read_text(encoding="utf-8"))
+   return cls(tool_paths=dict(data.get("tool_paths",{})),engine_directories=dict(data.get("engine_directories",{})),cpu_cores=int(data.get("cpu_cores",1)),omp_threads=int(data.get("omp_threads",1)),mpi_launcher=str(data.get("mpi_launcher","auto")),qe_bin_directory=str(data.get("qe_bin_directory","")),qe_version=str(data.get("qe_version","")))
+  except (OSError,ValueError,json.JSONDecodeError,TypeError): return cls()
+ def save_machine_configuration(self):
+  path=self.machine_config_path(); path.parent.mkdir(parents=True,exist_ok=True); staging=path.with_suffix(path.suffix+".staging")
+  data={"tool_paths":self.tool_paths,"engine_directories":self.engine_directories,"cpu_cores":self.cpu_cores,"omp_threads":self.omp_threads,"mpi_launcher":self.mpi_launcher,"qe_bin_directory":self.qe_bin_directory,"qe_version":self.qe_version}
+  staging.write_text(json.dumps(data,sort_keys=True)+"\n",encoding="utf-8"); os.replace(staging,path)
+ def apply_quantum_espresso(self, installation):
+  self.qe_bin_directory=installation.bin_directory; self.qe_version=installation.version; self.engine_directories["quantum_espresso"]=installation.bin_directory; self.tool_paths.update(installation.tools)
  def resolve(self,tool_id,program,engine_id=None):
   candidates=[]
-  if tool_id in self.tool_paths:candidates.append(Path(self.tool_paths[tool_id]))
+  if tool_id in self.tool_paths:
+   configured=Path(self.tool_paths[tool_id]); candidates.append(configured / program if configured.is_dir() else configured)
   if engine_id and engine_id in self.engine_directories:candidates.append(Path(self.engine_directories[engine_id])/program)
   found=shutil.which(program,path=self.environment.get("PATH") or os.environ.get("PATH"))
   if found:candidates.append(Path(found))

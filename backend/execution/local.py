@@ -8,6 +8,14 @@ from .errors import ArtifactUnavailableError, ExecutionPreflightError, Unsupport
 from .models import TaskExecutionRecord, TaskState, WorkflowExecutionRecord, now
 from .tools import LocalToolConfiguration
 
+def _failure_tail(stderr_path, stdout_path):
+ for path in (stderr_path, stdout_path):
+  try: text=Path(path).read_text(encoding="utf-8",errors="replace").strip()
+  except OSError: continue
+  if text: return "\n".join(text.splitlines()[-12:])
+ return ""
+
+
 class LocalExecutionManager:
  def __init__(self,tools=None,event_callback=None): self.tools=tools or LocalToolConfiguration(); self.event_callback=event_callback; self._cancel=threading.Event(); self._process=None; self._lock=threading.Lock(); self._store=None
  def _emit(self,record,task_id,state):
@@ -28,11 +36,27 @@ class LocalExecutionManager:
    elif data.get("request_id") not in (None, workflow.request_id): errors.append("Generated workflow manifest does not match the selected request.")
   except Exception: errors.append("Generated workflow manifest is missing or invalid.")
   else:
-   for element, pseudo in (data.get("pseudopotentials", {}) or {}).items():
-    if not isinstance(pseudo, dict) or not pseudo.get("sha256"): continue
-    source = pseudo.get("source")
-    if not source or not Path(str(source)).is_file(): errors.append(f"Pseudopotential {element!r}: provenance source is missing.")
-    elif sha256(source) != pseudo["sha256"]: errors.append(f"Pseudopotential {element!r}: SHA-256 no longer matches generated provenance.")
+   materials=data.get("materialized_pseudopotentials")
+   if data.get("pseudopotentials") and not materials:
+    for element, pseudo in (data.get("pseudopotentials") or {}).items():
+     if isinstance(pseudo,dict) and pseudo.get("sha256") and pseudo.get("source") and Path(str(pseudo["source"])).is_file() and sha256(pseudo["source"]) != pseudo["sha256"]:
+      errors.append(f"Pseudopotential {element!r}: SHA-256 no longer matches generated provenance.")
+    errors.append("Generated pseudopotentials were not materialized. Regenerate the QE inputs.")
+   elif materials is not None and not isinstance(materials,dict):
+    errors.append("Generated pseudopotential manifest is invalid.")
+   elif materials:
+    for element, pseudo in materials.items():
+     if not isinstance(pseudo,dict):
+      errors.append(f"Generated pseudopotential manifest is invalid for {element!r}."); continue
+     filename=str(pseudo.get("filename", "")).strip(); relative=str(pseudo.get("relative_path", "")).strip()
+     target=(root/relative).resolve()
+     if not filename or not relative or root not in target.parents:
+      errors.append(f"Generated pseudopotential manifest is invalid for {element!r}."); continue
+     if not target.is_file() or not os.access(target,os.R_OK):
+      errors.append(f"Generated pseudopotential file is missing: {filename}"); continue
+     expected=pseudo.get("sha256")
+     if expected and sha256(target)!=expected:
+      errors.append(f"Generated pseudopotential SHA-256 does not match manifest: {filename}")
   if int(self.tools.cpu_cores) < 1: errors.append("Local CPU cores must be at least 1.")
   if int(self.tools.omp_threads) < 1: errors.append("OpenMP threads must be at least 1.")
   for task in workflow.tasks:
@@ -87,7 +111,9 @@ class LocalExecutionManager:
      time.sleep(.03)
     runtime.return_code=process.poll()
     if runtime.state is TaskState.RUNNING: runtime.state=TaskState.COMPLETED if runtime.return_code==0 else TaskState.FAILED
-    if runtime.state is TaskState.FAILED and not runtime.error_message: runtime.error_message=f"Process exited with code {runtime.return_code}."
+    if runtime.state is TaskState.FAILED and not runtime.error_message:
+     stdout.flush(); stderr.flush(); detail=_failure_tail(stderr_path,stdout_path)
+     runtime.error_message=f"Process exited with code {runtime.return_code}." + (("\n" + detail) if detail else "")
   finally:
    if stdin:stdin.close()
    with self._lock:self._process=None

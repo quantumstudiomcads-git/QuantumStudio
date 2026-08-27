@@ -23,7 +23,7 @@ class C9QWorkspaceTests(unittest.TestCase):
         structure.periodic=[True,True,True]; project.set_structure(structure)
         workspace = CalculateWorkspace(project); workspace.show(); app.processEvents()
         try:
-            self.assertEqual(workspace.generate_qe_button.text(), "Generate")
+            self.assertEqual(workspace.generate_qe_button.text(), "Generate QE Inputs")
             self.assertEqual(workspace.execute_button.text(), "Run")
             self.assertEqual(workspace.more_button.text(), "More ▾")
             self.assertFalse(workspace.create_button.isVisible())

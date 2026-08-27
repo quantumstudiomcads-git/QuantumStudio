@@ -20,7 +20,7 @@ class LocalExecutionTests(unittest.TestCase):
    items=(task("a",code="print('A')"),task("b",("a",),"import os; print('B'); open('cwd.txt','w').write(os.getcwd())")); result=manager().execute(workflow(tmp,items)); self.assertEqual([result.tasks[x].state for x in ("a","b")],[TaskState.COMPLETED,TaskState.COMPLETED]); self.assertEqual(result.state,WorkflowState.COMPLETED); self.assertIn("A",Path(result.tasks["a"].stdout_path).read_text()); self.assertEqual(Path(tmp,"b","cwd.txt").read_text(),str(Path(tmp,"b").resolve()))
  def test_nonzero_blocks_downstream_and_branched_order_is_deterministic(self):
   with tempfile.TemporaryDirectory() as tmp:
-   bad=(task("a",code="import sys; print('bad'); sys.exit(7)"),task("b",("a",))); result=manager().execute(workflow(tmp,bad)); self.assertEqual(result.tasks["a"].return_code,7); self.assertEqual(result.tasks["a"].state,TaskState.FAILED); self.assertEqual(result.tasks["b"].state,TaskState.BLOCKED)
+   bad=(task("a",code="import sys; print('bad'); sys.exit(7)"),task("b",("a",))); result=manager().execute(workflow(tmp,bad)); self.assertEqual(result.tasks["a"].return_code,7); self.assertEqual(result.tasks["a"].state,TaskState.FAILED); self.assertIn("bad", result.tasks["a"].error_message); self.assertEqual(result.tasks["b"].state,TaskState.BLOCKED)
   with tempfile.TemporaryDirectory() as tmp:
    items=(task("a"),task("b",("a",)),task("c",("a",)),task("d",("b","c"))); result=manager().execute(workflow(tmp,items)); running=[x["task_id"] for x in result.events if x["state"]=="RUNNING"]; self.assertEqual(running,["a","b","c","d"])
  def test_stdin_stdout_stderr_timeout_and_cancellation(self):

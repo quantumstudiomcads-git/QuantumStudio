@@ -193,7 +193,14 @@ class AnalyzeWorkspace(QWidget):
         try:
             if not self.service.summaries(root, execution):
                 self.service.parse(root, execution)
-            for row in self.service.summaries(root,execution): self.result.addItem(f"{result_kind(type('R',(),{'result_type':row['type']})())} — {row['status']}",row['result_id'])
+            preferred_index = -1
+            primary_types = {"BandStructureResult", "DOSResult", "PDOSResult", "PhononDOSResult", "VolumetricResult", "WorkFunctionResult"}
+            for row in self.service.summaries(root,execution):
+                self.result.addItem(f"{result_kind(type('R',(),{'result_type':row['type']})())} — {row['status']}",row['result_id'])
+                if preferred_index < 0 and row["type"] in primary_types:
+                    preferred_index = self.result.count() - 1
+            if preferred_index >= 0:
+                self.result.setCurrentIndex(preferred_index)
         except Exception as error: self.empty.setText("Results unavailable.\n"+str(error)); self.views.setCurrentWidget(self.empty)
         if self.result.count() == 0:
             self.empty.setText("No parsed scientific Results are available for this execution.\n\nParse Results in Calculate first.")
@@ -208,7 +215,14 @@ class AnalyzeWorkspace(QWidget):
         self._populate_pdos_filters()
         self.navigation.clear(); items=["Overview",result_kind(self.current_result)]
         if self.current_result.result_type == "BandStructureResult": items.append("Electronic Analysis")
-        items += ["Data","Provenance"]; self.navigation.addItems(items); self.navigation.setCurrentRow(0); self._show_overview()
+        items += ["Data","Provenance"]; self.navigation.addItems(items)
+        # A plottable terminal Result should open directly in its primary view.
+        # Previously every selection was forced to Overview, leaving a completed
+        # DOS/PDOS run without a visible graph until secondary navigation.
+        if self.current_result.result_type in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","VolumetricResult","WorkFunctionResult"}:
+            self.navigation.setCurrentRow(1)
+        else:
+            self.navigation.setCurrentRow(0); self._show_overview()
     def _populate_pdos_filters(self):
         is_pdos=self.current_result is not None and self.current_result.result_type == "PDOSResult"
         self.pdos_controls.setVisible(is_pdos)
@@ -360,6 +374,19 @@ class AnalyzeWorkspace(QWidget):
             selected=pdos_channels(self.current_result, species=self.pdos_species.currentText(), atom=self.pdos_atom.currentText(), orbital=self.pdos_orbital.currentText(), component=self.pdos_component.currentText(), spin=self.pdos_spin.currentText(), aggregation=self.pdos_aggregation.currentText())
             if not selected:
                 self.empty.setText("No PDOS channels match the current filter.")
+                self.views.setCurrentWidget(self.empty); return
+            import numpy as np
+            if not any(len(values) and np.all(np.isfinite(np.asarray(values, dtype=float))) for _, values in selected):
+                self.empty.setText("PDOS Result contains no usable finite channels.")
+                self.views.setCurrentWidget(self.empty); return
+        elif self.current_result.result_type == "DOSResult":
+            import numpy as np
+            energy=np.asarray(self.current_result.arrays.get("energy", ()), dtype=float)
+            values=self.current_result.arrays.get("dos", self.current_result.arrays.get("total_dos"))
+            if values is None and "dos_up" in self.current_result.arrays and "dos_down" in self.current_result.arrays:
+                values=np.asarray(self.current_result.arrays["dos_up"], dtype=float)
+            if values is None or len(energy) == 0 or len(values) != len(energy) or not (np.all(np.isfinite(energy)) and np.all(np.isfinite(np.asarray(values, dtype=float)))):
+                self.empty.setText("DOS Result contains no usable finite samples.")
                 self.views.setCurrentWidget(self.empty); return
         old=self.plot
         self.views.removeWidget(old)

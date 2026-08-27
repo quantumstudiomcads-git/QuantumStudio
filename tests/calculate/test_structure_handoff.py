@@ -75,6 +75,21 @@ class CalculateStructureHandoffTests(unittest.TestCase):
         self.assertEqual(self.project.get_structure().to_dict(), second.to_dict())
         self.assertEqual(prepared.backend_request.structure, first.to_dict())
 
+    def test_typed_hubbard_terms_control_preserves_structured_values(self):
+        from frontend.calculate.typed_parameter_controls import control_value, make_control
+        control=make_control("hubbard_terms", [{"species":"Fe","manifold":"3d","u_eV":3.0}])
+        self.assertEqual(control_value("hubbard_terms", control), [{"species":"Fe","manifold":"3d","u_eV":3.0}])
+
+    def test_gui_created_dos_and_pdos_enable_private_postprocessing_workflows(self):
+        self.project.set_structure(structure("DOS input"))
+        self.workspace.refresh()
+        for calculation_id, terminal in (("dos", "qe_dos"), ("pdos", "qe_projwfc")):
+            self.workspace.selected_ids=[calculation_id]
+            request=self.workspace.create_persistent_calculation(name=calculation_id)
+            self.assertTrue(request.backend_request.parameters["postprocessing"])
+            plan=self.workspace.calculation_service.compile_request(request)
+            self.assertIn(terminal, [task.semantic_task_type for task in plan.tasks])
+
     def test_scf_and_bands_compile_through_existing_backend_plan_with_snapshot(self):
         first = structure("Bands Input")
         self.project.set_structure(first)

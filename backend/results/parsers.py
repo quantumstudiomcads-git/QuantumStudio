@@ -119,7 +119,7 @@ def parse_dos(path, **kwargs):
     energy=data[:,0]; _monotonic_energy(energy)
     headers="\n".join(_source_headers(path)); fermi=re.search(r"EFermi\s*=\s*("+_QE_NUMBER+r")\s*eV",headers,re.I)
     scalars={}
-    metadata={"contract_version":"v0.21-e2","units":{"energy":"eV","dos":"states/eV/cell","integrated_dos":"states/cell"},"energy_reference":{"raw":"engine_output","display_default":"Fermi = 0" if fermi else "Absolute"},"normalization":"PER_CELL","source_energy_unit":"eV","spin_semantics":"NON_SPIN","parser_diagnostics":[]}
+    metadata={"contract_version":"v0.21-e2","units":{"energy":"eV","dos":"states/eV/cell","integrated_dos":"states/cell"},"energy_reference":{"raw":"engine_output","display_default":"Fermi = 0" if fermi else "Absolute"},"normalization":"PER_CELL","source_energy_unit":"eV","spin_semantics":"SOC" if method == "SOC" else "NON_SPIN","parser_diagnostics":[]}
     if fermi:
         value=_qe_float(fermi.group(1)); scalars["fermi_energy"]={"value":value,"unit":"eV"}; metadata["fermi_energy_eV"]=value; metadata["fermi_reference"]={"source":"dos.x header","source_task":"qe_dos","value_eV":value}
     arrays={"energy":energy,"dos":data[:,1]}

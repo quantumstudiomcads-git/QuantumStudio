@@ -17,6 +17,7 @@ class ResultCoverageTests(unittest.TestCase):
    with self.assertRaisesRegex(Exception,"strictly increasing"): DEFAULT_PARSERS.parse("DOS_RAW_DATA",bad)
    plain=root/"plain.dat"; plain.write_text("-1 1\n0 2\n")
    self.assertNotIn("fermi_energy_eV",DEFAULT_PARSERS.parse("DOS_RAW_DATA",plain).metadata)
+   soc=DEFAULT_PARSERS.parse("DOS_RAW_DATA",plain,method_metadata={"spin_treatment":"SOC"}); self.assertEqual(soc.metadata["spin_semantics"],"SOC"); self.assertIn("dos",soc.arrays); self.assertNotIn("dos_up",soc.arrays)
    for name,text,diagnostic in (("empty.dat","","no numeric"),("wrong.dat","0 1 2 3\n1 2 3 4\n","requires E"),("nan.dat","0 nan\n1 2\n","non-finite"),("truncated.dat","0 1\n","strictly increasing")):
     candidate=root/name; candidate.write_text(text)
     with self.assertRaisesRegex(Exception,diagnostic): DEFAULT_PARSERS.parse("DOS_RAW_DATA",candidate)

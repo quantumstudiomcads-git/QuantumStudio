@@ -1184,6 +1184,10 @@ class CalculateWorkspace(QWidget):
                 recommendation = recommended_band_path(self.project.get_structure().to_dict())
                 parameters["kpath"] = normalize_band_path(materialize_path(recommendation.segments, (True,) * len(recommendation.segments), 40))
             parameters["postprocessing"] = True
+        elif set(self.selected_ids) & {"dos", "pdos", "charge_density", "spin_density", "electron_localization", "electrostatic_potential", "work_function", "phonon_dos"}:
+            # These public intents expand into private QE terminal tasks only
+            # when this workflow flag is present; never silently run SCF-only.
+            parameters["postprocessing"] = True
         prepared = self.calculation_service.create_request(
             self.project, self.selected_ids, parameters=parameters, name=name,
         )
@@ -1264,7 +1268,7 @@ class CalculateWorkspace(QWidget):
         dialog.resize(720,620)
         if dialog.exec()==QDialog.DialogCode.Accepted:
             values=values_from_fields(); values.update(scientific_state)
-            if "bands" in self.selected_ids:
+            if set(self.selected_ids) & {"bands", "dos", "pdos", "charge_density", "spin_density", "electron_localization", "electrostatic_potential", "work_function", "phonon_dos"}:
                 values["postprocessing"] = True
             values["accuracy"]=PRESETS[preset.currentData()] if preset.currentData()!="CUSTOM" else "standard"; values["accuracy_preset"]=preset.currentData(); self.parameters_input.setText(json.dumps(values,sort_keys=True))
             request = self.project.get_calculation(self._selected_configured_request_id())
@@ -1454,8 +1458,15 @@ class CalculateWorkspace(QWidget):
             LOGGER.debug("Automatic result parsing failed:\n%s", worker.error[1])
             self.workflow_status.setText("Status: Calculation completed. Results processing failed")
             return
-        errors = (worker.outcome or {}).get("errors", ())
-        self.workflow_status.setText("Status: Calculation completed. Results processing failed" if errors else "Status: Results ready")
+        outcome = worker.outcome or {}
+        errors = outcome.get("errors", ())
+        if errors:
+            detail = "; ".join(str(error) for error in errors)
+            prefix = "DOS calculation completed, but Quantum Studio could not parse the DOS result: " if any(str(error).startswith("qe_dos:") for error in errors) else "PDOS calculation completed, but Quantum Studio could not parse the PDOS result: " if any(str(error).startswith("qe_projwfc:") for error in errors) else "Calculation completed, but Quantum Studio could not parse one or more results: "
+            self.workflow_status.setText("Status: " + prefix + detail)
+            self.execution_preview.appendPlainText("\nResult parsing failed: " + detail)
+        else:
+            self.workflow_status.setText("Status: Results ready")
         self._update_compile_availability()
 
     def _generated_root(self):

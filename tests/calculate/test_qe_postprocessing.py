@@ -37,6 +37,8 @@ class QEPostprocessingTests(unittest.TestCase):
   self.assertEqual(electronic_method({"spin_treatment":"SOC"}),"SOC")
   with self.assertRaises(Exception): electronic_method({"spin_treatment":"COLLINEAR_SPIN","soc":True})
   with self.assertRaises(Exception): QuantumEspressoAdapter().compile_plan(plan(["dos"],{"hubbard_terms":[{"species":"X","manifold":"3d","u_eV":3.0}]}))
+  with self.assertRaisesRegex(ValueError, "SOC PDOS projector/spinor decomposition"):
+   plan(["pdos"], {"spin_treatment":"SOC"})
   first=next(x for x in collinear.tasks if x.semantic_task_type=="qe_pw_nscf").parameter_signature; changed=plan(["dos"],{"spin_treatment":"COLLINEAR_SPIN","starting_magnetization":{"Si":0.5},"hubbard_terms":[{"species":"Si","manifold":"3d","u_eV":4.0}]}).tasks[-2].parameter_signature; self.assertNotEqual(first,changed)
 
  def test_e3_hubbard_request_persistence_round_trip(self):

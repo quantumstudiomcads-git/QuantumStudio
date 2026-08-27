@@ -48,8 +48,12 @@ class AnalyzeA1Tests(unittest.TestCase):
         from backend.analyze.transforms import pdos_channels
         app=QApplication.instance() or QApplication([]); p=ResultProvenance("r","e","t","qe","dos.x",(),{},"fixture")
         dos=ScientificResult("DOSResult",ResultStatus.VALID,p,arrays={"energy":[1.,2.],"dos":[3.,4.],"integrated_dos":[0.,1.]},metadata={"fermi_energy_eV":1.,"units":{"energy":"eV"}})
-        plot=DOSPlot(); plot.set_result(dos); plot.reference.setCurrentText("Fermi = 0"); app.processEvents(); self.assertIn("E_F",plot.axes.get_xlabel()); self.assertTrue(any(line.get_xdata()[0]==0 for line in plot.axes.lines)); plot.close()
+        plot=DOSPlot(); plot.set_result(dos); plot.reference.setCurrentText("Fermi = 0"); app.processEvents(); self.assertIn("E_F",plot.axes.get_xlabel()); self.assertTrue(any(line.get_xdata()[0]==0 for line in plot.axes.lines)); self.assertGreaterEqual(len(plot.axes.lines), 1); self.assertTrue(all(len(line.get_xdata()) and len(line.get_ydata()) for line in plot.axes.lines if line.get_label() != "E_F"))
+        with tempfile.TemporaryDirectory() as d:
+            png=os.path.join(d,"dos.png"); plot.figure.savefig(png); self.assertGreater(os.path.getsize(png),0)
+        plot.close()
         pdos=ScientificResult("PDOSResult",ResultStatus.VALID,p,arrays={"energy":[1.,2.]},metadata={"components":[{"species":"Si","atom_index":1,"orbital":"s","label":"Si(1) — s"},{"species":"Si","atom_index":2,"orbital":"p","label":"Si(2) — p"}],"component_values":[[1.,2.],[3.,4.]]})
+        pdos_plot=DOSPlot(); pdos_plot.set_result(pdos); app.processEvents(); self.assertGreaterEqual(len(pdos_plot.axes.lines), 1); self.assertTrue(all(len(line.get_xdata()) and len(line.get_ydata()) for line in pdos_plot.axes.lines)); pdos_plot.close()
         with tempfile.TemporaryDirectory() as d:
             path=export_dos_pdos_csv(dos,os.path.join(d,"dos.csv"),reference="Fermi = 0"); self.assertIn("energy_display_eV",path.read_text().splitlines()[0])
             ppath=export_dos_pdos_csv(pdos,os.path.join(d,"pdos.csv"),channels=pdos_channels(pdos,aggregation="By species")); self.assertIn("aggregation_label",ppath.read_text().splitlines()[0])

@@ -26,6 +26,9 @@ class CalculationCompiler:
         self.request, self.registry = request, registry if registry_instance is None else registry_instance
 
     def compile(self) -> ExecutionPlan:
+        if (str(self.request.parameters.get("spin_treatment", "")).upper() == "SOC"
+                and "pdos" in self.request.selected_calculations):
+            raise ValueError("SOC PDOS projector/spinor decomposition is not yet supported.")
         graph = DependencyResolver(self.request.selected_calculations, self.registry).build()
         defaults = self._shared_dependency_defaults(graph.ordered_calculations)
         parameters = ParameterResolver(self.request.parameters, self.registry).resolve(list(graph.ordered_calculations), defaults, self.request.structure)

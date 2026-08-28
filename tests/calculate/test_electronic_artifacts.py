@@ -186,6 +186,30 @@ class ProjectionClosureTests(unittest.TestCase):
             for i,result in enumerate(results):
                 w=ProjectionPlot(); w.set_result(result); self.assertTrue(w.axes.lines or w.axes.patches or w.axes.collections); self.assertGreater(export_csv(result,Path(d)/f"{i}.csv").stat().st_size,0); w.close()
 
+class FermiAndBandChargeClosureTests(unittest.TestCase):
+    def test_private_fermi_nscf_and_band_charge_tasks_are_adapter_supported(self):
+        from backend.engines.qe.adapter import QuantumEspressoAdapter
+        self.assertTrue(QuantumEspressoAdapter.is_supported("qe_pw_nscf_fermi_surface"))
+        self.assertTrue(QuantumEspressoAdapter.is_supported("qe_pp_band_decomposed"))
+
+    def test_fermi_surface_result_persists_grid_arrays(self):
+        from backend.results.models import ResultProvenance, ResultStatus, ScientificResult
+        from backend.results.store import ResultStore
+        provenance=ResultProvenance("r", "e", "t", "qe", "fs.x", (), {}, "fixture")
+        result=ScientificResult("FermiSurfaceResult", ResultStatus.VALID, provenance, arrays={"energies":np.arange(8.,dtype=float).reshape(1,2,2,2)}, metadata={"grid_dimensions":[2,2,2],"fermi_energy_eV":1.0})
+        with tempfile.TemporaryDirectory() as d:
+            store=ResultStore(d,"e"); store.save(result); loaded=store.load(result.result_id)
+            np.testing.assert_array_equal(loaded.arrays["energies"], result.arrays["energies"])
+            self.assertEqual(loaded.metadata["grid_dimensions"],[2,2,2])
+
+    def test_band_decomposed_writer_uses_qe_plot_num_seven(self):
+        from backend.engines.qe.postprocessing import post_input
+        from backend.engines.qe.models import QEWorkflowContext
+        text=post_input("qe_pp", {"plot_kind":"band_decomposed_charge","kpoint":2,"kband":3,"artifact":"state.cube"}, QEWorkflowContext("r","prefix","outdir","pseudos"))
+        self.assertIn("plot_num = 7", text)
+        self.assertIn("kpoint = 2", text)
+        self.assertIn("kband = 3", text)
+
 class QEProjectionHandoffTests(unittest.TestCase):
     def test_qe_projection_tasks_share_prefix_and_outdir_contract(self):
         from backend.core.calculation_request import CalculationRequest

@@ -30,7 +30,7 @@ from backend.pseudopotentials import PseudoSet, Relativity, inspect_upf, validat
 
 
 ENGINE_ID = "quantum_espresso"
-SUPPORTED_CALCULATIONS = frozenset({"scf", "relax", "vc_relax", "phonons", "qe_pw_bands", "qe_pw_nscf", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_ph", "qe_q2r", "qe_matdyn", "qe_fs", "qe_hp", "qe_bader", "qe_pp_bader", "qe_lowdin", "qe_orbital", "qe_matdyn_dos", "qe_pw_nscf_dos", "qe_pw_nscf_pdos", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_q2r", "qe_ph", "qe_pw_bands"})
+SUPPORTED_CALCULATIONS = frozenset({"scf", "relax", "vc_relax", "phonons", "qe_pw_bands", "qe_pw_nscf", "qe_pw_nscf_fermi_surface", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_pp_band_decomposed", "qe_ph", "qe_q2r", "qe_matdyn", "qe_fs", "qe_hp", "qe_bader", "qe_pp_bader", "qe_lowdin", "qe_orbital", "qe_matdyn_dos", "qe_pw_nscf_dos", "qe_pw_nscf_pdos", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_q2r", "qe_ph", "qe_pw_bands"})
 DEFERRED_CALCULATIONS = {
     "bands": "C3 has no reliable explicit band-path model; C4 will not guess a path.",
     "dos": "C3 lacks an explicit NSCF -> dos.x workflow stage required for scientifically sound DOS input.",
@@ -182,7 +182,7 @@ class QuantumEspressoAdapter(EngineAdapter):
                 executable, input_filename = "pw.x", f"{task.calculation_id}.in"
             elif task.semantic_task_type == "qe_pw_bands":
                 input_text, executable, input_filename = pw_bands_input(parameters, plan.structure, task_context, pseudos), "pw.x", "bands_pw.in"
-            elif task.semantic_task_type == "qe_pw_nscf":
+            elif task.semantic_task_type.startswith("qe_pw_nscf"):
                 input_text, executable, input_filename = pw_input("qe_pw_nscf", parameters, plan.structure, task_context, pseudos), "pw.x", "nscf.in"
             elif task.semantic_task_type in {"qe_bands","qe_dos","qe_projwfc","qe_pp","qe_q2r","qe_matdyn","qe_fs","qe_hp","qe_lowdin"}:
                 input_text, executable, input_filename = post_input(task.semantic_task_type, parameters, task_context), {"qe_bands":"bands.x","qe_dos":"dos.x","qe_projwfc":"projwfc.x","qe_pp":"pp.x","qe_q2r":"q2r.x","qe_matdyn":"matdyn.x","qe_fs":"fs.x","qe_hp":"hp.x","qe_lowdin":"projwfc.x"}[task.semantic_task_type], task.semantic_task_type.removeprefix("qe_") + ".in"

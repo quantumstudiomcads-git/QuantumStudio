@@ -134,3 +134,81 @@ class BaderClosureTests(unittest.TestCase):
         request=CalculationRequest(structure={'atoms':[],'cell':[],'periodic':[True,True,True]}, selected_calculations=['charge_transfer'], parameters={'postprocessing':True})
         plan=CalculationCompiler(request).compile(); ids=[task.calculation_id for task in plan.tasks]
         self.assertEqual(ids.count('qe_bader'),1); self.assertEqual(ids.count('qe_pp_bader'),1)
+
+class ProjectionClosureTests(unittest.TestCase):
+    def test_lowdin_collinear_spin_rows_and_moments(self):
+        from backend.results.derived import derive_magnetic_moments
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/"projwfc.out"; p.write_text("""Lowdin Charges:
+ Atom # 1: total charge = 3.8, s = 1.0, p = 2.8
+               spin up = 2.1, s = 0.6, p = 1.5
+               spin down = 1.7, s = 0.4, p = 1.3
+               polarization = 0.4, s = 0.2, p = 0.2
+""")
+            low=parse_lowdin(p,species=["Fe"],expected_atom_count=1,method_metadata={"spin_treatment":"COLLINEAR_SPIN"})
+            np.testing.assert_allclose(low.arrays["spin_difference"],[.2,.2])
+            moment=derive_magnetic_moments(low)
+            np.testing.assert_allclose(moment.arrays["projected_local_moment"],[.4])
+    def test_orbital_projection_dimensions_and_labels(self):
+        from backend.results.electronic import parse_orbital_projection
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/"orbital.projwfc_up"; p.write_text("1 1 Si 3S 1 0 0\n 1 1 0.5\n 1 2 0.25\n")
+            result=parse_orbital_projection(p)
+            self.assertEqual(result.result_type,"OrbitalCharacterResult"); self.assertEqual(result.arrays["projection_weight"].shape,(2,)); self.assertEqual(result.metadata["projector_labels"],["3S","3S"])
+    def test_projection_results_persist_with_numeric_arrays(self):
+        from backend.results.models import ResultProvenance, ResultStatus, ScientificResult
+        from backend.results.store import ResultStore
+        provenance=ResultProvenance("request", "execution", "task", "qe", "projwfc.x", (), {}, "fixture")
+        results=(
+            ScientificResult("LowdinPopulationResult", ResultStatus.VALID, provenance,
+                            arrays={"population": np.array([1.0, 2.0])}),
+            ScientificResult("MagneticMomentResult", ResultStatus.VALID, provenance,
+                            arrays={"projected_local_moment": np.array([2.5])}),
+            ScientificResult("OrbitalCharacterResult", ResultStatus.VALID, provenance,
+                            arrays={"projection_weight": np.array([0.2, 0.8]), "band_index": np.array([1, 2])}),
+        )
+        with tempfile.TemporaryDirectory() as d:
+            store=ResultStore(d, "execution")
+            for result in results: store.save(result)
+            for result in results:
+                loaded=store.load(result.result_id)
+                self.assertEqual(loaded.result_type, result.result_type)
+                for key, value in result.arrays.items(): np.testing.assert_allclose(loaded.arrays[key], value)
+
+    def test_projection_plots_and_exports_are_nonempty(self):
+        from backend.results.models import ResultProvenance, ResultStatus, ScientificResult
+        from backend.analyze.export import export_csv
+        from frontend.analyze.plots.projection import ProjectionPlot
+        from PySide6.QtWidgets import QApplication
+        app=QApplication.instance() or QApplication([]); p=ResultProvenance("r","e","t","qe","projwfc.x",(),{},"fixture")
+        results=[ScientificResult("LowdinPopulationResult",ResultStatus.VALID,p,arrays={"atom_index":np.array([1,1]),"projector_index":np.array([1,2]),"l":np.array([0,1]),"population":np.array([1.,2.])},metadata={"species":["Si","Si"],"projector_labels":["s","p"]}), ScientificResult("MagneticMomentResult",ResultStatus.VALID,p,arrays={"atom_index":np.array([1]),"projected_local_moment":np.array([1.2])},metadata={"species":["Fe"]}), ScientificResult("OrbitalCharacterResult",ResultStatus.VALID,p,arrays={"k_index":np.array([1,2]),"band_index":np.array([1,1]),"energy_eV":np.array([-.5,-.4]),"projection_weight":np.array([.2,.8]),"atom_index":np.array([1,1]),"projector_index":np.array([1,1]),"l":np.array([0,0]),"m":np.array([0,0])},metadata={"species":["Si","Si"],"projector_labels":["3S","3S"]})]
+        with tempfile.TemporaryDirectory() as d:
+            for i,result in enumerate(results):
+                w=ProjectionPlot(); w.set_result(result); self.assertTrue(w.axes.lines or w.axes.patches or w.axes.collections); self.assertGreater(export_csv(result,Path(d)/f"{i}.csv").stat().st_size,0); w.close()
+
+class QEProjectionHandoffTests(unittest.TestCase):
+    def test_qe_projection_tasks_share_prefix_and_outdir_contract(self):
+        from backend.core.calculation_request import CalculationRequest
+        from backend.compiler.calculation_compiler import CalculationCompiler
+        request=CalculationRequest(structure={'atoms':[],'cell':[],'periodic':[True,True,True]}, selected_calculations=['mulliken_population'], parameters={'postprocessing':True,'spin':True,'spin_treatment':'COLLINEAR_SPIN'})
+        plan=CalculationCompiler(request).compile()
+        # Adapter validation is intentionally skipped for the empty fixture; the
+        # compiler contract still requires a single shared QE restart namespace.
+        scf, proj=plan.tasks[0], plan.tasks[-1]
+        self.assertEqual(scf.artifact_outputs, ('qe_charge_density','qe_save'))
+        self.assertIn('qe_save', proj.artifact_inputs)
+        self.assertEqual(proj.depends_on_task_ids, (scf.id,))
+
+class ProjectionWorkflowTests(unittest.TestCase):
+    def test_lowdin_and_magnetic_public_routes(self):
+        from backend.core.calculation_request import CalculationRequest
+        from backend.compiler.calculation_compiler import CalculationCompiler
+        for cid, purpose in (("mulliken_population","lowdin_population"),("magnetic_moment","magnetic_moment")):
+            plan=CalculationCompiler(CalculationRequest(structure={'atoms':[],'cell':[],'periodic':[True,True,True]},selected_calculations=[cid],parameters={'postprocessing':True})).compile()
+            self.assertEqual(plan.tasks[-1].semantic_task_type,"qe_lowdin"); self.assertEqual(plan.tasks[-1].metadata["purpose"],purpose)
+    def test_orbital_character_public_route_uses_path_and_projwfc(self):
+        from backend.core.calculation_request import CalculationRequest
+        from backend.compiler.calculation_compiler import CalculationCompiler
+        path=[{'label':'G','coordinates':[0,0,0],'points':2},{'label':'X','coordinates':[.5,0,0],'points':2}]
+        plan=CalculationCompiler(CalculationRequest(structure={'atoms':[],'cell':[],'periodic':[True,True,True]},selected_calculations=['orbital_texture'],parameters={'postprocessing':True,'kpath':path})).compile()
+        self.assertEqual([t.semantic_task_type for t in plan.tasks],['scf','qe_pw_bands','qe_bands','qe_projwfc']); self.assertEqual(plan.tasks[-1].metadata['purpose'],'orbital_character')

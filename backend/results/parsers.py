@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from .models import ResultProvenance, ResultStatus, ScientificResult
 from .volumetric import FIELD_SPECS, VolumetricParseError, parse_gaussian_cube
-from .electronic import parse_bxsf, parse_bader_acf, parse_lowdin, parse_hubbard_parameters
+from .electronic import parse_bxsf, parse_bader_acf, parse_lowdin, parse_orbital_projection, parse_hubbard_parameters
 RY_TO_EV=13.605693122994
 class ResultParseError(RuntimeError): pass
 def _prov(path, *, request_id="", execution_id="", task_id="", tool_id="", parser_id="qe", **_context):
@@ -301,4 +301,5 @@ DEFAULT_PARSERS.register("EPW_SUMMARY",parse_epw_output)
 DEFAULT_PARSERS.register("FERMI_SURFACE_BXSF",parse_bxsf)
 DEFAULT_PARSERS.register("BADER_ACF",parse_bader_acf)
 DEFAULT_PARSERS.register("LOWDIN_POPULATION",parse_lowdin)
+DEFAULT_PARSERS.register("ORBITAL_CHARACTER_RAW_DATA",parse_orbital_projection)
 DEFAULT_PARSERS.register("HUBBARD_PARAMETER_RAW_DATA",parse_hubbard_parameters)

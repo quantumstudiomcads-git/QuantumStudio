@@ -74,14 +74,77 @@ def parse_bader_acf(path, *, species=(), z_valence=(), source_density=None, expe
     status=ResultStatus.VALID if finite_z else ResultStatus.PARTIAL
     return ScientificResult("BaderChargeResult",status,_prov(path,tool_id="bader",parser_id="bader.acf",**kwargs),arrays=arrays,metadata=metadata)
 
-def parse_lowdin(path, *, method_metadata=None, **kwargs):
-    """Parse QE projwfc Lowdin population lines conservatively."""
-    text=Path(path).read_text(encoding="utf-8",errors="replace"); rows=[]
-    pattern=re.compile(r"Atom\s*#?\s*(\d+)\s*(?:\(([^)]+)\))?\s*:\s*(?:total\s+charge|Lowdin\s+charge)\s*=\s*("+_NUM+r")",re.I)
-    for match in pattern.finditer(text): rows.append((int(match.group(1)),(match.group(2) or "").strip(),_f(match.group(3))))
-    if not rows: raise ValueError("projwfc output contains no parseable Lowdin population section.")
-    arrays={"atom_index":np.asarray([x[0] for x in rows],int),"population":np.asarray([x[2] for x in rows],float)}; metadata={"species":[x[1] for x in rows],"population_semantics":"QE projwfc.x Lowdin projected population","electronic_method":method_metadata or {},"basis_incompleteness":True}
-    return ScientificResult("LowdinPopulationResult",ResultStatus.VALID,_prov(path,tool_id="projwfc.x",parser_id="qe.lowdin",**kwargs),arrays=arrays,metadata=metadata)
+def parse_lowdin(path, *, species=(), expected_atom_count=None, method_metadata=None, **kwargs):
+    """Parse QE 7.6 projwfc.x ``Lowdin Charges`` output exactly.
+
+    QE emits one line per atom/projector (s, p, d, f), with additional spin-up,
+    spin-down and polarization lines for collinear calculations.
+    """
+    text=Path(path).read_text(encoding="utf-8",errors="replace")
+    has_section=bool(re.search(r"Lowdin\s+Charges\s*:", text, re.I))
+    if not has_section and not re.search(r"Atom\s*#", text, re.I):
+        raise ValueError("projwfc output contains no Lowdin Charges section.")
+    number=_NUM; labels={"s":0,"p":1,"d":2,"f":3,"total":-1}; records=[]; current={}; spin_records={}
+    in_section=has_section
+    for raw in text.splitlines():
+        line=raw.strip()
+        if re.search(r"Lowdin\s+Charges\s*:", line, re.I): in_section=True; continue
+        if not in_section and not re.search(r"Atom\s*#", line, re.I): continue
+        if re.search(r"Atom\s*#", line, re.I): in_section=True
+        m=re.search(r"Atom\s*#\s*(\d+)\s*(?:\(([^)]+)\))?:\s*(?:total|Lowdin)\s+charge\s*=\s*(%s)(.*)$" % number,line,re.I)
+        if m:
+            current={"atom":int(m.group(1)),"species":(m.group(2) or "").strip(),"total":_f(m.group(3))}; records.append(current)
+            matched=False
+            for pm in re.finditer(r"([spdf])\s*=\s*(%s)" % number,m.group(4),re.I):
+                matched=True; records.append({"atom":current["atom"],"species":current["species"],"projector":pm.group(1).lower(),"population":_f(pm.group(2))})
+            if not matched: records.append({"atom":current["atom"],"species":current["species"],"projector":"total","population":_f(m.group(3))})
+            continue
+        if not current: continue
+        kind=re.search(r"spin\s+(up|down)|polarization",line,re.I)
+        if kind:
+            spin=kind.group(1).upper() if kind.group(1) else "DIFFERENCE"
+            for pm in re.finditer(r"([spdf])\s*=\s*(%s)" % number,line,re.I):
+                spin_records[(current["atom"],pm.group(1).lower(),spin)]=_f(pm.group(2))
+    projectors=[r for r in records if "projector" in r]
+    if not projectors:
+        raise ValueError("Lowdin Charges section contains no projector population rows.")
+    atoms=sorted({r["atom"] for r in projectors})
+    if expected_atom_count is not None and len(atoms)!=int(expected_atom_count): raise ValueError(f"Lowdin atom count mismatch: parsed {len(atoms)}, expected {expected_atom_count}.")
+    if len(set(atoms)) != len(atoms): raise ValueError("Lowdin atom mapping is not unique.")
+    species_list=list(species) if species else [next((r["species"] for r in projectors if r["atom"]==atom),"") for atom in atoms]
+    if species and len(species_list)!=len(atoms): raise ValueError("Lowdin species mapping does not match atom count.")
+    atom_index=[]; population=[]; pup=[]; pdown=[]; diff=[]; labels_out=[]; lvals=[]
+    for r in projectors:
+        atom=r["atom"]; proj=r["projector"]; up=spin_records.get((atom,proj,"UP")); down=spin_records.get((atom,proj,"DOWN")); delta=spin_records.get((atom,proj,"DIFFERENCE"))
+        atom_index.append(atom); population.append(float(r["population"])); pup.append(np.nan if up is None else up); pdown.append(np.nan if down is None else down); diff.append(np.nan if delta is None else delta); labels_out.append(proj); lvals.append(labels[proj])
+    finite=bool(np.all(np.isfinite(population)))
+    metadata={"species_by_atom":species_list,"species":[species_list[atoms.index(a)] if a in atoms else "" for a in atom_index],"projector_labels":labels_out,"population_semantics":"QE projwfc.x Lowdin projected population","basis_incompleteness":True,"total_projected_population":float(np.sum(population)),"projection_completeness_diagnostic":"QE spilling parameter / atomic projection basis is incomplete; populations are not normalized.","electronic_method":method_metadata or {}}
+    arrays={"atom_index":np.asarray(atom_index,int),"projector_index":np.arange(1,len(atom_index)+1,dtype=int),"l":np.asarray(lvals,int),"population":np.asarray(population,float),"population_up":np.asarray(pup,float),"population_down":np.asarray(pdown,float),"spin_difference":np.asarray(diff,float)}
+    status=ResultStatus.VALID if finite else ResultStatus.PARSE_FAILED
+    return ScientificResult("LowdinPopulationResult",status,_prov(path,tool_id="projwfc.x",parser_id="qe.lowdin",**kwargs),arrays=arrays,metadata=metadata)
+
+def parse_orbital_projection(path, *, method_metadata=None, **kwargs):
+    """Parse QE ``filproj`` text written by projwfc.x (k, band, projector weights)."""
+    source=Path(path)
+    if source.is_dir():
+        candidates=sorted(source.glob("*.projwfc_up"))
+        if not candidates: raise ValueError("projwfc projection directory contains no .projwfc_up artifact.")
+        source=candidates[0]
+    lines=source.read_text(encoding="utf-8",errors="replace").splitlines(); rows=[]; projector=None
+    header=re.compile(r"^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)(?:\s+.*)?$")
+    sample=re.compile(r"^\s*(\d+)\s+(\d+)\s+(%s)\s*$" % _NUM)
+    for line in lines:
+        m=header.match(line)
+        if m and re.search(r"[A-Za-z]", m.group(4)):
+            projector={"projector_index":int(m.group(1)),"atom_index":int(m.group(2)),"species":m.group(3),"orbital_label":m.group(4),"l":int(m.group(6)),"m":int(m.group(7))}; continue
+        m=sample.match(line)
+        if m and projector is not None:
+            rows.append((projector.copy(),int(m.group(1)),int(m.group(2)),_f(m.group(3))))
+    if not rows: raise ValueError("projwfc projection artifact contains no k/band/projector rows.")
+    arrays={"k_index":np.asarray([r[1] for r in rows],int),"band_index":np.asarray([r[2] for r in rows],int),"projection_weight":np.asarray([r[3] for r in rows],float),"projector_index":np.asarray([r[0]["projector_index"] for r in rows],int),"atom_index":np.asarray([r[0]["atom_index"] for r in rows],int),"l":np.asarray([r[0]["l"] for r in rows],int),"m":np.asarray([r[0]["m"] for r in rows],int)}
+    if not np.all(np.isfinite(arrays["projection_weight"])) or np.any(arrays["projection_weight"]<0): raise ValueError("Projection weights are non-finite or negative.")
+    metadata={"species":[r[0]["species"] for r in rows],"projector_labels":[r[0]["orbital_label"] for r in rows],"spin_semantics":(method_metadata or {}).get("spin_treatment","SCALAR_NONSPIN"),"electronic_method":method_metadata or {},"projection_semantics":"QE projwfc.x |projection| weights"}
+    return ScientificResult("OrbitalCharacterResult",ResultStatus.VALID,_prov(source,tool_id="projwfc.x",parser_id="qe.projwfc.projection",**kwargs),arrays=arrays,metadata=metadata)
 
 
 def parse_hubbard_parameters(path, **kwargs):

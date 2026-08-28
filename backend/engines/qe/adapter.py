@@ -30,7 +30,7 @@ from backend.pseudopotentials import PseudoSet, Relativity, inspect_upf, validat
 
 
 ENGINE_ID = "quantum_espresso"
-SUPPORTED_CALCULATIONS = frozenset({"scf", "relax", "vc_relax", "phonons", "qe_pw_bands", "qe_pw_nscf", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_ph", "qe_q2r", "qe_matdyn", "qe_fs", "qe_hp", "qe_bader", "qe_pp_bader", "qe_lowdin", "qe_matdyn_dos", "qe_pw_nscf_dos", "qe_pw_nscf_pdos", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_q2r", "qe_ph", "qe_pw_bands"})
+SUPPORTED_CALCULATIONS = frozenset({"scf", "relax", "vc_relax", "phonons", "qe_pw_bands", "qe_pw_nscf", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_ph", "qe_q2r", "qe_matdyn", "qe_fs", "qe_hp", "qe_bader", "qe_pp_bader", "qe_lowdin", "qe_orbital", "qe_matdyn_dos", "qe_pw_nscf_dos", "qe_pw_nscf_pdos", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_q2r", "qe_ph", "qe_pw_bands"})
 DEFERRED_CALCULATIONS = {
     "bands": "C3 has no reliable explicit band-path model; C4 will not guess a path.",
     "dos": "C3 lacks an explicit NSCF -> dos.x workflow stage required for scientifically sound DOS input.",

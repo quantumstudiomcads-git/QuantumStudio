@@ -6,11 +6,11 @@ from backend.calculations.registry import registry
 
 _SCF_PARAMETERS = (
     "accuracy", "functional", "pseudopotential", "ecutwfc", "ecutrho",
-    "conv_thr", "kpoints", "spin", "soc", "spin_treatment", "starting_magnetization", "tot_magnetization", "hubbard_terms", "hubbard_projector", "occupations", "smearing", "degauss",
+    "conv_thr", "kpoints", "spin", "soc", "spin_treatment", "starting_magnetization", "tot_magnetization", "hubbard_terms", "hubbard_projector", "occupations", "smearing", "degauss", "wf_collect", "disk_io",
 )
 _POST_SCF_PARAMETERS = (
     "accuracy", "functional", "pseudopotential", "ecutwfc", "ecutrho",
-    "spin", "soc", "spin_treatment", "starting_magnetization", "tot_magnetization", "hubbard_terms", "hubbard_projector", "occupations", "smearing", "degauss",
+    "spin", "soc", "spin_treatment", "starting_magnetization", "tot_magnetization", "hubbard_terms", "hubbard_projector", "occupations", "smearing", "degauss", "wf_collect", "disk_io",
 )
 
 registry.register(CalculationDefinition(
@@ -79,6 +79,11 @@ registry.register(CalculationDefinition(
     id="mulliken_population", name="Löwdin Population Analysis", category="Electronic Properties",
     description="Atomic-orbital population analysis using QE projwfc.x Löwdin projections.", requires=("scf",),
     workflow="electronic.lowdin", engine="quantum_espresso", tags=("electronic", "projection", "lowdin"), parameters=_POST_SCF_PARAMETERS + ("projection",),
+))
+registry.register(CalculationDefinition(
+    id="orbital_texture", name="Orbital Character / Orbital Texture", category="Electronic Properties",
+    description="k- and band-resolved atomic-orbital projection character from QE projwfc.x.", requires=("scf",),
+    workflow="electronic.orbital_texture", engine="quantum_espresso", tags=("electronic", "orbital", "projection"), parameters=_POST_SCF_PARAMETERS + ("kpath", "kpoint_density"),
 ))
 registry.register(CalculationDefinition(
     id="magnetic_moment", name="Magnetic Moments", category="Electronic Properties",

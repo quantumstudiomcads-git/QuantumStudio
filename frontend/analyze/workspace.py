@@ -15,6 +15,7 @@ from frontend.analyze.plots.volumetric import VolumetricPlot
 from frontend.analyze.plots.fermi_surface import FermiSurfacePlot
 from frontend.analyze.plots.derived_electronic import DerivedElectronicPlot
 from frontend.analyze.plots.bader import BaderChargePlot
+from frontend.analyze.plots.projection import ProjectionPlot
 from frontend.analyze.plots.work_function import WorkFunctionPlot
 from frontend.analyze.plots.base import ScientificPlotWidget
 from frontend.analyze.table_model import ScientificTableModel, ScientificTableView
@@ -197,8 +198,8 @@ class AnalyzeWorkspace(QWidget):
             if not self.service.summaries(root, execution):
                 self.service.parse(root, execution)
             preferred_index = -1; preferred_rank = 99
-            primary_types = {"BandGapResult", "EffectiveMassResult", "BandStructureResult", "DOSResult", "PDOSResult", "PhononDOSResult", "VolumetricResult", "WorkFunctionResult", "FermiSurfaceResult", "BaderChargeResult", "ChargeTransferResult"}
-            ranks = {"BandGapResult": 0, "EffectiveMassResult": 0, "ChargeTransferResult": 0, "BaderChargeResult": 1, "BandStructureResult": 2}
+            primary_types = {"BandGapResult", "EffectiveMassResult", "BandStructureResult", "DOSResult", "PDOSResult", "PhononDOSResult", "VolumetricResult", "WorkFunctionResult", "FermiSurfaceResult", "BaderChargeResult", "ChargeTransferResult", "LowdinPopulationResult", "MagneticMomentResult", "OrbitalCharacterResult"}
+            ranks = {"BandGapResult": 0, "EffectiveMassResult": 0, "ChargeTransferResult": 0, "BaderChargeResult": 1, "MagneticMomentResult": 0, "OrbitalCharacterResult": 0, "LowdinPopulationResult": 0, "BandStructureResult": 2}
             for row in self.service.summaries(root,execution):
                 self.result.addItem(f"{result_kind(type('R',(),{'result_type':row['type']})())} — {row['status']}",row['result_id'])
                 rank = ranks.get(row["type"], 1)
@@ -224,7 +225,7 @@ class AnalyzeWorkspace(QWidget):
         # A plottable terminal Result should open directly in its primary view.
         # Previously every selection was forced to Overview, leaving a completed
         # DOS/PDOS run without a visible graph until secondary navigation.
-        if self.current_result.result_type in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","VolumetricResult","WorkFunctionResult","FermiSurfaceResult","BandGapResult","EffectiveMassResult","BaderChargeResult","ChargeTransferResult"}:
+        if self.current_result.result_type in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","VolumetricResult","WorkFunctionResult","FermiSurfaceResult","BandGapResult","EffectiveMassResult","BaderChargeResult","ChargeTransferResult","LowdinPopulationResult","MagneticMomentResult","OrbitalCharacterResult"}:
             self.navigation.setCurrentRow(1)
         else:
             self.navigation.setCurrentRow(0); self._show_overview()
@@ -244,7 +245,7 @@ class AnalyzeWorkspace(QWidget):
         if self.current_result is None:return
         label=self.navigation.item(row).text() if row >= 0 else ""
         if label=="Overview":self._show_overview()
-        elif label in {"Band Structure","Density of States","Projected DOS","Phonon DOS","Volumetric Field","Work Function","Bader Charge Analysis","Atomic Charge Transfer (Bader)"}:self._show_plot()
+        elif label in {"Band Structure","Density of States","Projected DOS","Phonon DOS","Volumetric Field","Work Function","Bader Charge Analysis","Atomic Charge Transfer (Bader)","Löwdin Population Analysis","Magnetic Moments","Orbital Character / Orbital Texture","Orbital Texture"}:self._show_plot()
         elif label=="Electronic Analysis":self._show_electronic()
         elif label=="Data":self._show_table()
         elif label=="Provenance":self._show_provenance()
@@ -259,6 +260,12 @@ class AnalyzeWorkspace(QWidget):
             lines.extend([f"Total pseudo-valence Bader electrons: {r.metadata.get('total_bader_electrons', '—')}", f"Expected pseudo-valence electrons: {r.metadata.get('expected_valence_electrons', '—')}", f"Conservation difference: {r.metadata.get('charge_conservation_difference', '—')}"])
         if r.result_type == "ChargeTransferResult":
             lines.extend(["Sign convention: positive = electron deficiency; negative = electron accumulation", f"Total charge transfer: {r.metadata.get('total_transfer', '—')}", "Species transfer: "+str(r.metadata.get('species_transfer', {}))])
+        if r.result_type == "LowdinPopulationResult":
+            lines.extend([f"Total projected population: {r.metadata.get('total_projected_population', '—')}", "Projection basis is incomplete; values are not normalized to total electrons."])
+        if r.result_type == "MagneticMomentResult":
+            lines.extend([f"Total magnetization: {r.metadata.get('total_magnetization', '—')}", f"Absolute magnetization: {r.metadata.get('absolute_magnetization', '—')}", "Local values: N_up − N_down in the QE Löwdin projection basis."])
+        if r.result_type == "OrbitalCharacterResult":
+            lines.extend(["Projection semantics: k/band-resolved QE |projection| weights.", f"Projection samples: {len(r.arrays.get('projection_weight', ())) }" ])
         if r.warnings: lines.extend(["","Warnings:"]+r.warnings)
         self.overview.setPlainText("\n".join(lines)); self.views.setCurrentWidget(self.overview)
     def _electronic_analysis(self):
@@ -377,7 +384,7 @@ class AnalyzeWorkspace(QWidget):
         Path(filename).write_text(json.dumps(payload,indent=2,sort_keys=True),encoding="utf-8")
 
     def _show_plot(self):
-        if self.current_result.result_type not in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","VolumetricResult","WorkFunctionResult","FermiSurfaceResult","BandGapResult","EffectiveMassResult","BaderChargeResult","ChargeTransferResult"}:
+        if self.current_result.result_type not in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","VolumetricResult","WorkFunctionResult","FermiSurfaceResult","BandGapResult","EffectiveMassResult","BaderChargeResult","ChargeTransferResult","LowdinPopulationResult","MagneticMomentResult","OrbitalCharacterResult"}:
             self.views.setCurrentWidget(self.overview); return
         if self.current_result.result_type == "PDOSResult":
             selected=pdos_channels(self.current_result, species=self.pdos_species.currentText(), atom=self.pdos_atom.currentText(), orbital=self.pdos_orbital.currentText(), component=self.pdos_component.currentText(), spin=self.pdos_spin.currentText(), aggregation=self.pdos_aggregation.currentText())
@@ -401,7 +408,7 @@ class AnalyzeWorkspace(QWidget):
         self.views.removeWidget(old)
         old.figure.clear()
         old.deleteLater()
-        self.plot = BandPlot(self) if self.current_result.result_type == "BandStructureResult" else WorkFunctionPlot(self) if self.current_result.result_type == "WorkFunctionResult" else VolumetricPlot(self) if self.current_result.result_type == "VolumetricResult" else FermiSurfacePlot(self) if self.current_result.result_type == "FermiSurfaceResult" else DerivedElectronicPlot(self) if self.current_result.result_type in {"BandGapResult","EffectiveMassResult"} else BaderChargePlot(self) if self.current_result.result_type in {"BaderChargeResult","ChargeTransferResult"} else DOSPlot(self)
+        self.plot = BandPlot(self) if self.current_result.result_type == "BandStructureResult" else WorkFunctionPlot(self) if self.current_result.result_type == "WorkFunctionResult" else VolumetricPlot(self) if self.current_result.result_type == "VolumetricResult" else FermiSurfacePlot(self) if self.current_result.result_type == "FermiSurfaceResult" else DerivedElectronicPlot(self) if self.current_result.result_type in {"BandGapResult","EffectiveMassResult"} else BaderChargePlot(self) if self.current_result.result_type in {"BaderChargeResult","ChargeTransferResult"} else ProjectionPlot(self) if self.current_result.result_type in {"LowdinPopulationResult","MagneticMomentResult","OrbitalCharacterResult"} else DOSPlot(self)
         self.views.insertWidget(1,self.plot)
         if self.current_result.result_type == "BandStructureResult":
             analysis=self._electronic_analysis(); self.plot.configure_electronic_analysis(analysis,show_edges=self._show_band_edges,energy_offset=self._reference_offset(analysis),reference_label=self._electronic_reference)

@@ -16,7 +16,7 @@ def post_input(kind, parameters, context):
         window=parameters.get("energy_window",[])
         if not isinstance(window,(list,tuple)) or len(window)!=2 or float(window[1])<=float(window[0]): raise InvalidQEParameterError("DOS energy_window requires Emin < Emax.")
         return serialize_namelist("DOS",{"prefix":prefix,"outdir":outdir,"fildos":"dos.dat","Emin":float(window[0]),"Emax":float(window[1]),"DeltaE":parameters.get("delta_e",0.01),"degauss":parameters.get("degauss")})+"\n"
-    if kind in {"qe_projwfc", "qe_lowdin"}: return serialize_namelist("PROJWFC",{"prefix":prefix,"outdir":outdir,"Emin":parameters.get("energy_window",[-10,10])[0],"Emax":parameters.get("energy_window",[-10,10])[1],"DeltaE":parameters.get("delta_e",0.01),"degauss":parameters.get("degauss")})+"\n"
+    if kind in {"qe_projwfc", "qe_lowdin"}: return serialize_namelist("PROJWFC",{"prefix":prefix,"outdir":outdir,"Emin":parameters.get("energy_window",[-10,10])[0],"Emax":parameters.get("energy_window",[-10,10])[1],"DeltaE":parameters.get("delta_e",0.01),"degauss":parameters.get("degauss"),"filproj":parameters.get("filproj")})+"\n"
     if kind=="qe_pp":
         plot={"charge":0,"spin":6,"elf":8,"potential":11,"band_decomposed_charge":7}[parameters["plot_kind"]]
         return serialize_namelist("INPUTPP",{"prefix":prefix,"outdir":outdir,"plot_num":plot,"filplot":parameters["plot_kind"]+".dat","kpoint":parameters.get("kpoint"),"kband":parameters.get("kband"),"spin_component":parameters.get("spin_component")})+"\n\n"+serialize_namelist("PLOT",{"iflag":3,"output_format":6,"fileout":parameters.get("artifact", parameters["plot_kind"]+".cube")})+"\n"

@@ -61,7 +61,7 @@ class CatalogRegistryReconciliationTests(unittest.TestCase):
     def test_active_catalog_has_exact_implemented_mapping_and_explicit_nonimplemented_entries(self):
         report = CalculationService(CALCULATIONS).get_catalog_reconciliation_report()
         self.assertEqual(report.frontend_count, 147)
-        self.assertEqual(report.backend_count, 33)
+        self.assertEqual(report.backend_count, 34)
         self.assertEqual(report.invalid_mappings, ())
         self.assertTrue(set(report.implemented_ids) <= {item.id for item in active_registry.all()})
         self.assertEqual(len(report.planned_ids), 110)

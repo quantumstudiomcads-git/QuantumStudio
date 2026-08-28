@@ -324,7 +324,7 @@ register(
     "Post-processing",
     "Atomic-orbital population analysis using QE projwfc.x Löwdin projections.",
     ["population"],
-    "partial",
+    "ready",
 )
 
 register(
@@ -374,7 +374,7 @@ register(
     "Quantum ESPRESSO",
     "Total QE magnetization and projected local moments where collinear projections are available.",
     ["magnetism"],
-    "partial",
+    "ready",
 )
 
 register(

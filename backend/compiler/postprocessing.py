@@ -26,7 +26,7 @@ def _path(value, label):
 def expand(request, tasks, parameters):
     selected=set(request.selected_calculations); by={task.calculation_id:task for task in tasks}; scf=by.get("scf")
     if not scf: return tasks
-    result=[task for task in tasks if task.calculation_id not in {"bands","dos","pdos","charge_density","spin_density","electron_localization","electrostatic_potential","work_function","fermi_surface","hubbard_u","band_gap","effective_mass","bader_charge","charge_transfer","mulliken_population","magnetic_moment","band_decomposed_charge","hybrid_electronic","phonon_dos"}]
+    result=[task for task in tasks if task.calculation_id not in {"bands","dos","pdos","charge_density","spin_density","electron_localization","electrostatic_potential","work_function","fermi_surface","hubbard_u","band_gap","effective_mass","bader_charge","charge_transfer","mulliken_population","magnetic_moment","orbital_texture","band_decomposed_charge","hybrid_electronic","phonon_dos"}]
     def add(name, semantic, tool, deps, params, inputs, outputs, metadata=None):
         signature=_sig({"semantic":semantic,"calculation_id":name,"purpose":(metadata or {}).get("purpose"),"structure":request.structure,"pseudopotentials":_pseudo_identity(request.parameters.get("pseudopotentials",{})),"parameters":params}); task=PlannedTask(id=f"{request.id}:{semantic}:{signature}",calculation_id=name,semantic_task_type=semantic,engine_id="quantum_espresso",tool_id=tool,parameter_signature=signature,depends_on_task_ids=tuple(dep.id for dep in deps),parameters=params,structure_reference="request_snapshot",artifact_inputs=tuple(inputs),artifact_outputs=tuple(outputs),metadata=metadata or {}); result.append(task); return task
     if set(selected) & {"bands", "band_gap", "effective_mass", "hybrid_electronic"}:
@@ -68,7 +68,14 @@ def expand(request, tasks, parameters):
         add("qe_bader","qe_bader","bader",[pp],{"density_file":"../bader_charge.cube"},["BADER_CHARGE_CUBE"],["BADER_ACF"],{"purpose":purpose,"result_type":"BaderChargeResult"})
     if set(selected) & {"mulliken_population", "magnetic_moment"}:
         values=dict(parameters.get("mulliken_population", parameters.get("magnetic_moment", {})))
-        add("qe_lowdin","qe_lowdin","projwfc.x",[scf],values,["qe_save"],["LOWDIN_POPULATION"],{"purpose":"lowdin_population","result_type":"LowdinPopulationResult"})
+        purpose="magnetic_moment" if "magnetic_moment" in selected else "lowdin_population"
+        add("qe_lowdin","qe_lowdin","projwfc.x",[scf],values,["qe_save"],["LOWDIN_POPULATION"],{"purpose":purpose,"result_type":"LowdinPopulationResult","field":{"atoms":list(request.structure.get("atoms",[]))}})
+    if "orbital_texture" in selected:
+        values=dict(parameters.get("orbital_texture", {})); values["filproj"]="orbital_character"
+        path=_path(values.get("kpath") or dict(parameters.get("bands", {})).get("kpath"),"Orbital-character band structure")
+        pw=add("qe_pw_bands","qe_pw_bands","pw.x",[scf], {**dict(scf.parameters),"band_path":path},["qe_save"],["qe_band_eigenvalues"],{"purpose":"orbital_character"})
+        bands_task=add("qe_bands","qe_bands","bands.x",[pw],{"filband":"bands.dat"},["qe_save","qe_band_eigenvalues"],["BAND_STRUCTURE_RAW_DATA"],{"purpose":"orbital_character","band_path":path})
+        add("qe_orbital","qe_projwfc","projwfc.x",[bands_task],values,["qe_save","qe_band_eigenvalues"],["ORBITAL_CHARACTER_RAW_DATA"],{"purpose":"orbital_character","result_type":"OrbitalCharacterResult"})
     for public, kind, output in (("charge_density","charge","VOLUMETRIC_RAW_DATA"),("spin_density","spin","VOLUMETRIC_RAW_DATA"),("electron_localization","elf","VOLUMETRIC_RAW_DATA"),("electrostatic_potential","potential","VOLUMETRIC_RAW_DATA"),("work_function","potential","VOLUMETRIC_RAW_DATA")):
 
         if public in selected:

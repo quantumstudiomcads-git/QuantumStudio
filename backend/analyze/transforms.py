@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 def result_kind(result):
-    return {"BandStructureResult":"Band Structure", "DOSResult":"Density of States", "PDOSResult":"Projected DOS", "PhononDOSResult":"Phonon DOS", "GroundStateResult":"Ground State", "RelaxationResult":"Relaxation", "WannierizationResult":"Wannier", "ElectronPhononResult":"EPW", "VolumetricResult":"Volumetric Field", "WorkFunctionResult":"Work Function", "BandGapResult":"Band Gap Analysis", "EffectiveMassResult":"Effective Mass", "BaderChargeResult":"Bader Charge Analysis", "ChargeTransferResult":"Atomic Charge Transfer (Bader)"}.get(result.result_type, result.result_type)
+    return {"BandStructureResult":"Band Structure", "DOSResult":"Density of States", "PDOSResult":"Projected DOS", "PhononDOSResult":"Phonon DOS", "GroundStateResult":"Ground State", "RelaxationResult":"Relaxation", "WannierizationResult":"Wannier", "ElectronPhononResult":"EPW", "VolumetricResult":"Volumetric Field", "WorkFunctionResult":"Work Function", "BandGapResult":"Band Gap Analysis", "EffectiveMassResult":"Effective Mass", "BaderChargeResult":"Bader Charge Analysis", "ChargeTransferResult":"Atomic Charge Transfer (Bader)", "LowdinPopulationResult":"Löwdin Population Analysis", "MagneticMomentResult":"Magnetic Moments", "OrbitalCharacterResult":"Orbital Character / Orbital Texture"}.get(result.result_type, result.result_type)
 
 def _values(result, key):
     value = result.arrays.get(key, ())
@@ -34,6 +34,28 @@ def tabular_data(result):
     if t=="EffectiveMassResult":
         x=_values(result,"k_distance_Ainv"); y=_values(result,"energy_eV"); fit=_values(result,"fit_energy_eV"); rows=[[x[i],y[i],fit[i] if i<len(fit) else ""] for i in range(len(x))]
         return ["k_distance_Ainv","energy_eV","fit_energy_eV"], rows
+    if t=="LowdinPopulationResult":
+        arrays=result.arrays; species=list(result.metadata.get("species",())); n=len(_values(result,"population"));
+        cols=["atom_index","species","projector_index","projector_label","l","population"]
+        if "population_up" in arrays: cols += ["population_up","population_down","spin_difference"]
+        labels=list(result.metadata.get("projector_labels",()))
+        rows=[]
+        for i in range(n):
+            row=[_values(result,"atom_index")[i],species[i] if i<len(species) else "",_values(result,"projector_index")[i],labels[i] if i<len(labels) else "",_values(result,"l")[i],_values(result,"population")[i]]
+            if "population_up" in arrays: row += [_values(result,key)[i] for key in ("population_up","population_down","spin_difference")]
+            rows.append(row)
+        return cols,rows
+    if t=="MagneticMomentResult":
+        idx=_values(result,"atom_index"); moments=_values(result,"projected_local_moment"); species=list(result.metadata.get("species",()))
+        return ["atom_index","species","projected_local_moment"], [[idx[i],species[i] if i<len(species) else "",moments[i]] for i in range(min(len(idx),len(moments)))]
+    if t=="OrbitalCharacterResult":
+        n=len(_values(result,"projection_weight")); species=list(result.metadata.get("species",())); labels=list(result.metadata.get("projector_labels",())); rows=[]
+        keys=("k_index","k_distance","band_index","energy_eV","atom_index","projector_index","l","m","projection_weight")
+        cols=[key for key in keys if key in result.arrays]
+        rows=[[(_values(result,key)[i] if i<len(_values(result,key)) else "") for key in cols] for i in range(n)]
+        if "species" not in cols: cols.insert(5,"species"); [row.insert(5,species[i] if i<len(species) else "") for i,row in enumerate(rows)]
+        if "projector_label" not in cols: cols.insert(6,"projector_label"); [row.insert(6,labels[i] if i<len(labels) else "") for i,row in enumerate(rows)]
+        return cols,rows
     if t=="BaderChargeResult":
         idx=_values(result,"atom_index"); pos=result.arrays.get("positions_A",()); pos=pos.tolist() if hasattr(pos,"tolist") else list(pos)
         columns={"bader_electrons":_values(result,"bader_electrons"),"pseudo_valence":_values(result,"pseudo_valence_charge") or _values(result,"z_valence"),"net_charge":_values(result,"net_charge"),"basin_volume":_values(result,"basin_volume_A3"),"min_distance":_values(result,"minimum_distance_A")}

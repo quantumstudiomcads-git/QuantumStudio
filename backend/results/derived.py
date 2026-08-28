@@ -42,9 +42,17 @@ def derive_charge_transfer(source):
 
 def derive_magnetic_moments(lowdin, ground_state=None):
     population=np.asarray(lowdin.arrays.get("population",()),dtype=float)
-    moments=np.asarray(lowdin.arrays.get("spin_difference",np.zeros_like(population)),dtype=float)
+    moments=np.asarray(lowdin.arrays.get("spin_difference",()),dtype=float)
+    atom_indices=np.asarray(lowdin.arrays.get("atom_index",np.arange(1,len(population)+1)))
+    unique=[]; local=[]
+    for atom in atom_indices:
+        if atom in unique: continue
+        unique.append(atom); vals=moments[atom_indices==atom] if len(moments)==len(atom_indices) else np.asarray(())
+        local.append(float(np.nansum(vals)) if len(vals) and np.any(np.isfinite(vals)) else np.nan)
     scalars={}
     if ground_state is not None:
         for key in ("total_magnetization","absolute_magnetization"):
             if key in ground_state.scalars: scalars[key]=dict(ground_state.scalars[key])
-    return ScientificResult("MagneticMomentResult",ResultStatus.VALID,lowdin.provenance,scalars=scalars,arrays={"atom_index":np.asarray(lowdin.arrays.get("atom_index",np.arange(1,len(population)+1))),"projected_local_moment":moments},metadata={"source_lowdin_result_id":lowdin.result_id,"species":lowdin.metadata.get("species",[]),"projection_basis":"QE projwfc.x Lowdin projections","spin_treatment":(lowdin.metadata.get("electronic_method") or {}).get("spin_treatment","SCALAR_NONSPIN"),"population_reference":population.tolist()})
+    has_spin=bool(local) and np.all(np.isfinite(local))
+    warnings=[] if has_spin else ["QE projwfc output did not provide complete spin-resolved Lowdin populations; projected local moments are unavailable."]
+    return ScientificResult("MagneticMomentResult",ResultStatus.VALID if has_spin else ResultStatus.PARTIAL,lowdin.provenance,scalars=scalars,arrays={"atom_index":np.asarray(unique,dtype=int),"projected_local_moment":np.asarray(local,dtype=float)},metadata={"source_lowdin_result_id":lowdin.result_id,"source_ground_state_result_id":None if ground_state is None else ground_state.result_id,"species":[lowdin.metadata.get("species",[])[list(atom_indices).index(atom)] if atom in atom_indices else "" for atom in unique],"projection_basis":"QE projwfc.x Lowdin projections","spin_treatment":(lowdin.metadata.get("electronic_method") or {}).get("spin_treatment","SCALAR_NONSPIN"),"moment_definition":"N_up - N_down (projected local magnetic moment; electron-spin convention)","population_reference":population.tolist()},warnings=warnings)

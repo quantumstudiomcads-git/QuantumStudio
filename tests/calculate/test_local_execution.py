@@ -14,6 +14,16 @@ def task(name,deps=(),code="print('ok')",**kwargs):
     return GeneratedTask(name,name,"test_engine","python",name,CommandSpec(sys.executable,("-c",code),stdout_file="out.log",stderr_file="err.log"),tuple(deps),**kwargs)
 def manager(callback=None): return LocalExecutionManager(LocalToolConfiguration(tool_paths={"python":sys.executable}),callback)
 
+class QEConvergenceHandoffTests(unittest.TestCase):
+ def test_nonconverged_qe_task_is_failed_and_blocks_postprocessor(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   scf=GeneratedTask("scf","scf","quantum_espresso","python","scf",CommandSpec(sys.executable,("-c","print('convergence NOT achieved after 100 iterations: stopping')",),stdout_file="out.log",stderr_file="err.log"))
+   post=GeneratedTask("proj","qe_projwfc","quantum_espresso","python","proj",CommandSpec(sys.executable,("-c","print('must not run')",),stdout_file="out.log",stderr_file="err.log"),dependencies=("scf",))
+   result=manager().execute(workflow(tmp,(scf,post)))
+   self.assertEqual(result.tasks["scf"].state,TaskState.FAILED)
+   self.assertIn("convergence NOT achieved",result.tasks["scf"].error_message)
+   self.assertEqual(result.tasks["proj"].state,TaskState.BLOCKED)
+
 class LocalExecutionTests(unittest.TestCase):
  def test_simple_dependency_state_order_and_logs(self):
   with tempfile.TemporaryDirectory() as tmp:

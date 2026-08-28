@@ -111,7 +111,21 @@ class LocalExecutionManager:
       self._terminate_current(); runtime.state=TaskState.FAILED; runtime.error_message="Task timeout exceeded."; break
      time.sleep(.03)
     runtime.return_code=process.poll()
-    if runtime.state is TaskState.RUNNING: runtime.state=TaskState.COMPLETED if runtime.return_code==0 else TaskState.FAILED
+    if runtime.state is TaskState.RUNNING:
+     runtime.state=TaskState.COMPLETED if runtime.return_code==0 else TaskState.FAILED
+    # QE can return zero after writing only config/charge-density when an SCF
+    # stops at electron_maxstep.  Such a state is not a valid restart input for
+    # projwfc.x or other wavefunction consumers, so classify it as failed before
+    # dependency scheduling can launch a postprocessor.
+    if runtime.state is TaskState.COMPLETED and task.engine_id == "quantum_espresso":
+     try:
+      stdout_text=stdout_path.read_text(encoding="utf-8", errors="replace")
+      stderr_text=stderr_path.read_text(encoding="utf-8", errors="replace")
+     except OSError:
+      stdout_text=stderr_text=""
+     if "convergence NOT achieved" in stdout_text:
+      runtime.state=TaskState.FAILED
+      runtime.error_message=extract_qe_failure(stdout_text, stderr_text, runtime.return_code) or "Quantum ESPRESSO SCF did not converge; restart wavefunctions were not produced."
     if runtime.state is TaskState.FAILED and not runtime.error_message:
      stdout.flush(); stderr.flush()
      try:

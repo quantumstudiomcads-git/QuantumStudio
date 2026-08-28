@@ -1,6 +1,7 @@
 """Qt-free Calculate-facing access to C8 execution-sidecar Results."""
 from __future__ import annotations
 import json
+import numpy as np
 from pathlib import Path
 from backend.execution import ExecutionStore
 from backend.execution.models import TaskState
@@ -33,7 +34,7 @@ class ResultService:
   """Pick only the completed task's current attempt output or bounded raw contract."""
   workflow=Path(root).resolve(); directory=(workflow/str(task.get("working_directory",""))).resolve()
   if workflow not in directory.parents and directory != workflow: raise ResultStoreError("Task directory escapes generated workflow root.")
-  names={"qe_bands":("bands.dat",), "qe_fs":("fermi_surface.bxsf","*_fs.bxsf","*.bxsf"), "qe_dos":("dos.dat",), "qe_matdyn":("phdos.dat","phonon.dos"), "qe_projwfc":("*.pdos_atm#*","pdos_atm#*"), "qe_pp":(), "qe_bader":("ACF.dat",)}
+  names={"qe_bands":("bands.dat",), "qe_fs":("fermi_surface.bxsf","*_fs.bxsf","*.bxsf"), "qe_dos":("dos.dat",), "qe_matdyn":("phdos.dat","phonon.dos"), "qe_projwfc":("*.pdos_atm#*","pdos_atm#*","*.projwfc_up"), "qe_pp":(), "qe_bader":("ACF.dat",)}
   if semantic=="wannier90_run":
    candidates=sorted(directory.glob("*.wout"))
    if len(candidates)==1 and directory in candidates[0].resolve().parents: return candidates[0]
@@ -78,7 +79,10 @@ class ResultService:
    if source is None:
     errors.append(f"{semantic}: declared result source is missing."); continue
    try:
-    parse_kwargs={"request_id":record.request_id,"execution_id":execution_id,"task_id":task_id,"method_metadata":(task.get("metadata") or {}).get("electronic_method",{})};
+    task_metadata=task.get("metadata",{}) or {}
+    purpose=(task_metadata.get("task_metadata",{}) or {}).get("purpose")
+    if semantic == "qe_projwfc" and purpose == "orbital_character": route="ORBITAL_CHARACTER_RAW_DATA"
+    parse_kwargs={"request_id":record.request_id,"execution_id":execution_id,"task_id":task_id,"method_metadata":task_metadata.get("electronic_method",{})};
     if semantic == "qe_bader":
      field=((task.get("metadata") or {}).get("task_metadata") or {}).get("field",{})
      if not field:
@@ -91,14 +95,30 @@ class ResultService:
      parse_kwargs["expected_atom_count"] = len(atoms)
      pseudo=(task.get("metadata") or {}).get("pseudopotentials", {})
      parse_kwargs["z_valence"]=[(pseudo.get(str(atom.get("element", "")), {}) or {}).get("z_valence") for atom in atoms if isinstance(atom,dict)]
-    if semantic == "qe_pp": parse_kwargs["field_metadata"]=((task.get("metadata") or {}).get("task_metadata") or {}).get("field",{})
+    if semantic == "qe_lowdin":
+     field=((task_metadata.get("task_metadata") or {}).get("field",{}))
+     if not field:
+      for parent_id in ancestors(task_id):
+       parent_meta=manifest.get(parent_id,{}).get("metadata",{}) or {}; field=((parent_meta.get("task_metadata") or {}).get("field",{}))
+       if field: break
+     atoms=field.get("atoms",[]) if isinstance(field,dict) else []
+     parse_kwargs["species"]=[str(atom.get("element", "")) for atom in atoms if isinstance(atom,dict)]
+     parse_kwargs["expected_atom_count"]=len(atoms) if atoms else None
+    if semantic == "qe_pp": parse_kwargs["field_metadata"]=((task_metadata.get("task_metadata") or {}).get("field",{}))
     if semantic == "qe_bands": parse_kwargs["band_path"]=(task.get("metadata") or {}).get("band_path");
     result=DEFAULT_PARSERS.parse(route,source,**parse_kwargs)
     result.metadata.setdefault("electronic_method",(task.get("metadata") or {}).get("electronic_method",{}))
-    task_metadata=task.get("metadata",{}) or {}
     lineage=ancestors(task_id)
+    if result.result_type == "OrbitalCharacterResult":
+     parent_band=next((parsed_by_task[parent] for parent in lineage if parent in parsed_by_task and parsed_by_task[parent].result_type == "BandStructureResult"), None)
+     if parent_band is not None:
+      kcoords=np.asarray(parent_band.arrays.get("path_coordinate",()),dtype=float); energies=np.asarray(parent_band.arrays.get("energies",()),dtype=float)
+      if energies.ndim == 2 and len(kcoords):
+       ki=np.asarray(result.arrays.get("k_index",()),dtype=int)-1; bi=np.asarray(result.arrays.get("band_index",()),dtype=int)-1
+       if len(ki) and np.all((ki>=0)&(ki<len(kcoords))) and np.all((bi>=0)&(bi<energies.shape[1])):
+        result.arrays["k_distance"]=kcoords[ki]; result.arrays["energy_eV"]=energies[ki,bi]; result.metadata["source_band_result_id"]=parent_band.result_id
     result.metadata.setdefault("workflow_provenance",{"terminal_task_id":task_id,"terminal_semantic_task":semantic,"parent_task_ids":list(task.get("dependencies",())) if isinstance(task.get("dependencies",()),(list,tuple)) else [],"ancestor_task_ids":list(lineage),"purpose":(task_metadata.get("task_metadata",{}) or {}).get("purpose"),"structure_fingerprint":task_metadata.get("structure_fingerprint",""),"pseudopotentials":task_metadata.get("pseudopotentials",{}),"qe_prefix":task_metadata.get("qe_prefix"),"qe_outdir":task_metadata.get("qe_outdir"),"task_parameter_signatures":{parent:(manifest.get(parent,{}).get("metadata",{}) or {}).get("parameter_signature") for parent in (*lineage,task_id)}})
-    if semantic in {"qe_dos","qe_projwfc"}:
+    if semantic in {"qe_dos","qe_projwfc"} and route in {"DOS_RAW_DATA","PDOS_RAW_DATA"}:
      upstream=[parsed_by_task[parent] for parent in lineage if manifest.get(parent,{}).get("calculation_id")=="scf" and parent in parsed_by_task]
      # The terminal dos.x header wins. Otherwise use only the parent SCF Result,
      # never an unrelated prior execution or a sibling public calculation.
@@ -130,7 +150,7 @@ class ResultService:
      for derived in derived_values:
       if reparse or derived.result_id not in store.list(): store.save(derived)
       parsed.append(derived.result_id)
-    if result.result_type == "LowdinPopulationResult":
+    if result.result_type == "LowdinPopulationResult" and purpose == "magnetic_moment":
      parent=next((parsed_by_task[parent] for parent in lineage if parsed_by_task.get(parent) is not None and parsed_by_task[parent].result_type == "GroundStateResult"),None)
      derived=derive_magnetic_moments(result,parent)
      if reparse or derived.result_id not in store.list(): store.save(derived)

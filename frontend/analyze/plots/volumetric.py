@@ -11,11 +11,16 @@ class VolumetricPlot(ScientificPlotWidget):
  def _redraw(self,*_):
   if self._result is not None: super().set_result(self._result)
  def _draw(self,result):
+  if hasattr(self,"_colorbar") and self._colorbar is not None:
+   try:
+    if getattr(self._colorbar,"ax",None) is not None: self._colorbar.remove()
+   except (AttributeError,ValueError): pass
+   self._colorbar=None
   unit=result.metadata.get("unit",""); signed=bool(result.metadata.get("signed")); title=result.metadata.get("quantity_kind","Volumetric field").replace("_"," ").title()
   if self.mode.currentText()=="Profile":
    profile=field_profile(result,{"XY":"Z","XZ":"Y","YZ":"X"}[self.plane.currentText()]); self.axes.plot(profile["distance_A"],profile["values"]); self.axes.set_xlabel(f"Distance along {profile['axis']} (Å)"); self.axes.set_ylabel(unit); self.axes.set_title(title+" planar profile")
   else:
-   data=field_slice(result,self.plane.currentText(),self.position.value()/100); limit=max(abs(float(data.values.min())),abs(float(data.values.max()))) if signed else None; image=self.axes.imshow(data.values.T,origin="lower",aspect="auto",cmap="RdBu_r" if signed else "viridis",vmin=-limit if signed else None,vmax=limit if signed else None); self.figure.colorbar(image,ax=self.axes,label=unit); self.axes.set_xlabel(self.plane.currentText()[0]+" fractional"); self.axes.set_ylabel(self.plane.currentText()[1]+" fractional"); self.axes.set_title(f"{title} {self.plane.currentText()} slice")
+   data=field_slice(result,self.plane.currentText(),self.position.value()/100); limit=max(abs(float(data.values.min())),abs(float(data.values.max()))) if signed else None; image=self.axes.imshow(data.values.T,origin="lower",aspect="auto",cmap=self.appearance_state.colormap or ("RdBu_r" if signed else "viridis"),vmin=self.appearance_state.color_min if self.appearance_state.color_min is not None else (-limit if signed else None),vmax=self.appearance_state.color_max if self.appearance_state.color_max is not None else (limit if signed else None)); self._colorbar=self.figure.colorbar(image,ax=self.axes,label=self.appearance_state.colorbar_label or unit); image._qs_series_id="volumetric_field"; self.appearance_state.series.setdefault("volumetric_field",{}); self.axes.set_xlabel(self.plane.currentText()[0]+" fractional"); self.axes.set_ylabel(self.plane.currentText()[1]+" fractional"); self.axes.set_title(f"{title} {self.plane.currentText()} slice")
  def export_data(self):
   if self._result is None:return
   path,_=QFileDialog.getSaveFileName(self,"Export field data","field_slice.csv",filter="Slice CSV (*.csv);;Profile CSV (*.csv);;NPZ (*.npz)")

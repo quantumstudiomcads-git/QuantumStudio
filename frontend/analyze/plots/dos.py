@@ -11,7 +11,6 @@ class DOSPlot(ScientificPlotWidget):
         self.reference=QComboBox(self); self.reference.addItem("Absolute"); self.reference.currentIndexChanged.connect(self._redraw)
         self.integrated=QCheckBox("Show integrated DOS",self); self.integrated.setVisible(False); self.integrated.toggled.connect(self._redraw)
         self.spin_mode=QComboBox(self); self.spin_mode.addItems(["Mirrored", "Both positive"]); self.spin_mode.setVisible(False); self.spin_mode.currentIndexChanged.connect(self._redraw)
-        self.toolbar.insertWidget(1,QLabel("Energy reference:",self)); self.toolbar.insertWidget(2,self.reference); self.toolbar.insertWidget(3,self.integrated); self.toolbar.insertWidget(4,self.spin_mode)
     def set_pdos_channels(self,channels): self._pdos_channels=list(channels)
     def set_result(self,result):
         self.reference.blockSignals(True); self.reference.clear(); self.reference.addItem("Absolute")

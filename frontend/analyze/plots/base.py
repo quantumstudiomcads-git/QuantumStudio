@@ -28,25 +28,33 @@ class PlotAppearanceEditor(QScrollArea):
         for key,label in (("title_font_size","Title size"),("axis_label_font_size","Axis-label size"),("tick_label_font_size","Tick-label size"),("legend_font_size","Legend size"),("annotation_font_size","Annotation size")): self._spin(key,label,tf,2,48)
         self._check("title_bold","Title bold",tf); self._check("title_italic","Title italic",tf); self._check("axis_label_bold","Axis-label bold",tf); self._check("axis_label_italic","Axis-label italic",tf); layout.addWidget(typography)
         figure=QGroupBox("Figure"); ff=QFormLayout(figure); self._spin("figure_width","Width (in)",ff,.1,30,decimals=2); self._spin("figure_height","Height (in)",ff,.1,30,decimals=2); self._color("figure_background","Figure background",ff); self._color("axes_background","Axes background",ff); layout.addWidget(figure)
-        image=QGroupBox("Image / Colorbar"); imf=QFormLayout(image); self._combo("colormap","Colormap",imf,("viridis","plasma","inferno","magma","cividis","RdBu_r","coolwarm")); self._combo("interpolation","Interpolation",imf,("nearest","bilinear","bicubic")); self._spin("color_min","Color minimum",imf,-1e9,1e9,decimals=5,nullable=True); self._spin("color_max","Color maximum",imf,-1e9,1e9,decimals=5,nullable=True); self._check("colorbar_visible","Show colorbar",imf); self._line("colorbar_label","Colorbar label",imf); layout.addWidget(image)
+        image=QGroupBox("Image / Colorbar"); imf=QFormLayout(image); self._combo("colormap","Colormap",imf,("viridis","plasma","inferno","magma","cividis","RdBu_r","coolwarm")); self._combo("interpolation","Interpolation",imf,("nearest","bilinear","bicubic")); self._spin("color_min","Color minimum",imf,0,1,decimals=5,nullable=True); self._spin("color_max","Color maximum",imf,0,1,decimals=5,nullable=True); self._check("colorbar_visible","Show colorbar",imf); self._line("colorbar_label","Colorbar label",imf); layout.addWidget(image)
         axes=QGroupBox("Axes"); af=QFormLayout(axes)
         self._line("x_label_override","X label",af); self._line("y_label_override","Y label",af)
-        for key,label in (("x_min","X minimum"),("x_max","X maximum"),("y_min","Y minimum"),("y_max","Y maximum")): self._spin(key,label,af,-1e9,1e9,decimals=5,nullable=True)
+        for key,label in (("x_min","X minimum"),("x_max","X maximum"),("y_min","Y minimum"),("y_max","Y maximum")): self._spin(key,label,af,-1e6,1e6,decimals=5,nullable=True)
         self._combo("x_scale","X scale",af,("linear","log")); self._combo("y_scale","Y scale",af,("linear","log")); self._spin("spine_width","Spine width",af,0.1,10,decimals=2); self._combo("major_tick_direction","Major tick direction",af,("in","out")); self._check("minor_ticks_enabled","Minor ticks",af); layout.addWidget(axes)
         legend=QGroupBox("Legend"); lf=QFormLayout(legend); self._check("show_legend","Show legend",lf); self._combo("legend_location","Position",lf,("best","upper right","upper left","lower right","lower left","center right","center left","lower center","upper center","center")); self._spin("legend_columns","Columns",lf,1,20,decimals=0); self._check("legend_frame","Frame",lf); self._spin("legend_frame_alpha","Frame alpha",lf,0,1,decimals=2); layout.addWidget(legend)
-        grid=QGroupBox("Grid"); gf=QFormLayout(grid); self._check("show_grid","Show grid",gf); self._color("grid_color","Color",gf); self._combo("grid_line_style","Line style",gf,("-","--",":","-.")); self._spin("grid_line_width","Width",gf,.1,10,decimals=2); self._spin("grid_alpha","Opacity",gf,0,1,decimals=2); layout.addWidget(grid)
-        series=QGroupBox("Series"); sf2=QFormLayout(series); self.series_combo=QComboBox(); sf2.addRow("Series",self.series_combo); self._series_control("visible","Visible",sf2); self._series_control("color","Color",sf2); self._series_control("line_width","Line width",sf2); self._series_control("line_style","Line style",sf2,("-","--",":","-.")); self._series_control("marker","Marker",sf2,("none","o","s","^","D")); self._series_control("marker_size","Marker size",sf2); self._series_control("opacity","Opacity",sf2); all_button=QPushButton("Apply Appearance to All Series"); sf2.addRow(all_button); all_button.clicked.connect(self.apply_all); layout.addWidget(series)
-        references=QGroupBox("Reference Lines"); rf=QFormLayout(references); self.reference_combo=QComboBox(); self.reference_visible=QCheckBox(); self.reference_color=QPushButton(); self.reference_width=QDoubleSpinBox(); self.reference_width.setRange(0,10); self.reference_width.setValue(0.8); self.reference_style=QComboBox(); self.reference_style.addItems(["-","--",":","-."]); self.reference_opacity=QDoubleSpinBox(); self.reference_opacity.setRange(0,1); self.reference_opacity.setDecimals(2); self.reference_opacity.setValue(1); rf.addRow("Line",self.reference_combo); rf.addRow("Visible",self.reference_visible); rf.addRow("Color",self.reference_color); rf.addRow("Width",self.reference_width); rf.addRow("Style",self.reference_style); rf.addRow("Opacity",self.reference_opacity); layout.addWidget(references); self.reference_combo.currentTextChanged.connect(self._load_reference); self.reference_visible.toggled.connect(self._reference_changed); self.reference_color.clicked.connect(lambda: self._pick_reference_color()); self.reference_width.valueChanged.connect(self._reference_changed); self.reference_style.currentTextChanged.connect(self._reference_changed); self.reference_opacity.valueChanged.connect(self._reference_changed)
+        grid=QGroupBox("Grid"); gf=QFormLayout(grid); self._check("show_grid","Show grid",gf); self._color("grid_color","Color",gf); self._combo("grid_line_style","Line style",gf,("Solid","Dashed","Dotted","Dash-dot")); self._spin("grid_line_width","Width",gf,.1,10,decimals=2); self._spin("grid_alpha","Opacity",gf,0,1,decimals=2); layout.addWidget(grid)
+        series=QGroupBox("Series"); sf2=QFormLayout(series); self.series_combo=QComboBox(); sf2.addRow("Series",self.series_combo); self._series_control("visible","Visible",sf2); self._series_control("color","Color",sf2); self._series_control("line_width","Line width",sf2); self._series_control("line_style","Line style",sf2,("Solid","Dashed","Dotted","Dash-dot","None")); self._series_control("marker","Marker",sf2,("None","Circle","Square","Triangle Up","Triangle Down","Diamond","Cross","Plus")); self._series_control("marker_size","Marker size",sf2); self._series_control("opacity","Opacity",sf2); all_button=QPushButton("Apply Appearance to All Series"); sf2.addRow(all_button); all_button.clicked.connect(self.apply_all); layout.addWidget(series)
+        references=QGroupBox("Reference Lines"); rf=QFormLayout(references); self.reference_combo=QComboBox(); self.reference_visible=QCheckBox(); self.reference_color=QPushButton(); self.reference_width=QDoubleSpinBox(); self.reference_width.setRange(0,10); self.reference_width.setValue(0.8); self.reference_style=QComboBox(); self.reference_style.addItems(["Solid","Dashed","Dotted","Dash-dot"]); self.reference_opacity=QDoubleSpinBox(); self.reference_opacity.setRange(0,1); self.reference_opacity.setDecimals(2); self.reference_opacity.setValue(1); rf.addRow("Line",self.reference_combo); rf.addRow("Visible",self.reference_visible); rf.addRow("Color",self.reference_color); rf.addRow("Width",self.reference_width); rf.addRow("Style",self.reference_style); rf.addRow("Opacity",self.reference_opacity); layout.addWidget(references); self.reference_combo.currentTextChanged.connect(self._load_reference); self.reference_visible.toggled.connect(self._reference_changed); self.reference_color.clicked.connect(lambda: self._pick_reference_color()); self.reference_width.valueChanged.connect(self._reference_changed); self.reference_style.currentTextChanged.connect(self._reference_changed); self.reference_opacity.valueChanged.connect(self._reference_changed)
         layout.addStretch(); self.setWidget(body); self._load_state(); self.series_combo.currentIndexChanged.connect(self._load_series)
     def _add(self,key,widget,label,form): self.controls[key]=widget; form.addRow(label,widget); widget.destroyed.connect(lambda:None)
     def _spin(self,key,label,form,minimum,maximum,decimals=2,nullable=False):
+        if nullable:
+            box=QLineEdit(); box.setPlaceholderText("Auto"); self._add(key,box,label,form); box.textChanged.connect(lambda value,k=key:self._nullable_changed(k,value)); return
         box=QDoubleSpinBox(); box.setRange(minimum,maximum); box.setDecimals(decimals); box.setSingleStep(.1); self._add(key,box,label,form); box.valueChanged.connect(lambda value,k=key:self._changed(k,value))
-        if nullable: box.setSpecialValueText("Auto"); box.setValue(minimum)
+    def _nullable_changed(self,key,value):
+        text=value.strip()
+        if not text or text.lower()=="auto": setattr(self.plot.appearance_state,key,None)
+        else:
+            try: setattr(self.plot.appearance_state,key,float(text))
+            except ValueError: return
+        self.plot.redraw()
     def _line(self,key,label,form): box=QLineEdit(); self._add(key,box,label,form); box.textChanged.connect(lambda value,k=key:self._changed(k,value))
     def _combo(self,key,label,form,items): box=QComboBox(); box.addItems(list(items)); self._add(key,box,label,form); box.currentTextChanged.connect(lambda value,k=key:self._changed(k,value))
     def _check(self,key,label,form): box=QCheckBox(); self._add(key,box,label,form); box.toggled.connect(lambda value,k=key:self._changed(k,value))
     def _color(self,key,label,form):
-        box=QPushButton(); self._add(key,box,label,form); box.clicked.connect(lambda _=False,k=key:self._pick(k))
+        box=QPushButton(); box.setMinimumWidth(80); self._add(key,box,label,form); box.clicked.connect(lambda _=False,k=key:self._pick(k))
     def _series_control(self,key,label,form,items=None):
         if items: self._combo("series_"+key,label,form,items)
         elif key=="visible": self._check("series_"+key,label,form)
@@ -58,11 +66,11 @@ class PlotAppearanceEditor(QScrollArea):
         elif isinstance(w,QPushButton): w.clicked.connect(self._series_changed)
         else: w.valueChanged.connect(self._series_changed)
     def _load_reference(self,*_):
-        key=self.reference_combo.currentText(); value=self.plot.appearance_state.reference_lines.get(key,{})
-        self.reference_visible.setChecked(value.get("visible",True)); self.reference_color.setText(value.get("color","#808080")); self.reference_width.setValue(float(value.get("line_width",.8))); self.reference_style.setCurrentText(value.get("line_style","--")); self.reference_opacity.setValue(float(value.get("opacity",1)))
+        key=self.reference_combo.currentData() or self.reference_combo.currentText(); value=self.plot.appearance_state.reference_lines.get(key,{})
+        self.reference_visible.setChecked(value.get("visible",True)); self.reference_color.setText(value.get("color","#808080")); self.reference_color.setStyleSheet("background-color: %s; color: transparent;" % self.reference_color.text()); self.reference_width.setValue(float(value.get("line_width",.8))); self.reference_style.setCurrentText({"-":"Solid","--":"Dashed",":":"Dotted","-.":"Dash-dot"}.get(value.get("line_style","--"),"Dashed")); self.reference_opacity.setValue(float(value.get("opacity",1)))
     def _reference_changed(self,*_):
-        key=self.reference_combo.currentText();
-        if key: self.plot.appearance_state.reference_lines[key]={"visible":self.reference_visible.isChecked(),"color":self.reference_color.text(),"line_width":self.reference_width.value(),"line_style":self.reference_style.currentText(),"opacity":self.reference_opacity.value()}; self.plot.redraw()
+        key=self.reference_combo.currentData() or self.reference_combo.currentText();
+        if key: self.plot.appearance_state.reference_lines[key]={"visible":self.reference_visible.isChecked(),"color":self.reference_color.text(),"line_width":self.reference_width.value(),"line_style":{"Solid":"-","Dashed":"--","Dotted":":","Dash-dot":"-."}.get(self.reference_style.currentText(),"--"),"opacity":self.reference_opacity.value()}; self.plot.redraw()
     def _pick_reference_color(self):
         color=QColorDialog.getColor(QColor(self.reference_color.text()),self)
         if color.isValid(): self.reference_color.setText(color.name()); self._reference_changed()
@@ -76,36 +84,49 @@ class PlotAppearanceEditor(QScrollArea):
             elif isinstance(w,QLineEdit): w.setText(str(value))
             elif isinstance(w,QPushButton): w.setText(str(value))
             elif isinstance(w,QDoubleSpinBox): w.setValue(float(value or 0))
+            elif isinstance(w,QLineEdit): w.setText("" if value is None else str(value))
         self._refresh_series(); self.reference_combo.blockSignals(True); self.reference_combo.clear(); self.reference_combo.addItems(list(s.reference_lines)); self.reference_combo.blockSignals(False); self._load_reference()
     def _changed(self,key,value):
         if key in ("x_min","x_max","y_min","y_max") and value == 0 and self.controls[key].specialValueText()=="Auto": value=None
         setattr(self.plot.appearance_state,key,value); self.plot.redraw()
     def _pick(self,key):
         color=QColorDialog.getColor(QColor(getattr(self.plot.appearance_state,key)),self)
-        if color.isValid(): self.controls[key].setText(color.name()); self._changed(key,color.name())
+        if color.isValid(): self.controls[key].setText(color.name()); self.controls[key].setStyleSheet("background-color: %s; color: transparent;" % color.name()); self._changed(key,color.name())
     def _refresh_series(self):
-        self.series_combo.blockSignals(True); self.series_combo.clear(); self.series_combo.addItems(list(self.plot.appearance_state.series)); self.series_combo.blockSignals(False); self._load_series()
+        self.series_combo.blockSignals(True); self.series_combo.clear();
+        for key in self.plot.appearance_state.series: self.series_combo.addItem(getattr(self.plot,"series_labels",{}).get(key,key),key); self.series_combo.blockSignals(False); self._load_series()
     def _load_series(self,*_):
-        key=self.series_combo.currentText(); value=PlotSeriesAppearance.from_dict(self.plot.appearance_state.series.get(key,{}))
+        key=self.series_combo.currentData() or self.series_combo.currentText()
+        value=PlotSeriesAppearance.from_dict(self.plot.appearance_state.series.get(key,{}))
+        style_map={"-":"Solid","--":"Dashed",":":"Dotted","-.":"Dash-dot","None":"None"}
+        marker_map={"none":"None","o":"Circle","s":"Square","^":"Triangle Up","v":"Triangle Down","D":"Diamond","x":"Cross","+":"Plus"}
         for field in ("visible","color","line_width","line_style","marker","marker_size","opacity"):
-            w=self.controls["series_"+field]; val=getattr(value,field)
-            if isinstance(w,QComboBox): w.setCurrentText(str(val))
-            elif isinstance(w,QCheckBox): w.setChecked(bool(val))
-            elif isinstance(w,QPushButton): w.setText(str(val or ""))
-            else: w.setValue(float(val or 0))
+            widget=self.controls["series_"+field]; value_for_ui=getattr(value,field)
+            if field=="line_style": value_for_ui=style_map.get(value_for_ui,value_for_ui)
+            if field=="marker": value_for_ui=marker_map.get(value_for_ui,value_for_ui)
+            if isinstance(widget,QComboBox): widget.setCurrentText(str(value_for_ui))
+            elif isinstance(widget,QCheckBox): widget.setChecked(bool(value_for_ui))
+            elif isinstance(widget,QPushButton):
+                color=value_for_ui or "#0072B2"; widget.setText(color); widget.setStyleSheet("background-color: %s; color: transparent;" % color)
+            else: widget.setValue(float(value_for_ui or 0))
+
     def _series_changed(self,*_):
-        key=self.series_combo.currentText()
+        key=self.series_combo.currentData() or self.series_combo.currentText()
         if not key:return
         value=PlotSeriesAppearance.from_dict(self.plot.appearance_state.series.get(key,{}))
+        style_map={"Solid":"-","Dashed":"--","Dotted":":","Dash-dot":"-.","None":"None"}
+        marker_map={"None":"none","Circle":"o","Square":"s","Triangle Up":"^","Triangle Down":"v","Diamond":"D","Cross":"x","Plus":"+"}
         for field in ("visible","color","line_width","line_style","marker","marker_size","opacity"):
-            w=self.controls["series_"+field]
-            if isinstance(w,QComboBox): setattr(value,field,w.currentText())
-            elif isinstance(w,QCheckBox): setattr(value,field,w.isChecked())
-            elif isinstance(w,QPushButton): setattr(value,field,w.text())
-            else: setattr(value,field,w.value())
-        self.plot.appearance_state.series[key]=value.__dict__.copy(); self.plot.redraw()
+            widget=self.controls["series_"+field]
+            if isinstance(widget,QComboBox): current=widget.currentText(); setattr(value,field,style_map.get(current,marker_map.get(current,current)))
+            elif isinstance(widget,QCheckBox): setattr(value,field,widget.isChecked())
+            elif isinstance(widget,QPushButton): setattr(value,field,widget.text())
+            else: setattr(value,field,widget.value())
+        self.plot.appearance_state.series[key]=value.__dict__.copy()
+        self.plot.redraw()
+
     def apply_all(self):
-        key=self.series_combo.currentText()
+        key=self.series_combo.currentData() or self.series_combo.currentText()
         if not key:return
         source=dict(self.plot.appearance_state.series.get(key,{}))
         for other in self.plot.appearance_state.series: self.plot.appearance_state.series[other]=dict(source)
@@ -121,10 +142,10 @@ class PlotAppearanceEditor(QScrollArea):
 class ScientificPlotWidget(QWidget):
     def __init__(self,parent=None):
         super().__init__(parent); self.appearance_state=PlotAppearanceState.default(); self.presets=UserPlotPresetStore(); self.figure=Figure(figsize=(self.appearance_state.figure_width,self.appearance_state.figure_height),facecolor="white"); self.canvas=FigureCanvasQTAgg(self.figure); self.axes=self.figure.add_subplot(111); self._result=None
-        layout=QVBoxLayout(self); layout.setContentsMargins(4,4,4,4); layout.addWidget(self.canvas,1); self.toolbar=QHBoxLayout(); reset=QPushButton("Reset",self); reset.clicked.connect(self.reset_view); self.grid=QCheckBox("Grid",self); self.grid.setChecked(False); self.grid.toggled.connect(self._toggle_grid); data=QPushButton("Export Data…",self); data.clicked.connect(self.export_data); image=QPushButton("Export Figure…",self); image.clicked.connect(self.export_image); appearance=QPushButton("Appearance…",self); appearance.clicked.connect(self.edit_appearance); self.toolbar.addWidget(reset); self.toolbar.addWidget(appearance); self.toolbar.addWidget(self.grid); self.toolbar.addStretch(); self.toolbar.addWidget(data); self.toolbar.addWidget(image); layout.addLayout(self.toolbar)
+        layout=QVBoxLayout(self); layout.setContentsMargins(4,4,4,4); layout.addWidget(self.canvas,1)
     def create_appearance_editor(self,parent=None): return PlotAppearanceEditor(self,parent)
     def edit_appearance(self):
-        dialog=QDialog(self); dialog.setWindowTitle("Plot Appearance"); dialog.resize(430,650); layout=QVBoxLayout(dialog); layout.addWidget(self.create_appearance_editor(dialog)); buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Close); buttons.rejected.connect(dialog.reject); buttons.accepted.connect(dialog.accept); layout.addWidget(buttons); dialog.exec()
+        return None
     def save_appearance_preset(self):
         name,ok=QInputDialog.getText(self,"Save Appearance Preset","Preset name:")
         if ok and name.strip():
@@ -161,7 +182,17 @@ class ScientificPlotWidget(QWidget):
             target=Path(normalize_export_filename(path_box.text(),suffix)); self.export_figure(target,fmt=suffix[1:],dpi=dpi.value(),background=background.currentText().lower(),tight=tight.isChecked(),width=width.value(),height=height.value())
         except Exception as error: QMessageBox.warning(self,"Export Figure",f"Could not export figure: {error}")
     def set_result(self,result):
-        self._result=result; self.axes.clear(); self.axes.set_facecolor("white"); self._draw(result); self.apply_appearance(); self.canvas.draw_idle()
+        self._result=result; self.axes.clear(); self.axes.set_facecolor("white"); self._draw(result); self.series_labels={};
+        for artist in self.axes.lines:
+            key=getattr(artist,"_qs_series_id",None)
+            if key: self.series_labels.setdefault(key,artist.get_label() if artist.get_label() not in ("_nolegend_","") else key)
+        for artist in self.axes.patches:
+            key=getattr(artist,"_qs_series_id",None)
+            if key: self.series_labels.setdefault(key,key.replace("_"," " ).title())
+        for artist in self.axes.collections:
+            key=getattr(artist,"_qs_series_id",None)
+            if key: self.series_labels.setdefault(key,artist.get_label() if artist.get_label() not in ("_nolegend_","") else key)
+        self.apply_appearance(); self.canvas.draw_idle()
     def redraw(self):
         if self._result is not None:self.set_result(self._result)
     def _style_artist(self,artist,style):

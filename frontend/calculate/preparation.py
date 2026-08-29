@@ -7,6 +7,7 @@ import traceback
 from PySide6.QtCore import QThread, Signal
 
 from backend.pseudopotentials import PseudoProvisioner, ProvisionError
+from backend.pseudopotentials.compatibility import cutoff_policy
 
 
 def _assignment(record):
@@ -16,11 +17,13 @@ def _assignment(record):
         "sha256": record.sha256,
         "library_id": record.library_id,
         "library_version": record.library_version,
+        "collection": getattr(record, "collection", record.library_id),
         "xc_functional": record.xc_functional,
         "pseudo_type": record.pseudo_type.value,
         "relativistic": record.relativity.value,
         "recommended_ecutwfc_ry": record.recommended_ecutwfc_ry,
         "recommended_ecutrho_ry": record.recommended_ecutrho_ry,
+        "z_valence": record.z_valence,
     }
 
 
@@ -58,6 +61,8 @@ class CalculationPreparationWorker(QThread):
                 parameters["pseudopotentials"] = {
                     result.record.element: _assignment(result.record) for result in results
                 }
+                parameters, cutoff_warnings = cutoff_policy(parameters, tuple(result.record for result in results), automatic=True)
+                if cutoff_warnings: self.progress.emit("; ".join(cutoff_warnings))
                 updated = prepared.backend_request.copy_with(parameters=parameters)
                 prepared = self.service.prepare_persisted_request(updated)
                 self.progress.emit("Pseudopotentials ready.")

@@ -16,3 +16,13 @@ def validate_pseudo_set(functional,soc,species,pseudo_set):
  missing=pseudo_set.required_missing(species); findings={e:compatibility(functional,r,soc) for e,r in pseudo_set.records.items() if e in species}; return missing,findings
 def recommended_cutoffs(records):
  w=[r.recommended_ecutwfc_ry for r in records if r.recommended_ecutwfc_ry is not None]; rho=[r.recommended_ecutrho_ry for r in records if r.recommended_ecutrho_ry is not None]; return {"ecutwfc":max(w) if w else None,"ecutrho":max(rho) if rho else None,"complete":len(w)==len(records) and len(rho)==len(records)}
+def pseudo_family(records):
+ return {(r.library_id,r.library_version) for r in records}
+
+def cutoff_policy(parameters, records, *, automatic=False):
+ result=dict(parameters); rec=recommended_cutoffs(records); warnings=[]
+ for key in ("ecutwfc","ecutrho"):
+  value=result.get(key); floor=rec.get(key)
+  if automatic and isinstance(value,(int,float)) and floor is not None: result[key]=max(float(value),float(floor))
+  elif isinstance(value,(int,float)) and floor is not None and value<float(floor): warnings.append(f"{key} is below the selected pseudopotential recommendation.")
+ return result,tuple(warnings)

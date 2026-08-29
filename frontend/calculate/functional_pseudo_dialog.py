@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox,QComboBox,QDialog,QDialogButtonBox,QFileDialog,QFormLayout,QHBoxLayout,QHeaderView,QLabel,QMessageBox,QPushButton,QSpinBox,QTableWidget,QTableWidgetItem,QVBoxLayout)
 from backend.dft.functionals import FUNCTIONALS, resolve
-from backend.pseudopotentials import PseudoProvisioner, ProvisionError, inspect_upf
+from backend.pseudopotentials import PseudoProvisioner, ProvisionError, import_local_pseudopotential
 from backend.pseudopotentials.compatibility import compatibility, recommended_cutoffs
 
 
@@ -101,7 +101,7 @@ class FunctionalPseudoDialog(QDialog):
         if row<0: QMessageBox.information(self,"Pseudopotential","Select an element row first."); return
         source,_=QFileDialog.getOpenFileName(self,"Import UPF","","UPF files (*.UPF *.upf);;All files (*)")
         if not source: return
-        try: record=inspect_upf(source)
+        try: record=import_local_pseudopotential(source)
         except Exception as error: QMessageBox.warning(self,"Pseudopotential",str(error)); return
         element=self._species[row]
         if record.element!=element: QMessageBox.warning(self,"Pseudopotential",f"Selected UPF is for {record.element}, not {element}."); return

@@ -11,6 +11,11 @@ import io
 import json
 import logging
 import os
+import sys
+import shutil
+import tempfile
+import time
+import uuid
 from pathlib import Path
 import tarfile
 from typing import Callable, Iterable
@@ -18,7 +23,7 @@ from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .compatibility import CompatibilityState, compatibility
-from .models import PseudoPotentialRecord, Relativity
+from .models import PseudoPotentialRecord, Relativity, sha256
 from .upf import UPFMetadataError, inspect_upf
 from backend.dft.functionals import resolve
 
@@ -74,9 +79,28 @@ SSSP_PRECISION_130 = DownloadableProvider(
 )
 
 
+def application_data_root(platform=None, environ=None, home=None) -> Path:
+    platform = platform or sys.platform; environ = os.environ if environ is None else environ; home = Path.home() if home is None else Path(home)
+    if platform.startswith("win"):
+        return Path(environ.get("LOCALAPPDATA", home / "AppData" / "Local")) / "QuantumStudio" / "pseudopotentials"
+    if platform == "darwin": return home / "Library" / "Application Support" / "QuantumStudio" / "pseudopotentials"
+    return Path(environ.get("XDG_DATA_HOME", home / ".local" / "share")) / "QuantumStudio" / "pseudopotentials"
+
 def managed_cache_root() -> Path:
     root = os.environ.get("QUANTUM_STUDIO_PSEUDO_CACHE")
-    return Path(root).expanduser() if root else Path.home() / ".local" / "share" / "QuantumStudio" / "pseudopotentials"
+    return Path(root).expanduser() if root else application_data_root()
+
+def import_local_pseudopotential(source, repository_root=None):
+    source = Path(source); record = inspect_upf(source)
+    digest = record.sha256; root = Path(repository_root or managed_cache_root()) / "local" / digest; root.mkdir(parents=True, exist_ok=True)
+    target = next((candidate for candidate in root.iterdir() if candidate.is_file() and candidate.suffix.lower()==".upf" and sha256(candidate)==digest), root / record.filename)
+    if target.exists() and sha256(target) != digest: raise ProvisionError("Immutable local pseudopotential store contains a conflicting file.")
+    if not target.exists():
+        fd, temporary = tempfile.mkstemp(prefix=record.filename+".", suffix=".part", dir=str(root)); os.close(fd)
+        try: shutil.copyfile(source, temporary); os.replace(temporary, target)
+        finally:
+            if os.path.exists(temporary): os.unlink(temporary)
+    return replace(record, path=str(target), library_id="local", library_version="", collection="local", original_source=str(source))
 
 
 def _https_provider_url(url: str, provider: DownloadableProvider, *, redirect: bool = False) -> None:
@@ -118,9 +142,38 @@ class PseudoProvisioner:
         self.cache_root = Path(cache_root or managed_cache_root()).expanduser()
         self.providers = tuple(providers)
         self.transport = transport
+        self.offline = False
 
     def _root(self, provider: DownloadableProvider) -> Path:
         return self.cache_root / provider.library_id / provider.version
+
+    def _fetch_with_retries(self, url, maximum, provider):
+        last=None
+        for attempt in range(1,4):
+            try:
+                return self.transport(url,maximum) if self.transport is not None else _network_fetch(url,maximum,provider)
+            except (OSError, TimeoutError, ConnectionError) as error:
+                last=error
+                if attempt < 3: time.sleep(0.5 * (2 ** (attempt-1)))
+        raise ProvisionError(f"Failed to fetch {provider.library_id}/{provider.version} after 3 attempts: {last}") from last
+
+    def _manifest(self, provider):
+        if provider.library_id != "sssp_efficiency" or provider.version != "1.3.0" or "rcyfm-68h65/files/SSSP_1.3.0_PBE_efficiency" not in provider.archive_url: return {}
+        path = Path(__file__).with_name("sssp_efficiency_1.3.0_manifest.json")
+        try: data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError): return {}
+        return {item["element"]: item for item in data.get("files", ()) if isinstance(item, dict)}
+
+    def _quarantine(self, path, provider):
+        if not path.exists(): return
+        target = self.cache_root / "quarantine" / provider.library_id / provider.version / (path.name + "." + uuid.uuid4().hex)
+        target.parent.mkdir(parents=True, exist_ok=True); os.replace(path, target)
+
+    def _verify_cached(self, record, provider):
+        expected = self._manifest(provider).get(record.element)
+        if expected and (record.filename != expected.get("filename") or record.sha256 != expected.get("sha256")):
+            raise ProvisionError(f"Cached {record.element} pseudopotential failed integrity verification.")
+        return replace(record, collection=provider.library_id)
 
     def _records(self, provider: DownloadableProvider) -> tuple[PseudoPotentialRecord, ...]:
         root=self._root(provider)
@@ -135,7 +188,10 @@ class PseudoProvisioner:
         records=[]
         for path in sorted(root.rglob("*.upf")) + sorted(root.rglob("*.UPF")):
             try:
-                record=inspect_upf(path,provider.library_id,provider.version)
+                record=replace(inspect_upf(path,provider.library_id,provider.version), collection=provider.library_id)
+                expected=self._manifest(provider).get(record.element)
+                if expected and (record.filename != expected.get("filename") or record.sha256 != expected.get("sha256")):
+                    self._quarantine(path, provider); continue
                 entry=metadata.get(record.element,{})
                 if isinstance(entry,dict) and entry.get("filename")==path.name:
                     record=replace(record,recommended_ecutwfc_ry=float(entry["cutoff_wfc"]) if entry.get("cutoff_wfc") is not None else record.recommended_ecutwfc_ry,recommended_ecutrho_ry=float(entry["cutoff_rho"]) if entry.get("cutoff_rho") is not None else record.recommended_ecutrho_ry)
@@ -155,9 +211,21 @@ class PseudoProvisioner:
 
     def _install_archive(self, provider: DownloadableProvider) -> None:
         operation="download"
-        target=self._root(provider); staging=target.with_name(target.name+".staging")
+        target=self._root(provider); target.parent.mkdir(parents=True,exist_ok=True)
+        lock=target.parent/(provider.library_id+".install.lock"); deadline=time.monotonic()+30
+        while True:
+            try: lock.mkdir(); break
+            except FileExistsError:
+                age=time.time()-lock.stat().st_mtime if lock.exists() else 0
+                if age > 3600:
+                    try: lock.rmdir()
+                    except OSError: pass
+                    continue
+                if time.monotonic()>deadline: raise ProvisionError(f"Timed out waiting for {provider.library_id}/{provider.version} pseudopotential installation after 30 seconds.")
+                time.sleep(0.05)
+        staging=Path(tempfile.mkdtemp(prefix=provider.library_id+".staging.", dir=str(target.parent)))
         try:
-            payload=(self.transport(provider.archive_url,provider.max_archive_bytes) if self.transport is not None else _network_fetch(provider.archive_url,provider.max_archive_bytes,provider))
+            payload=self._fetch_with_retries(provider.archive_url,provider.max_archive_bytes,provider)
             if len(payload)>provider.max_archive_bytes: raise ProvisionError("Provider archive exceeds the configured size limit.")
             operation="archive MD5 verification"
             computed_md5=hashlib.md5(payload).hexdigest()
@@ -165,7 +233,7 @@ class PseudoProvisioner:
             metadata={}
             if provider.metadata_url:
                 operation="metadata download"
-                raw=(self.transport(provider.metadata_url,provider.max_metadata_bytes) if self.transport is not None else _network_fetch(provider.metadata_url,provider.max_metadata_bytes,provider))
+                raw=self._fetch_with_retries(provider.metadata_url,provider.max_metadata_bytes,provider)
                 operation="metadata validation"
                 metadata=json.loads(raw.decode("utf-8"))
                 if not isinstance(metadata,dict): raise ProvisionError("Provider metadata is not an element mapping.")
@@ -176,7 +244,7 @@ class PseudoProvisioner:
             staging.mkdir(parents=True,exist_ok=True)
             operation="archive validation and extraction"
             with tarfile.open(fileobj=io.BytesIO(payload),mode="r:gz") as archive:
-                members=[]; extracted_bytes=0
+                members=[]; basenames=set(); extracted_bytes=0
                 for member in archive.getmembers():
                     relative=Path(member.name)
                     if relative.is_absolute() or ".." in relative.parts: raise ProvisionError("Provider archive contains an unsafe member path.")
@@ -184,6 +252,9 @@ class PseudoProvisioner:
                     if member.isdir(): continue
                     if not member.isfile(): raise ProvisionError("Provider archive contains an unsupported special member.")
                     if member.name.lower().endswith(".upf"):
+                        basename=Path(member.name).name
+                        if basename in basenames: raise ProvisionError("Provider archive contains duplicate UPF basenames.")
+                        basenames.add(basename)
                         extracted_bytes += member.size
                         if extracted_bytes > provider.max_archive_bytes * 4: raise ProvisionError("Provider archive expands beyond the configured safety limit.")
                         members.append(member)
@@ -204,7 +275,8 @@ class PseudoProvisioner:
                     raise ProvisionError(f"Provider metadata entry for {element!r} references a missing UPF.")
             if metadata: (staging/"provider_metadata.json").write_text(json.dumps(metadata,sort_keys=True)+"\n",encoding="utf-8")
             (staging/"installation.json").write_text(json.dumps({"provider":provider.library_id,"version":provider.version,"archive_checksum":{"algorithm":"md5","expected":provider.archive_md5,"computed":computed_md5},"upf_count":len(installed)},sort_keys=True)+"\n",encoding="utf-8")
-            if target.exists(): return
+            if target.exists():
+                return
             operation="atomic cache installation"
             target.parent.mkdir(parents=True,exist_ok=True); os.replace(staging,target)
         except ProvisionError:
@@ -214,6 +286,8 @@ class PseudoProvisioner:
             LOGGER.debug("SSSP installation failed: operation=%s provider=%s target=%s staging=%s",operation,provider.library_id,target,staging,exc_info=True)
             raise ProvisionError(f"Provider archive installation failed during {operation}: {error}") from error
         finally:
+            try: lock.rmdir()
+            except OSError: pass
             if staging.exists():
                 for path in sorted(staging.rglob("*"),reverse=True):
                     if path.is_file() or path.is_symlink(): path.unlink()
@@ -237,4 +311,7 @@ class PseudoProvisioner:
         raise ProvisionError(f"No verified automatic {functional.upper()} pseudopotential is available for {element}.")
 
     def provision_set(self, species: Iterable[str], functional: str, soc: bool = False, policy: str = "auto") -> tuple[ProvisionResult, ...]:
-        return tuple(self.provision(element,functional,soc,policy) for element in dict.fromkeys(species))
+        results=tuple(self.provision(element,functional,soc,policy) for element in dict.fromkeys(species))
+        if policy != "manual" and len({(r.provider.library_id,r.provider.version) for r in results}) > 1:
+            raise ProvisionError("Automatic pseudopotentials must use one coherent provider and version.")
+        return results

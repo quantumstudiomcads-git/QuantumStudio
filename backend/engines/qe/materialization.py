@@ -42,10 +42,14 @@ def materialize_workflow_pseudopotentials(workflow_root: str | Path, pseudopoten
             raise PseudopotentialMaterializationError(f"Pseudopotential filename for {element!r} is unsafe.")
         source_value = raw.get("source")
         source = Path(str(source_value)).expanduser() if source_value else None
-        if source is None or not source.is_file():
-            raise PseudopotentialMaterializationError(f"Selected pseudopotential source is missing: {filename}")
-        source_hash = sha256(source)
         expected_hash = raw.get("sha256")
+        if source is None or not source.is_file():
+            workflow_copy = pseudo_root / filename
+            if workflow_copy.is_file() and (not expected_hash or sha256(workflow_copy)==expected_hash):
+                source = workflow_copy
+            else:
+                raise PseudopotentialMaterializationError(f"Selected pseudopotential source is missing: {filename}")
+        source_hash = sha256(source)
         if expected_hash and source_hash != expected_hash:
             raise PseudopotentialMaterializationError(f"Selected pseudopotential SHA-256 does not match provenance: {filename}")
         prior_hash = by_filename.get(filename)

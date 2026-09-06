@@ -80,7 +80,7 @@ class ExecutionStore:
             raise ExecutionStoreError("Execution sidecar path escapes workflow root.")
         return path
 
-    def create(self, workflow, *, request_fingerprint="", structure_fingerprint=""):
+    def create(self, workflow, *, request_fingerprint="", structure_fingerprint="", provider_provenance=None):
         fingerprint, inputs, manifest = workflow_fingerprint(workflow)
         execution_id = uuid.uuid4().hex
         tasks = {task.task_id: TaskExecutionRecord(task.task_id) for task in workflow.tasks}
@@ -88,7 +88,7 @@ class ExecutionStore:
             execution_id=execution_id, workflow_fingerprint=fingerprint,
             manifest_fingerprint=manifest, input_fingerprints=inputs,
             request_fingerprint=request_fingerprint, structure_fingerprint=structure_fingerprint,
-            created_at=now())
+            provider_provenance=dict(provider_provenance or {}), created_at=now())
         self.save(record)
         return record
 
@@ -102,6 +102,7 @@ class ExecutionStore:
             "created_at": record.created_at, "started_at": record.started_at,
             "updated_at": now(), "finished_at": record.finished_at, "state": record.state.value,
             "input_fingerprints": record.input_fingerprints,
+            "provider_provenance": record.provider_provenance,
             "tasks": {key: {**asdict(value), "state": value.state.value} for key, value in record.tasks.items()},
         }
 
@@ -139,7 +140,7 @@ class ExecutionStore:
             execution_id=data["execution_id"], request_fingerprint=data.get("request_fingerprint", ""),
             structure_fingerprint=data.get("structure_fingerprint", ""), workflow_fingerprint=data.get("workflow_fingerprint", ""),
             manifest_fingerprint=data.get("workflow_manifest_fingerprint", ""), input_fingerprints=data.get("input_fingerprints", {}),
-            created_at=data.get("created_at"), started_at=data.get("started_at"), finished_at=data.get("finished_at"), parent_execution_id=data.get("parent_execution_id", ""), branch_reason=data.get("branch_reason", ""), reuse_plan_identity=data.get("reuse_plan_identity", ""), reuse_bindings=data.get("reuse_bindings", []), invalidated_tasks=tuple(data.get("invalidated_tasks", ())))
+            created_at=data.get("created_at"), started_at=data.get("started_at"), finished_at=data.get("finished_at"), parent_execution_id=data.get("parent_execution_id", ""), branch_reason=data.get("branch_reason", ""), reuse_plan_identity=data.get("reuse_plan_identity", ""), reuse_bindings=data.get("reuse_bindings", []), invalidated_tasks=tuple(data.get("invalidated_tasks", ())), provider_provenance=dict(data.get("provider_provenance", {})))
 
     def list(self):
         if not self.executions.is_dir(): return ()

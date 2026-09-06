@@ -9,3 +9,6 @@ __all__ = [
     "RuntimePaths", "runtime_paths", "EnginePackError", "EnginePackManifest",
     "EnginePackValidation", "validate_engine_pack",
 ]
+
+from .platform import OperatingSystem, PlatformInfo, current_platform, detect_platform
+from .managed import ManagedRuntimeIdentity, RuntimeState, RuntimeType

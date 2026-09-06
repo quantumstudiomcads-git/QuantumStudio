@@ -4,7 +4,7 @@ from pathlib import Path
 from .models import PseudoType, Relativity
 from .upf import inspect_upf
 
-PROVIDER_LIBRARY_IDS = ("sssp_efficiency", "sssp_precision", "pseudodojo", "pslibrary", "sg15", "gbrv", "local")
+PROVIDER_LIBRARY_IDS = ("sssp_efficiency", "sssp_precision", "pseudodojo", "pslibrary", "sg15", "gbrv", "qe_official", "local")
 
 @dataclass(frozen=True)
 class PseudoLibrary:

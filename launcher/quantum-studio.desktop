@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Quantum Studio
+Comment=Quantum Studio scientific materials workspace
+Exec=quantum-studio %f
+Icon=quantum-studio
+Terminal=false
+Categories=Science;Engineering;
+MimeType=application/x-quantum-studio-project;
+StartupNotify=true

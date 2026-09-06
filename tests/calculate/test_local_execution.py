@@ -24,7 +24,33 @@ class QEConvergenceHandoffTests(unittest.TestCase):
    self.assertIn("convergence NOT achieved",result.tasks["scf"].error_message)
    self.assertEqual(result.tasks["proj"].state,TaskState.BLOCKED)
 
+class ResourceFailureClassificationTests(unittest.TestCase):
+ def test_qe_sigkill_with_memory_evidence_is_classified(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   code="print(\"Estimated total dynamical RAM > 16.00 GB\", flush=True); import os,signal; os.kill(os.getpid(), signal.SIGKILL)"
+   item=GeneratedTask("scf","scf","quantum_espresso","python","scf",CommandSpec(sys.executable,("-c",code),stdout_file="out.log",stderr_file="err.log"))
+   result=manager().execute(workflow(tmp,(item,)))
+   record=result.tasks["scf"]
+   self.assertEqual(record.return_code, -9)
+   self.assertEqual(record.error_type, "RESOURCE_OOM")
+   self.assertIn("exceeded available memory", record.error_message)
+
 class LocalExecutionTests(unittest.TestCase):
+ def test_empty_workflow_is_not_successfully_finished(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp); (root / "manifest.json").write_text(json.dumps({"request_id":"runtime-test","tasks":[]}))
+   with self.assertRaisesRegex(ExecutionPreflightError, "no executable tasks"):
+    manager().execute(GeneratedWorkflow("runtime-test", root, tuple()))
+
+ def test_async_worker_propagates_preflight_failure(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp); (root / "manifest.json").write_text(json.dumps({"request_id":"runtime-test","tasks":[]}))
+   handle=LocalExecutionService(manager()).start(GeneratedWorkflow("runtime-test", root, tuple()))
+   self.assertTrue(handle.done.wait(3))
+   self.assertIsNotNone(handle.error)
+   self.assertIsNone(handle.result)
+   self.assertIn("no executable tasks", str(handle.error))
+
  def test_simple_dependency_state_order_and_logs(self):
   with tempfile.TemporaryDirectory() as tmp:
    items=(task("a",code="print('A')"),task("b",("a",),"import os; print('B'); open('cwd.txt','w').write(os.getcwd())")); result=manager().execute(workflow(tmp,items)); self.assertEqual([result.tasks[x].state for x in ("a","b")],[TaskState.COMPLETED,TaskState.COMPLETED]); self.assertEqual(result.state,WorkflowState.COMPLETED); self.assertIn("A",Path(result.tasks["a"].stdout_path).read_text()); self.assertEqual(Path(tmp,"b","cwd.txt").read_text(),str(Path(tmp,"b").resolve()))

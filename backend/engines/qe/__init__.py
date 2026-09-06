@@ -5,6 +5,7 @@ from backend.engines.qe.adapter import (
     ENGINE_ID,
     SUPPORTED_CALCULATIONS,
     QuantumEspressoAdapter,
+    hamiltonian_fingerprint,
     structure_fingerprint,
 )
 from backend.engines.qe.models import (
@@ -19,6 +20,6 @@ from backend.engines.qe.models import (
 
 __all__ = [
     "DEFERRED_CALCULATIONS", "ENGINE_ID", "SUPPORTED_CALCULATIONS", "QuantumEspressoAdapter",
-    "structure_fingerprint", "InvalidQEParameterError", "MissingPseudopotentialError", "QEGeneration",
+    "structure_fingerprint", "hamiltonian_fingerprint", "InvalidQEParameterError", "MissingPseudopotentialError", "QEGeneration",
     "QEInputGenerationError", "QEOutputExistsError", "QETaskInput", "UnsupportedQECalculationError",
 ]

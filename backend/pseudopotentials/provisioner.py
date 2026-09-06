@@ -18,6 +18,7 @@ import time
 import uuid
 from pathlib import Path
 import tarfile
+import gzip
 from typing import Callable, Iterable
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -45,6 +46,9 @@ class DownloadableProvider:
     redirect_hosts: tuple[str, ...] = ()
     metadata_url: str = ""
     max_metadata_bytes: int = 2 * 1024 * 1024
+    file_sha256: str = ""
+    file_name: str = ""
+    archive_sha256: str = ""
 
     def supports(self, functional: str) -> bool:
         return functional in self.supported_functionals
@@ -76,6 +80,26 @@ SSSP_PRECISION_130 = DownloadableProvider(
     "fde94756886f32ada7bf597547557eb5", ("pbe",),
     redirect_hosts=("rgw.cscs.ch",),
     metadata_url="https://archive.materialscloud.org/records/rcyfm-68h65/files/SSSP_1.3.0_PBE_precision.json?download=1",
+)
+
+QE_OFFICIAL_PZ = DownloadableProvider(
+    "qe_official", "Quantum ESPRESSO Official PP Library", "original",
+    "https://pseudopotentials.quantum-espresso.org/upf_files/Si.pz-vbc.UPF",
+    "", ("pz",), primary_hosts=("pseudopotentials.quantum-espresso.org",),
+    file_sha256="e8d933754cd51c6bb4b2a809151f89e0647e53d878bab88d26e1b5a5d68d5217",
+    file_name="Si.pz-vbc.UPF",
+)
+
+# Official PseudoDojo single-file PBE scalar-relativistic NC Pb resource.
+# The provider checksum covers the downloaded gzip payload; the installed
+# record is verified from the decompressed UPF bytes.
+PSEUDODOJO_PB_PBE_NC_SR = DownloadableProvider(
+    "pseudodojo", "PseudoDojo", "nc-sr-05_pbe_standard",
+    "https://www.pseudo-dojo.org/pseudos/nc-sr-05_pbe_standard/Pb.upf.gz",
+    "", ("pbe",), primary_hosts=("www.pseudo-dojo.org",),
+    file_sha256="1c58a8a738fff0b37a3ccbe1c9d45dc5dca11435930a81e628e1d1db363558b1",
+    file_name="Pb.upf",
+    archive_sha256="ffcc7f3c103b4c8003a2571236ede2303e603939b934847c4d9e0b11456a17c2",
 )
 
 
@@ -138,7 +162,7 @@ def _network_fetch(url: str, maximum: int, provider: DownloadableProvider) -> by
 
 
 class PseudoProvisioner:
-    def __init__(self, cache_root: str | Path | None = None, providers: Iterable[DownloadableProvider] = (SSSP_EFFICIENCY_130, SSSP_PRECISION_130), transport: Callable[[str, int], bytes] | None = None):
+    def __init__(self, cache_root: str | Path | None = None, providers: Iterable[DownloadableProvider] = (SSSP_EFFICIENCY_130, SSSP_PRECISION_130, QE_OFFICIAL_PZ, PSEUDODOJO_PB_PBE_NC_SR), transport: Callable[[str, int], bytes] | None = None):
         self.cache_root = Path(cache_root or managed_cache_root()).expanduser()
         self.providers = tuple(providers)
         self.transport = transport
@@ -209,7 +233,34 @@ class PseudoProvisioner:
             options.append((rank,record.filename,record,state))
         return min(options, default=None, key=lambda item:(item[0],item[1]))
 
+    def _install_single_file(self, provider: DownloadableProvider) -> None:
+        target = self._root(provider); target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists(): return
+        payload = self._fetch_with_retries(provider.archive_url, provider.max_archive_bytes, provider)
+        expected_payload_hash = provider.archive_sha256 or provider.file_sha256
+        if expected_payload_hash and hashlib.sha256(payload).hexdigest() != expected_payload_hash:
+            raise ProvisionError("Downloaded pseudopotential failed SHA-256 integrity verification.")
+        staging = Path(tempfile.mkdtemp(prefix=provider.library_id + ".staging.", dir=str(target.parent)))
+        try:
+            path = staging / provider.file_name
+            if provider.archive_url.lower().endswith(".gz"):
+                try:
+                    payload = gzip.decompress(payload)
+                except OSError as error:
+                    raise ProvisionError(f"Downloaded pseudopotential gzip is invalid: {error}") from error
+            path.write_bytes(payload)
+            record = inspect_upf(path, provider.library_id, provider.version)
+            if record.filename != provider.file_name or (provider.file_sha256 and record.sha256 != provider.file_sha256):
+                raise ProvisionError("Official pseudopotential metadata or checksum mismatch.")
+            (staging / "provider_metadata.json").write_text(json.dumps({record.element: {"filename": record.filename}}, sort_keys=True) + "\n", encoding="utf-8")
+            (staging / "installation.json").write_text(json.dumps({"provider": provider.library_id, "version": provider.version, "source": provider.archive_url, "sha256": record.sha256, "upf_count": 1}, sort_keys=True) + "\n", encoding="utf-8")
+            os.replace(staging, target)
+        finally:
+            if staging.exists(): shutil.rmtree(staging, ignore_errors=True)
+
     def _install_archive(self, provider: DownloadableProvider) -> None:
+        if provider.file_name:
+            return self._install_single_file(provider)
         operation="download"
         target=self._root(provider); target.parent.mkdir(parents=True,exist_ok=True)
         lock=target.parent/(provider.library_id+".install.lock"); deadline=time.monotonic()+30

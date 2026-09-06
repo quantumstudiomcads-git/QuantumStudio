@@ -11,6 +11,7 @@ import threading
 import uuid
 
 from .models import TaskExecutionRecord, TaskState, WorkflowExecutionRecord, now
+from .recovery import recover_stale_running
 
 SCHEMA_VERSION = "0.1"
 
@@ -94,7 +95,7 @@ class ExecutionStore:
     def _payload(self, record):
         return {
             "execution_schema_version": SCHEMA_VERSION, "execution_id": record.execution_id,
-            "request_id": record.request_id, "request_fingerprint": record.request_fingerprint,
+            "request_id": record.request_id, "request_fingerprint": record.request_fingerprint, "parent_execution_id": record.parent_execution_id, "branch_reason": record.branch_reason, "reuse_plan_identity": record.reuse_plan_identity, "reuse_bindings": record.reuse_bindings, "invalidated_tasks": list(record.invalidated_tasks),
             "structure_fingerprint": record.structure_fingerprint,
             "workflow_manifest_fingerprint": record.manifest_fingerprint,
             "workflow_fingerprint": record.workflow_fingerprint, "workflow_root": record.workflow_root,
@@ -138,7 +139,7 @@ class ExecutionStore:
             execution_id=data["execution_id"], request_fingerprint=data.get("request_fingerprint", ""),
             structure_fingerprint=data.get("structure_fingerprint", ""), workflow_fingerprint=data.get("workflow_fingerprint", ""),
             manifest_fingerprint=data.get("workflow_manifest_fingerprint", ""), input_fingerprints=data.get("input_fingerprints", {}),
-            created_at=data.get("created_at"), started_at=data.get("started_at"), finished_at=data.get("finished_at"))
+            created_at=data.get("created_at"), started_at=data.get("started_at"), finished_at=data.get("finished_at"), parent_execution_id=data.get("parent_execution_id", ""), branch_reason=data.get("branch_reason", ""), reuse_plan_identity=data.get("reuse_plan_identity", ""), reuse_bindings=data.get("reuse_bindings", []), invalidated_tasks=tuple(data.get("invalidated_tasks", ())))
 
     def list(self):
         if not self.executions.is_dir(): return ()
@@ -161,10 +162,8 @@ class ExecutionStore:
             return RecoveryAssessment(RecoveryState.INCOMPATIBLE, "Generated workflow manifest changed.", record)
         if record.input_fingerprints != inputs:
             return RecoveryAssessment(RecoveryState.MODIFIED_INPUTS, "Generated scientific inputs changed.", record)
-        changed = False
+        changed = recover_stale_running(record)
         for runtime in record.tasks.values():
-            if runtime.state is TaskState.RUNNING:
-                runtime.state = TaskState.INTERRUPTED; runtime.error_message = "Interrupted: prior application session ended."; runtime.finished_at = now(); changed = True
             if runtime.stdout_path and self.root not in Path(runtime.stdout_path).resolve().parents:
                 runtime.state = TaskState.FAILED; runtime.error_message = "Runtime log path escapes workflow root."; changed = True
             elif runtime.state is TaskState.COMPLETED and (not runtime.stdout_path or not Path(runtime.stdout_path).is_file()):

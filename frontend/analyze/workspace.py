@@ -1,7 +1,8 @@
 from __future__ import annotations
 from pathlib import Path
+import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,QComboBox,QListWidget,QToolBox,QLineEdit,QListWidgetItem,QStackedWidget,QPlainTextEdit,QPushButton,QFileDialog,QSplitter,QTableWidget,QTableWidgetItem,QTableView,QMessageBox,QDialog,QDialogButtonBox,QDoubleSpinBox,QSpinBox,QCheckBox,QInputDialog,QScrollArea,QSizePolicy
+from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,QComboBox,QListWidget,QToolBox,QLineEdit,QListWidgetItem,QStackedWidget,QPlainTextEdit,QPushButton,QFileDialog,QSplitter,QTableWidget,QTableWidgetItem,QTableView,QMessageBox,QDialog,QDialogButtonBox,QDoubleSpinBox,QSpinBox,QCheckBox,QInputDialog,QScrollArea,QSizePolicy,QTabBar,QTabWidget
 from frontend.services.result_service import ResultService
 from backend.analyze.transforms import result_kind,tabular_data,pdos_channels
 from backend.analyze.comparison import AnalysisSeries, ComparisonModel, provenance_differences, difference_eligible
@@ -17,7 +18,11 @@ from frontend.analyze.plots.derived_electronic import DerivedElectronicPlot
 from frontend.analyze.plots.bader import BaderChargePlot
 from frontend.analyze.plots.projection import ProjectionPlot
 from frontend.analyze.plots.work_function import WorkFunctionPlot
+from frontend.analyze.plots.transport import TransportPlot, PROPERTIES
+from frontend.analyze.plots.vibrational import GammaPhononPlot, PhononDispersionPlot, PhononDOSPlot, PolarTensorPlot, LOTOPlot, IRPlot, RamanPlot, PhononDielectricPlot
 from frontend.analyze.plots.base import ScientificPlotWidget
+from frontend.analyze.plots.eliashberg import EliashbergPlot
+from frontend.analyze.plots.optical import OpticalPlot
 from frontend.analyze.table_model import ScientificTableModel, ScientificTableView
 
 class AnalyzeWorkspace(QWidget):
@@ -27,14 +32,14 @@ class AnalyzeWorkspace(QWidget):
         self.setObjectName("analyzeWorkspace"); self.setStyleSheet("AnalyzeWorkspace{background:#111318;color:#E8EAF0;} QComboBox,QPlainTextEdit,QTableWidget,QTableView,QScrollArea{background:#17191F;color:#E8EAF0;border:1px solid #30343D;} QListWidget,QHeaderView::section,QMenu{background:#17191F;color:#D9DCE3;border:1px solid #30343D;} QPushButton{background:#252932;color:#D9DCE3;padding:7px 11px;border-radius:6px;} QToolTip{background:#17191F;color:#E8EAF0;border:1px solid #3A4655;}")
         root=QVBoxLayout(self); header=QHBoxLayout(); title=QLabel("Analyze"); title.setStyleSheet("font-size:16px;font-weight:600;"); header.addWidget(title); header.addStretch(); self.refresh=QPushButton("Refresh Results",self); self.refresh.setToolTip("Refresh Result metadata without parsing scientific output"); self.refresh.clicked.connect(self._refresh_results); header.addWidget(self.refresh); self.attach=QPushButton("Open Results Folder…",self); self.attach.setToolTip("Advanced fallback for legacy or external Quantum Studio results"); self.attach.clicked.connect(self._attach_root); header.addWidget(self.attach); root.addLayout(header)
         browser_controls=QHBoxLayout(); self.result_search=QLineEdit(self); self.result_search.setPlaceholderText("Search results..."); self.show_intermediate=QCheckBox("Show intermediate results",self); self.result_search.textChanged.connect(self._populate_result_browser); self.show_intermediate.toggled.connect(self._populate_result_browser); browser_controls.addWidget(self.result_search,1); browser_controls.addWidget(self.show_intermediate); root.addLayout(browser_controls)
-        self.result_browser=QListWidget(self); self.result_browser.setMaximumHeight(130); self.result_browser.itemClicked.connect(self._browser_result_activated); root.addWidget(self.result_browser)
+        self.result_browser=QListWidget(self); self.result_browser.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Expanding); self.result_browser.setMinimumHeight(0); self.result_browser.setStyleSheet("QListWidget::item{padding:4px 3px;}"); self.result_browser.itemClicked.connect(self._browser_result_activated); root.addWidget(self.result_browser)
         selectors=QHBoxLayout(); self.calculation=QComboBox(self); self.execution=QComboBox(self); self.result=QComboBox(self); selectors.addWidget(QLabel("Calculation:")); selectors.addWidget(self.calculation,1); selectors.addWidget(QLabel("Execution:")); selectors.addWidget(self.execution,1); selectors.addWidget(QLabel("Result:")); selectors.addWidget(self.result,1); root.addLayout(selectors)
         for combo in (self.calculation, self.execution, self.result): combo.setMinimumWidth(0); combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred); combo.hide()
         self.calculation.setToolTip("Configured calculation"); self.execution.setToolTip("Completed execution for this calculation"); self.result.setToolTip("Parsed scientific Result"); self.mode.setToolTip("Inspect one Result or compare compatible Results") if hasattr(self,"mode") else None; self.calculation.currentIndexChanged.connect(self._calculation_changed); self.execution.currentIndexChanged.connect(self._execution_changed); self.result.currentIndexChanged.connect(self._result_changed)
         for label in self.findChildren(QLabel):
             if label.text() in {"Calculation:","Execution:","Result:"}: label.hide()
-        self.pdos_controls=QWidget(self); pf=QHBoxLayout(self.pdos_controls); pf.setContentsMargins(0,0,0,0); self.pdos_species=QComboBox(self); self.pdos_atom=QComboBox(self); self.pdos_orbital=QComboBox(self); self.pdos_component=QComboBox(self); self.pdos_spin=QComboBox(self); self.pdos_aggregation=QComboBox(self); self.pdos_aggregation.addItems(["None","By species","By atom","By orbital","By spin"]);
-        for label, box in (("Species",self.pdos_species),("Atom",self.pdos_atom),("Orbital",self.pdos_orbital),("Component",self.pdos_component),("Spin",self.pdos_spin),("Aggregation",self.pdos_aggregation)): pf.addWidget(QLabel(label+":")); pf.addWidget(box)
+        self.pdos_controls=QWidget(self); pf=QFormLayout(self.pdos_controls); pf.setContentsMargins(0,0,0,0); self.pdos_species=QComboBox(self); self.pdos_atom=QComboBox(self); self.pdos_orbital=QComboBox(self); self.pdos_component=QComboBox(self); self.pdos_spin=QComboBox(self); self.pdos_aggregation=QComboBox(self); self.pdos_aggregation.addItems(["None","By species","By atom","By orbital","By spin"]);
+        for label, box in (("Species",self.pdos_species),("Atom",self.pdos_atom),("Orbital",self.pdos_orbital),("Component",self.pdos_component),("Spin",self.pdos_spin),("Aggregation",self.pdos_aggregation)): pf.addRow(label,box)
         self.pdos_controls.setVisible(False); root.addWidget(self.pdos_controls)
         for box in (self.pdos_species,self.pdos_atom,self.pdos_orbital,self.pdos_component,self.pdos_spin,self.pdos_aggregation): box.currentIndexChanged.connect(self._refresh_pdos_view)
         self.mode=QComboBox(self); self.mode.addItems(["Single Result","Compare Results"]); self.mode.setVisible(False); self.mode.setToolTip("Inspect one Result or compare compatible Results"); self.mode.currentIndexChanged.connect(self._mode_changed); root.insertWidget(1,self.mode)
@@ -44,15 +49,24 @@ class AnalyzeWorkspace(QWidget):
         split=QSplitter(Qt.Orientation.Horizontal)
         browser_panel=QWidget(self); browser_layout=QVBoxLayout(browser_panel); browser_layout.setContentsMargins(4,4,4,4); browser_layout.setSpacing(6); browser_title=QLabel("RESULTS",browser_panel); browser_title.setStyleSheet("font-weight:600;"); browser_layout.addWidget(browser_title)
         browser_controls.removeWidget(self.result_search); browser_controls.removeWidget(self.show_intermediate); root.removeWidget(self.result_browser); browser_layout.addWidget(self.result_search); browser_layout.addWidget(self.show_intermediate)
-        browser_layout.addWidget(self.result_browser,1)
-        self.navigation=QListWidget(browser_panel); self.navigation.setMaximumHeight(110); self.navigation.currentRowChanged.connect(self._view_changed); browser_layout.addWidget(self.navigation)
-        self.control_sections=QToolBox(browser_panel); self.data_section=QWidget(browser_panel); data_layout=QVBoxLayout(self.data_section); self.data_layout=data_layout; data_layout.addWidget(self.pdos_controls); root.removeWidget(self.pdos_controls); self.appearance_section=QWidget(browser_panel); appearance_layout=QVBoxLayout(self.appearance_section); self.appearance_layout=appearance_layout; self.appearance_hint=QLabel("Edit the current scientific figure live.",self.appearance_section); appearance_layout.addWidget(self.appearance_hint); self.appearance_editor=None; self.details_section=QPlainTextEdit(browser_panel); self.details_section.setReadOnly(True); self.export_section=QWidget(browser_panel); export_layout=QVBoxLayout(self.export_section); self.export_data_button=QPushButton("Export Data…",self.export_section); self.export_figure_button=QPushButton("Export Figure…",self.export_section); export_layout.addWidget(self.export_data_button); export_layout.addWidget(self.export_figure_button)
-        self.control_sections.addItem(self.data_section,"Data"); self.control_sections.addItem(self.appearance_section,"Appearance"); self.control_sections.addItem(self.details_section,"Details"); self.control_sections.addItem(self.export_section,"Export"); control_panel=QWidget(self); control_layout=QVBoxLayout(control_panel); control_layout.setContentsMargins(4,4,4,4); control_layout.addWidget(self.control_sections);
-        self.views=QStackedWidget(self); split.addWidget(browser_panel); split.addWidget(self.views); split.addWidget(control_panel); split.setStretchFactor(0,1); split.setStretchFactor(1,4); split.setStretchFactor(2,1); split.setSizes([230,760,300]); root.addWidget(split,1)
+        browser_layout.addWidget(self.result_browser,1); browser_layout.setStretch(2,1)
+        self.navigation=QTabBar(self); self.navigation.setExpanding(False); self.navigation.setDrawBase(False); self.navigation.currentChanged.connect(self._view_changed)
+        self.control_sections=QTabWidget(browser_panel); self.control_sections.setDocumentMode(True); self.data_section=QWidget(browser_panel); data_layout=QVBoxLayout(self.data_section); data_layout.setContentsMargins(6,6,6,6); data_layout.setSpacing(6); self.data_layout=data_layout; data_layout.addWidget(self.pdos_controls); root.removeWidget(self.pdos_controls); self.appearance_section=QWidget(browser_panel); appearance_layout=QVBoxLayout(self.appearance_section); appearance_layout.setContentsMargins(6,6,6,6); appearance_layout.setSpacing(6); self.appearance_layout=appearance_layout; self.appearance_hint=QLabel("Edit the current scientific figure live.",self.appearance_section); appearance_layout.addWidget(self.appearance_hint); self.appearance_editor=None; self.details_section=QPlainTextEdit(browser_panel); self.details_section.setReadOnly(True); self.export_section=QWidget(browser_panel); export_layout=QVBoxLayout(self.export_section); export_layout.setContentsMargins(6,6,6,6); export_layout.setSpacing(6); export_layout.setAlignment(Qt.AlignmentFlag.AlignTop); export_layout.addWidget(QLabel("Figure")); self.export_data_button=QPushButton("Export Data…",self.export_section); self.export_figure_button=QPushButton("Export Figure…",self.export_section); export_layout.addWidget(self.export_figure_button); export_layout.addWidget(QLabel("Data")); export_layout.addWidget(self.export_data_button)
+        self.control_sections.addTab(self.data_section,"Data"); self.control_sections.addTab(self.appearance_section,"Style"); self.control_sections.addTab(self.details_section,"Details"); self.control_sections.addTab(self.export_section,"Export"); control_panel=QWidget(self); control_layout=QVBoxLayout(control_panel); control_layout.setContentsMargins(4,4,4,4); control_scroll=QScrollArea(control_panel); control_scroll.setWidgetResizable(True); control_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); control_scroll.setWidget(self.control_sections); control_layout.addWidget(control_scroll); self.control_scroll=control_scroll;
+        self.views=QStackedWidget(self); central_panel=QWidget(self); central_layout=QVBoxLayout(central_panel); central_layout.setContentsMargins(4,4,4,4); central_layout.setSpacing(4); central_layout.addWidget(self.navigation,0); central_layout.addWidget(self.views,1); split.addWidget(browser_panel); split.addWidget(central_panel); split.addWidget(control_panel); split.setStretchFactor(0,1); split.setStretchFactor(1,4); split.setStretchFactor(2,1); split.setSizes([230,760,300]); root.addWidget(split,1)
         self.overview=QPlainTextEdit(self); self.overview.setReadOnly(True); self.views.addWidget(self.overview); self.plot=ScientificPlotWidget(self); self.views.addWidget(self.plot); self.appearance_editor=self.plot.create_appearance_editor(self.appearance_section); self.appearance_layout.addWidget(self.appearance_editor); self.export_data_button.clicked.connect(lambda: getattr(self.plot,"export_data",lambda:None)()); self.export_figure_button.clicked.connect(lambda: getattr(self.plot,"export_image",lambda:None)()); self.table=ScientificTableView(self); self.table_model=ScientificTableModel(parent=self.table); self.table.setModel(self.table_model); self.table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers); self.table.setAlternatingRowColors(True); self.views.addWidget(self.table); self.provenance=QPlainTextEdit(self); self.provenance.setReadOnly(True); self.views.addWidget(self.provenance)
         self._populate_result_browser()
-        self.selected_result_header=QLabel("Select a public Result",self); self.selected_result_header.setStyleSheet("font-weight:600; padding:4px;"); root.insertWidget(root.indexOf(split),self.selected_result_header)
+        self.selected_result_header=QLabel("Select a public Result",self); self.selected_result_header.setStyleSheet("font-weight:600; padding:4px;"); central_layout.insertWidget(0,self.selected_result_header,0)
         self.empty=QLabel("No results to analyze.\n\nRun and parse a calculation in Calculate first.",self); self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter); self.views.addWidget(self.empty); self.views.setCurrentWidget(self.empty); self._populate_calculations()
+    def _clear_view_tabs(self):
+        self.navigation.blockSignals(True)
+        while self.navigation.count(): self.navigation.removeTab(0)
+        self.navigation.blockSignals(False)
+
+    def _set_view_tabs(self, labels):
+        self._clear_view_tabs()
+        for label in labels: self.navigation.addTab(label)
+
     def _mode_changed(self,*_):
         comparing=self.mode.currentText()=="Compare Results"; self.compare_panel.setVisible(comparing)
         if comparing and not self.series and self.current_result is not None:self._add_current_series()
@@ -187,7 +201,9 @@ class AnalyzeWorkspace(QWidget):
                     label = result_kind(type("R", (), {"result_type": row.get("type")})())
                     method = request.parameters.get("xc_functional", request.parameters.get("functional", "PBE"))
                     spin = request.parameters.get("spin_treatment", "SCALAR_NONSPIN").replace("_", " ")
-                    text = f"{request.name or request.calculation_id}\n{label}\n{method} · {spin}\n{row.get("status", "UNKNOWN")}"
+                    method = str(method).upper() if str(method).lower() in {"pbe", "lda", "scan", "pbe+u", "hse06"} else str(method)
+                    spin = {"SCALAR_NONSPIN":"Scalar", "COLLINEAR_SPIN":"Collinear", "NONCOLLINEAR":"Noncollinear", "SOC":"SOC"}.get(str(request.parameters.get("spin_treatment", "SCALAR_NONSPIN")), str(request.parameters.get("spin_treatment", "Scalar")).replace("_", " ").title())
+                    text = f"{request.name or request.calculation_id}\n{label}\n{method} · {spin} · {row.get("status", "UNKNOWN")}"
                     if query and query not in text.casefold(): continue
                     item=QListWidgetItem(text); item.setData(Qt.ItemDataRole.UserRole,(str(request.id),str(execution_id),str(row.get("result_id")))); item.setToolTip(f"{label}\nExecution: {execution_id}\nResult ID: {row.get("result_id")}"); self.result_browser.addItem(item)
                     if current == item.data(Qt.ItemDataRole.UserRole): item.setSelected(True)
@@ -214,9 +230,15 @@ class AnalyzeWorkspace(QWidget):
             if index >= 0: combo.setCurrentIndex(index)
 
     def _populate_calculations(self):
+        preferred = str((getattr(self.project, "analysis", {}) or {}).get("selected_result_request_id", ""))
+        self.calculation.blockSignals(True)
         self.calculation.clear()
         for request in self.project.get_calculations():
             self.calculation.addItem(request.name or request.calculation_id, request.id)
+        preferred_index = self.calculation.findData(preferred) if preferred else -1
+        if preferred_index >= 0:
+            self.calculation.setCurrentIndex(preferred_index)
+        self.calculation.blockSignals(False)
         if hasattr(self.project, "execution_roots"):
             self.workflow_roots.update({str(k): str(v) for k, v in self.project.execution_roots().items()})
         self._calculation_changed()
@@ -226,7 +248,13 @@ class AnalyzeWorkspace(QWidget):
         root=QFileDialog.getExistingDirectory(self,"Choose Results/Workflow Folder")
         if root and self.calculation.currentData() is not None: self.set_workflow_root(self.calculation.currentData(),root)
     def _calculation_changed(self,*_):
-        self.execution.clear(); self.result.clear(); self.navigation.clear(); self.current_result=None; root=self.workflow_roots.get(str(self.calculation.currentData()))
+        selected_request = self.calculation.currentData()
+        if selected_request is not None and isinstance(getattr(self.project, "analysis", None), dict):
+            selected_request = str(selected_request)
+            if self.project.analysis.get("selected_result_request_id") != selected_request:
+                self.project.analysis["selected_result_request_id"] = selected_request
+                self.project.modified = True
+        self.execution.clear(); self.result.clear(); self._clear_view_tabs(); self.current_result=None; root=self.workflow_roots.get(str(self.calculation.currentData()))
         if not root:
             if self.calculation.count() == 0:
                 self.empty.setText("No results to analyze.\n\nRun and parse a calculation in Calculate first.")
@@ -244,8 +272,8 @@ class AnalyzeWorkspace(QWidget):
             if not self.service.summaries(root, execution):
                 self.service.parse(root, execution)
             preferred_index = -1; preferred_rank = 99
-            primary_types = {"BandGapResult", "EffectiveMassResult", "BandStructureResult", "DOSResult", "PDOSResult", "PhononDOSResult", "VolumetricResult", "WorkFunctionResult", "FermiSurfaceResult", "BaderChargeResult", "ChargeTransferResult", "LowdinPopulationResult", "MagneticMomentResult", "OrbitalCharacterResult"}
-            ranks = {"BandGapResult": 0, "EffectiveMassResult": 0, "ChargeTransferResult": 0, "BaderChargeResult": 1, "MagneticMomentResult": 0, "OrbitalCharacterResult": 0, "LowdinPopulationResult": 0, "BandStructureResult": 2}
+            primary_types = {"TransportResult", "BandGapResult", "EffectiveMassResult", "BandStructureResult", "DOSResult", "PDOSResult", "PhononDOSResult", "PhononDispersionResult", "GammaPhononResult", "BornEffectiveChargeResult", "PolarElectronicDielectricResult", "LOTOResult", "IRResult", "PhononDielectricResult", "RamanResult", "VolumetricResult", "WorkFunctionResult", "FermiSurfaceResult", "BaderChargeResult", "ChargeTransferResult", "LowdinPopulationResult", "MagneticMomentResult", "OrbitalCharacterResult","EliashbergFunctionResult","ElectronPhononCouplingResult","OpticalDielectricResult","OpticalPropertiesResult"}
+            ranks = {"TransportResult": 0, "BandGapResult": 0, "EffectiveMassResult": 0, "ChargeTransferResult": 0, "BaderChargeResult": 1, "MagneticMomentResult": 0, "OrbitalCharacterResult": 0, "LowdinPopulationResult": 0, "BandStructureResult": 2}
             for row in self.service.summaries(root,execution):
                 self.result.addItem(f"{result_kind(type('R',(),{'result_type':row['type']})())} — {row['status']}",row['result_id'])
                 rank = ranks.get(row["type"], 1)
@@ -261,26 +289,32 @@ class AnalyzeWorkspace(QWidget):
         self._result_changed()
     def _result_changed(self,*_):
         root=self.workflow_roots.get(str(self.calculation.currentData())); execution=self.execution.currentData(); rid=self.result.currentData()
-        if not root or not execution or not rid: self.navigation.clear(); self.views.setCurrentWidget(self.empty); return
+        if not root or not execution or not rid: self._clear_view_tabs(); self.views.setCurrentWidget(self.empty); return
         try:
             self.current_result=self.service.load_result(root,execution,rid)
             method=self.current_result.metadata.get("electronic_method",{})
-            method_text=str(method.get("xc_functional",method.get("functional",method.get("spin_treatment",""))))
-            spin_text=str(method.get("spin_treatment", "SCALAR_NONSPIN")).replace("_", " ")
+            method_text=str(method.get("xc_functional",method.get("functional",method.get("spin_treatment","PBE"))))
+            method_text = method_text.upper() if method_text.lower() in {"pbe", "lda", "scan", "pbe+u", "hse06"} else method_text
+            spin_value=str(method.get("spin_treatment", "SCALAR_NONSPIN"))
+            spin_text={"SCALAR_NONSPIN":"Scalar", "COLLINEAR_SPIN":"Collinear", "NONCOLLINEAR":"Noncollinear", "SOC":"SOC"}.get(spin_value, spin_value.replace("_", " ").title())
             self.selected_result_header.setText(f"{result_kind(self.current_result)} · {method_text} · {spin_text} · {self.current_result.status.value}")
-            self.details_section.setPlainText("\n".join([f"Result: {result_kind(self.current_result)}",f"Status: {self.current_result.status.value}",f"Engine: {self.current_result.provenance.engine_id}",f"Tool: {self.current_result.provenance.tool_id}",f"Request: {self.current_result.provenance.request_id}",f"Execution: {self.current_result.provenance.execution_id}"]))
+            detail_lines=[f"Result: {result_kind(self.current_result)}",f"Status: {self.current_result.status.value}",f"Engine: {self.current_result.provenance.engine_id}",f"Tool: {self.current_result.provenance.tool_id}",f"Request: {self.current_result.provenance.request_id}",f"Execution: {self.current_result.provenance.execution_id}"]
+            if self.current_result.result_type == "TransportResult": detail_lines += [f"Backend version: {self.current_result.metadata.get('backend_version', '')}", f"Energy reference: {self.current_result.metadata.get('method_assumptions', {}).get('energy_reference', '')}", f"Relaxation-time assumption: {self.current_result.metadata.get('method_assumptions', {}).get('relaxation_time_model', '')}"]
+            if self.current_result.result_type == "BornEffectiveChargeResult": detail_lines += ["Quantity: Born effective charge", "Definition: polarization response to atomic displacement", "Unit: e", "Tensor convention: [atom, polarization Cartesian, displacement Cartesian]", f"Backend version: {self.current_result.metadata.get('backend_version', '')}", f"Functional: {self.current_result.metadata.get('electronic_method', {}).get('xc_functional', self.current_result.metadata.get('functional', 'PBE'))}", f"Spin treatment: {self.current_result.metadata.get('electronic_method', {}).get('spin_treatment', self.current_result.metadata.get('spin_treatment', 'SCALAR_NONSPIN'))}", f"Charge-sum residual norm: {self.current_result.metadata.get('charge_sum_norm', '—')}", "Charge-sum residual tensor: "+str(self.current_result.metadata.get('charge_sum_residual', '—'))]
+            if self.current_result.result_type == "PolarElectronicDielectricResult": detail_lines += ["Quantity: Electronic high-frequency dielectric tensor, ε∞", "Definition: electronic high-frequency relative permittivity", "Unit: dimensionless", f"Backend version: {self.current_result.metadata.get('backend_version', '')}", f"Functional: {self.current_result.metadata.get('electronic_method', {}).get('xc_functional', self.current_result.metadata.get('functional', 'PBE'))}", f"Symmetry residual norm: {self.current_result.metadata.get('symmetry_residual_norm', '—')}", "This is ε∞ only; it is not a static or phonon dielectric tensor."]
+            self.details_section.setPlainText("\n".join(detail_lines))
         except Exception as error: self.empty.setText("Result unavailable.\n"+str(error)); self.views.setCurrentWidget(self.empty); return
         self._populate_pdos_filters()
-        self.navigation.clear(); items=["Overview",result_kind(self.current_result)]
+        self._clear_view_tabs(); items=["Overview", "Plot"]
         if self.current_result.result_type in {"BandStructureResult","BandGapResult","EffectiveMassResult"}: items.append("Electronic Analysis")
-        items += ["Data","Provenance"]; self.navigation.addItems(items)
+        items += ["Data","Provenance"]; self._set_view_tabs(items)
         # A plottable terminal Result should open directly in its primary view.
         # Previously every selection was forced to Overview, leaving a completed
         # DOS/PDOS run without a visible graph until secondary navigation.
-        if self.current_result.result_type in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","VolumetricResult","WorkFunctionResult","FermiSurfaceResult","BandGapResult","EffectiveMassResult","BaderChargeResult","ChargeTransferResult","LowdinPopulationResult","MagneticMomentResult","OrbitalCharacterResult"}:
-            self.navigation.setCurrentRow(1)
+        if self.current_result.result_type in {"TransportResult","BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","PhononDispersionResult","GammaPhononResult","BornEffectiveChargeResult","PolarElectronicDielectricResult","LOTOResult", "IRResult", "PhononDielectricResult", "RamanResult", "VolumetricResult","WorkFunctionResult","FermiSurfaceResult","BandGapResult","EffectiveMassResult","BaderChargeResult","ChargeTransferResult","LowdinPopulationResult","MagneticMomentResult","OrbitalCharacterResult","EliashbergFunctionResult","ElectronPhononCouplingResult","OpticalDielectricResult","OpticalPropertiesResult"}:
+            self.navigation.setCurrentIndex(1)
         else:
-            self.navigation.setCurrentRow(0); self._show_overview()
+            self.navigation.setCurrentIndex(0); self._show_overview()
     def _populate_pdos_filters(self):
         is_pdos=self.current_result is not None and self.current_result.result_type == "PDOSResult"
         self.pdos_controls.setVisible(is_pdos)
@@ -290,14 +324,14 @@ class AnalyzeWorkspace(QWidget):
         fill(self.pdos_species,[c.get("species",c.get("element")) for c in channels]); fill(self.pdos_atom,[c.get("atom",c.get("atom_index")) for c in channels]); fill(self.pdos_orbital,[c.get("orbital",c.get("label")) for c in channels]); fill(self.pdos_component,[c.get("component",c.get("m")) for c in channels]); fill(self.pdos_spin,[c.get("spin") for c in channels if c.get("spin") is not None])
     def _refresh_pdos_view(self,*_):
         if self.current_result is not None and self.current_result.result_type == "PDOSResult":
-            if self.navigation.currentRow() == 1:self._show_plot()
-            elif self.navigation.currentRow() == 2:self._show_table()
+            if self.navigation.currentIndex() == 1:self._show_plot()
+            elif self.navigation.currentIndex() == 2:self._show_table()
 
     def _view_changed(self,row):
         if self.current_result is None:return
-        label=self.navigation.item(row).text() if row >= 0 else ""
+        label=self.navigation.tabText(row) if row >= 0 else ""
         if label=="Overview":self._show_overview()
-        elif label in {"Band Structure","Density of States","Projected DOS","Phonon DOS","Volumetric Field","Work Function","Bader Charge Analysis","Atomic Charge Transfer (Bader)","Löwdin Population Analysis","Magnetic Moments","Orbital Character / Orbital Texture","Orbital Texture"}:self._show_plot()
+        elif label=="Plot" or label in {"Band Structure","Density of States","Projected DOS","Phonon DOS","Born Effective Charges","Electronic Dielectric Tensor","Volumetric Field","Work Function","Bader Charge Analysis","Atomic Charge Transfer (Bader)","Löwdin Population Analysis","Magnetic Moments","Orbital Character / Orbital Texture","Orbital Texture","Born Effective Charges","Electronic Dielectric Tensor"}:self._show_plot()
         elif label=="Electronic Analysis":self._show_electronic()
         elif label=="Data":self._show_table()
         elif label=="Provenance":self._show_provenance()
@@ -308,6 +342,10 @@ class AnalyzeWorkspace(QWidget):
         if method: lines.append("Method: "+str(method.get("spin_treatment","SCALAR_NONSPIN")).replace("_"," ")+(" + U" if method.get("dft_plus_u") else ""))
         if r.metadata.get("final_structure"):
             structure=r.metadata["final_structure"]; lines.append(f"Final structure available (read-only), atoms: {len(structure.get('atoms',()))}")
+        if r.result_type == "BornEffectiveChargeResult":
+            lines.extend(["Quantity: Born effective charge", "Definition: polarization response to atomic displacement", "Unit: e", "Tensor convention: [atom, polarization Cartesian, displacement Cartesian]", f"Charge-sum residual norm: {r.metadata.get('charge_sum_norm', '—')}", "Charge-sum residual tensor: "+str(r.metadata.get('charge_sum_residual', '—'))])
+        if r.result_type == "PolarElectronicDielectricResult":
+            lines.extend(["Quantity: Electronic high-frequency dielectric tensor, ε∞", "Unit: dimensionless relative permittivity", f"Symmetry residual norm: {r.metadata.get('symmetry_residual_norm', '—')}", "This is ε∞ only; it is not a static or phonon dielectric tensor."])
         if r.result_type == "BaderChargeResult":
             lines.extend([f"Total pseudo-valence Bader electrons: {r.metadata.get('total_bader_electrons', '—')}", f"Expected pseudo-valence electrons: {r.metadata.get('expected_valence_electrons', '—')}", f"Conservation difference: {r.metadata.get('charge_conservation_difference', '—')}"])
         if r.result_type == "ChargeTransferResult":
@@ -435,8 +473,25 @@ class AnalyzeWorkspace(QWidget):
         payload={"result_id":self.current_result.result_id,"request_id":self.current_result.provenance.request_id,"execution_id":self.current_result.provenance.execution_id,"source_status":self.current_result.status.value,"status":analysis.status,"gap_scope":analysis.gap_scope,"sampled_gap_eV":analysis.gap,"sampled_path_gap_eV":analysis.gap,"sampled_path_character":analysis.classification,"minimum_sampled_direct_gap_eV":analysis.minimum_direct_gap,"classification":analysis.classification,"vbm":[edge(item) for item in analysis.degenerate_vbm],"cbm":[edge(item) for item in analysis.degenerate_cbm],"fits":[fit.__dict__ for fit in (() if self._last_fit is None else (self._last_fit,))]}
         Path(filename).write_text(json.dumps(payload,indent=2,sort_keys=True),encoding="utf-8")
 
+    def _clear_data_controls(self):
+        """Remove result-specific controls while retaining the shared PDOS widget."""
+        preserved=[]
+        while self.data_layout.count():
+            item=self.data_layout.takeAt(0); widget=item.widget()
+            if widget is self.pdos_controls or widget is getattr(self, "transport_controls", None) or widget is getattr(self, "phonon_controls", None) or widget is getattr(self, "polar_controls", None): preserved.append(widget)
+            elif widget is not None: widget.setParent(None); widget.deleteLater()
+            elif item.layout() is not None: self._clear_layout(item.layout())
+        for widget in preserved: self.data_layout.addWidget(widget)
+
+    @staticmethod
+    def _clear_layout(layout):
+        while layout.count():
+            item=layout.takeAt(0); widget=item.widget()
+            if widget is not None: widget.setParent(None); widget.deleteLater()
+            elif item.layout() is not None: AnalyzeWorkspace._clear_layout(item.layout())
+
     def _show_plot(self):
-        if self.current_result.result_type not in {"BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","VolumetricResult","WorkFunctionResult","FermiSurfaceResult","BandGapResult","EffectiveMassResult","BaderChargeResult","ChargeTransferResult","LowdinPopulationResult","MagneticMomentResult","OrbitalCharacterResult"}:
+        if self.current_result.result_type not in {"TransportResult","BandStructureResult","DOSResult","PDOSResult","PhononDOSResult","PhononDispersionResult","GammaPhononResult","BornEffectiveChargeResult","PolarElectronicDielectricResult","LOTOResult", "IRResult", "PhononDielectricResult", "RamanResult", "VolumetricResult","WorkFunctionResult","FermiSurfaceResult","BandGapResult","EffectiveMassResult","BaderChargeResult","ChargeTransferResult","LowdinPopulationResult","MagneticMomentResult","OrbitalCharacterResult","EliashbergFunctionResult","ElectronPhononCouplingResult","OpticalDielectricResult","OpticalPropertiesResult"}:
             self.views.setCurrentWidget(self.overview); return
         if self.current_result.result_type == "PDOSResult":
             selected=pdos_channels(self.current_result, species=self.pdos_species.currentText(), atom=self.pdos_atom.currentText(), orbital=self.pdos_orbital.currentText(), component=self.pdos_component.currentText(), spin=self.pdos_spin.currentText(), aggregation=self.pdos_aggregation.currentText())
@@ -456,6 +511,7 @@ class AnalyzeWorkspace(QWidget):
             if values is None or len(energy) == 0 or len(values) != len(energy) or not (np.all(np.isfinite(energy)) and np.all(np.isfinite(np.asarray(values, dtype=float)))):
                 self.empty.setText("DOS Result contains no usable finite samples.")
                 self.views.setCurrentWidget(self.empty); return
+        self._clear_data_controls()
         old=self.plot
         self.views.removeWidget(old)
         for index in range(self.data_layout.count()-1,-1,-1):
@@ -465,7 +521,7 @@ class AnalyzeWorkspace(QWidget):
         old.figure.clear(); old.setParent(None); old.deleteLater()
         if self.appearance_editor is not None:
             self.appearance_layout.removeWidget(self.appearance_editor); self.appearance_editor.setParent(None); self.appearance_editor.deleteLater(); self.appearance_editor=None
-        self.plot = BandPlot(self) if self.current_result.result_type == "BandStructureResult" else WorkFunctionPlot(self) if self.current_result.result_type == "WorkFunctionResult" else VolumetricPlot(self) if self.current_result.result_type == "VolumetricResult" else FermiSurfacePlot(self) if self.current_result.result_type == "FermiSurfaceResult" else DerivedElectronicPlot(self) if self.current_result.result_type in {"BandGapResult","EffectiveMassResult"} else BaderChargePlot(self) if self.current_result.result_type in {"BaderChargeResult","ChargeTransferResult"} else ProjectionPlot(self) if self.current_result.result_type in {"LowdinPopulationResult","MagneticMomentResult","OrbitalCharacterResult"} else DOSPlot(self)
+        self.plot = EliashbergPlot(self) if self.current_result.result_type in {"EliashbergFunctionResult","ElectronPhononCouplingResult"} else TransportPlot(self) if self.current_result.result_type == "TransportResult" else GammaPhononPlot(self) if self.current_result.result_type == "GammaPhononResult" else PhononDispersionPlot(self) if self.current_result.result_type == "PhononDispersionResult" else PhononDOSPlot(self) if self.current_result.result_type == "PhononDOSResult" else BandPlot(self) if self.current_result.result_type == "BandStructureResult" else WorkFunctionPlot(self) if self.current_result.result_type == "WorkFunctionResult" else VolumetricPlot(self) if self.current_result.result_type == "VolumetricResult" else FermiSurfacePlot(self) if self.current_result.result_type == "FermiSurfaceResult" else DerivedElectronicPlot(self) if self.current_result.result_type in {"BandGapResult","EffectiveMassResult"} else BaderChargePlot(self) if self.current_result.result_type in {"BaderChargeResult","ChargeTransferResult"} else ProjectionPlot(self) if self.current_result.result_type in {"LowdinPopulationResult","MagneticMomentResult","OrbitalCharacterResult","EliashbergFunctionResult","ElectronPhononCouplingResult"} else PolarTensorPlot(self) if self.current_result.result_type in {"BornEffectiveChargeResult","PolarElectronicDielectricResult"} else LOTOPlot(self) if self.current_result.result_type == "LOTOResult" else IRPlot(self) if self.current_result.result_type == "IRResult" else PhononDielectricPlot(self) if self.current_result.result_type == "PhononDielectricResult" else RamanPlot(self) if self.current_result.result_type == "RamanResult" else OpticalPlot(self) if self.current_result.result_type in {"OpticalDielectricResult","OpticalPropertiesResult"} else DOSPlot(self)
         self.views.insertWidget(1,self.plot)
         self.appearance_editor=self.plot.create_appearance_editor(self.appearance_section); self.appearance_layout.addWidget(self.appearance_editor)
         if self.current_result.result_type == "BandStructureResult":
@@ -473,10 +529,87 @@ class AnalyzeWorkspace(QWidget):
             request=next((item for item in self.project.get_calculations() if str(item.id)==str(self.current_result.provenance.request_id)),None)
             if request is not None: self.plot.set_path_metadata(request.parameters.get("kpath"))
         if self.current_result.result_type == "PDOSResult": self.plot.set_pdos_channels(selected)
+        if self.current_result.result_type == "TransportResult": self._setup_transport_controls()
+        if self.current_result.result_type in {"GammaPhononResult", "PhononDispersionResult", "PhononDOSResult"}: self._setup_phonon_controls()
+        if self.current_result.result_type in {"BornEffectiveChargeResult", "PolarElectronicDielectricResult"}: self._setup_polar_controls()
+        if self.current_result.result_type in {"LOTOResult", "IRResult"}: self._setup_phonon_controls()
         if self.current_result.result_type == "DOSResult":
             self.data_layout.addWidget(QLabel("Energy reference",self.data_section)); self.data_layout.addWidget(self.plot.reference); self.data_layout.addWidget(self.plot.integrated); self.data_layout.addWidget(self.plot.spin_mode)
+        if self.current_result.result_type in {"OpticalDielectricResult", "OpticalPropertiesResult"}: self.data_layout.addWidget(self.plot.controls)
         if self.current_result.result_type == "PDOSResult": self.pdos_controls.setVisible(True)
+        if hasattr(self, "transport_controls"): self.transport_controls.setVisible(self.current_result.result_type == "TransportResult")
+        if hasattr(self, "phonon_controls"): self.phonon_controls.setVisible(self.current_result.result_type in {"GammaPhononResult", "PhononDispersionResult", "PhononDOSResult", "LOTOResult", "IRResult"})
+        if hasattr(self, "polar_controls"): self.polar_controls.setVisible(self.current_result.result_type in {"BornEffectiveChargeResult", "PolarElectronicDielectricResult"})
         self.plot.set_result(self.current_result); self.appearance_editor._load_state() if self.appearance_editor is not None else None; self.views.setCurrentWidget(self.plot)
+    def _setup_transport_controls(self):
+        if hasattr(self, "transport_controls"):
+            self.transport_controls.setVisible(True); return
+        self.transport_controls=QWidget(self.data_section); form=QFormLayout(self.transport_controls); self.transport_property=QComboBox(self.transport_controls); self.transport_property.addItems(list(PROPERTIES)); self.transport_temperature=QComboBox(self.transport_controls); self.transport_component=QComboBox(self.transport_controls); self.transport_component.addItems(["xx","xy","xz","yx","yy","yz","zx","zy","zz"]); form.addRow("Property",self.transport_property); form.addRow("Temperature",self.transport_temperature); form.addRow("Tensor component",self.transport_component); self.data_layout.addWidget(self.transport_controls)
+        result=self.current_result; self.transport_temperature.addItems([f"{float(value):g} K" for value in result.arrays["temperatures_K"]]); self.transport_temperature.setCurrentIndex(0); self.transport_property.currentTextChanged.connect(lambda value:self.plot.set_transport_selection(property_name=value)); self.transport_temperature.currentIndexChanged.connect(lambda value:self.plot.set_transport_selection(temperature=value)); self.transport_component.currentTextChanged.connect(lambda value:self.plot.set_transport_selection(component=value))
+
+    def _setup_polar_controls(self):
+        if hasattr(self, "polar_controls"):
+            self.polar_controls.setVisible(True)
+            return
+        self.polar_controls=QWidget(self.data_section)
+        form=QFormLayout(self.polar_controls)
+        self.polar_atom=QComboBox(self.polar_controls)
+        elements=list(self.current_result.metadata.get("atom_elements", ()))
+        if self.current_result.result_type == "BornEffectiveChargeResult":
+            for index, element in enumerate(elements): self.polar_atom.addItem(f"{index + 1}: {element}", index)
+            form.addRow("Atom", self.polar_atom)
+            self.polar_atom.currentIndexChanged.connect(lambda index: self.plot.set_atom_index(index))
+        self.data_layout.addWidget(self.polar_controls)
+
+    def _setup_phonon_controls(self):
+        if hasattr(self, "phonon_controls"):
+            self.phonon_controls.setVisible(True)
+            if self.current_result.result_type == "LOTOResult":
+                self._populate_loto_directions()
+            return
+        self.phonon_controls=QWidget(self.data_section); form=QFormLayout(self.phonon_controls); self.phonon_frequency_unit=QComboBox(self.phonon_controls); self.phonon_frequency_unit.addItems(["cm^-1", "THz"]); form.addRow("Frequency unit", self.phonon_frequency_unit)
+        if self.current_result.result_type == "LOTOResult":
+            self.phonon_direction=QComboBox(self.phonon_controls)
+            form.addRow("Propagation direction", self.phonon_direction)
+            self.phonon_direction.currentIndexChanged.connect(self._loto_direction_changed)
+        self.data_layout.addWidget(self.phonon_controls); self.phonon_frequency_unit.currentTextChanged.connect(lambda value: self.plot.set_frequency_unit(value))
+        if self.current_result.result_type == "LOTOResult":
+            self._populate_loto_directions()
+    def _populate_loto_directions(self):
+        if not hasattr(self, "phonon_direction") or self.current_result is None:
+            return
+        root=self.workflow_roots.get(str(self.calculation.currentData())); execution=self.execution.currentData()
+        entries=[]
+        if root and execution:
+            for row in self.service.summaries(root, execution):
+                if row.get("type") != "LOTOResult":
+                    continue
+                try:
+                    result=self.service.load_result(root, execution, row["result_id"])
+                    direction=np.asarray(result.metadata.get("direction_unit_cartesian", ()), dtype=float)
+                    if direction.size != 3:
+                        continue
+                    label="[" + ", ".join(f"{float(value):g}" for value in direction) + "]"
+                    entries.append((label, row["result_id"]))
+                except Exception:
+                    continue
+        if not entries:
+            direction=np.asarray(self.current_result.metadata.get("direction_unit_cartesian", ()), dtype=float)
+            if direction.size == 3:
+                entries=[("[" + ", ".join(f"{float(value):g}" for value in direction) + "]", self.current_result.result_id)]
+        current=self.current_result.result_id
+        self.phonon_direction.blockSignals(True); self.phonon_direction.clear()
+        for label, result_id in entries:
+            self.phonon_direction.addItem(label, result_id)
+        selected=self.phonon_direction.findData(current)
+        self.phonon_direction.setCurrentIndex(max(0, selected)); self.phonon_direction.blockSignals(False)
+    def _loto_direction_changed(self, index):
+        if index < 0 or not hasattr(self, "phonon_direction"):
+            return
+        result_id=self.phonon_direction.itemData(index)
+        target=self.result.findData(result_id)
+        if target >= 0 and self.result.currentData() != result_id:
+            self.result.setCurrentIndex(target)
     def _show_table(self):
         if self.current_result.result_type == "PDOSResult":
             channels=pdos_channels(self.current_result, species=self.pdos_species.currentText(), atom=self.pdos_atom.currentText(), orbital=self.pdos_orbital.currentText(), component=self.pdos_component.currentText(), spin=self.pdos_spin.currentText(), aggregation=self.pdos_aggregation.currentText())

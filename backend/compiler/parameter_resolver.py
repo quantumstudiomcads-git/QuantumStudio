@@ -49,6 +49,8 @@ class ParameterResolver:
         for parameter in definition.parameters:
             if parameter in self.user_parameters:
                 parameters[parameter] = self.user_parameters[parameter]
+        if calculation_id == "scf" and "scf_mesh" in parameters and "kpoints" not in self.user_parameters:
+            parameters["kpoints"] = list(parameters["scf_mesh"])
         return parameters
 
     @staticmethod

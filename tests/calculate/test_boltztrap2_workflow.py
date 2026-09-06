@@ -17,7 +17,7 @@ def plan(selected, params=P, structure=S):
 class BoltzTraP2WorkflowTests(unittest.TestCase):
     def test_bands_dag_and_electronic_bands_contract(self):
         result=plan(["boltztrap_bands"]); self.assertEqual([t.semantic_task_type for t in result.tasks],["scf","qe_pw_nscf_btp2","btp2_interpolate"])
-        scf,nscf,interpolate=result.tasks; self.assertEqual(nscf.depends_on_task_ids,(scf.id,)); self.assertEqual(nscf.artifact_outputs,("ElectronicBandsData",)); self.assertEqual(interpolate.artifact_inputs,("ElectronicBandsData",)); self.assertEqual(interpolate.artifact_outputs,("BTP2_INTERPOLATED_BANDS",)); self.assertFalse(nscf.metadata["electronic_bands_data_contract"]["populated_during_execution"])
+        scf,nscf,interpolate=result.tasks; self.assertEqual(nscf.depends_on_task_ids,(scf.id,)); self.assertEqual(nscf.artifact_outputs,("ElectronicBandsData",)); self.assertEqual(interpolate.artifact_inputs,("ElectronicBandsData",)); self.assertEqual(interpolate.artifact_outputs,("BTP2_INTERPOLATED_BANDS",)); self.assertTrue(nscf.metadata["electronic_bands_data_contract"]["populated_during_execution"])
 
     def test_transport_intents_and_tau_semantics(self):
         result=plan(["seebeck","electrical_conductivity","thermal_conductivity_electronic","power_factor","carrier_concentration"]); transport=result.tasks[-1]
@@ -53,5 +53,21 @@ class BoltzTraP2WorkflowTests(unittest.TestCase):
     def test_zt_and_mobility_remain_deferred(self):
         from frontend.calculations.catalog import CALCULATIONS
         status={item.id:item.status for item in CALCULATIONS}; self.assertEqual(status["zt"],"planned"); self.assertEqual(status["mobility"],"planned")
+
+    def test_transport_catalog_readiness_is_scoped_to_validated_contracts(self):
+        from frontend.calculations.catalog import CALCULATIONS
+        status = {item.id: item.status for item in CALCULATIONS}
+        names = {item.id: item.name for item in CALCULATIONS}
+        for item in ("seebeck", "electrical_conductivity", "thermal_conductivity_electronic", "carrier_concentration"):
+            self.assertEqual(status[item], "ready")
+        self.assertIn("σ/τ", names["electrical_conductivity"])
+        self.assertIn("κe/τ", names["thermal_conductivity_electronic"])
+        self.assertEqual(status["power_factor"], "partial")
+        self.assertEqual(status["zt"], "planned")
+        self.assertEqual(status["mobility"], "planned")
+        self.assertEqual(status["boltztrap_bands"], "partial")
+        self.assertEqual(status["transport_temperature"], "planned")
+        self.assertEqual(status["transport_doping"], "planned")
+        self.assertEqual(len({item.id for item in CALCULATIONS}), len(CALCULATIONS))
 
 if __name__=="__main__": unittest.main()

@@ -8,6 +8,24 @@ from .errors import ArtifactUnavailableError, ExecutionPreflightError, Unsupport
 from .models import TaskExecutionRecord, TaskState, WorkflowExecutionRecord, now
 from .tools import LocalToolConfiguration
 from .diagnostics import extract_qe_failure
+from .artifacts import ArtifactError, ArtifactRegistry, ArtifactResolver, RequiredArtifactMissing
+
+def _validate_qgrid_artifacts(directory, metadata):
+ """Validate the QE 7.6 ldisp dyn0/indexed set before q2r consumes it."""
+ directory=Path(directory); prefix=str(metadata.get("qe_prefix") or "").strip()
+ candidates=sorted(directory.glob(prefix + ".dyn*") if prefix else directory.glob("*.dyn*"))
+ grid=directory / (prefix + ".dyn0") if prefix else next((item for item in candidates if item.name.endswith("0")), directory / "dynamical-matrix0")
+ if not grid.is_file() or grid.stat().st_size == 0: return "Uniform-q phonon metadata dyn0 is missing or empty."
+ try: lines=grid.read_text(encoding="utf-8",errors="replace").splitlines(); first=[int(value) for value in lines[0].split()[:3]]; expected=int(lines[1].split()[0])
+ except (ValueError,IndexError,OSError): return "Uniform-q phonon dyn0 metadata is malformed."
+ requested=metadata.get("qmesh")
+ if requested is not None and list(first) != [int(value) for value in requested]: return "Uniform-q phonon dyn0 q-mesh does not match the declared producer identity."
+ if expected < 1: return "Uniform-q phonon dyn0 declares no irreducible q points."
+ indexed=[directory / (grid.name[:-1] + str(index)) for index in range(1, expected + 1)]
+ missing=[item.name for item in indexed if not item.is_file() or item.stat().st_size == 0]
+ if missing: return "Uniform-q phonon dynamical set is incomplete: missing " + ", ".join(missing)
+ if any("q = (" not in item.read_text(encoding="utf-8",errors="replace") for item in indexed): return "Uniform-q phonon dynamical set contains a file without q-point data."
+ return None
 
 def _failure_tail(stderr_path, stdout_path):
  for path in (stderr_path, stdout_path):
@@ -29,6 +47,7 @@ class LocalExecutionManager:
   return result
  def preflight(self,workflow):
   root=Path(workflow.root).resolve(); errors=[]; task_map=workflow.task_map()
+  if not workflow.tasks: errors.append("Workflow contains no executable tasks.")
   if not root.is_dir(): errors.append("Generated workflow root does not exist.")
   manifest=root/workflow.manifest_filename
   try:
@@ -58,6 +77,8 @@ class LocalExecutionManager:
      expected=pseudo.get("sha256")
      if expected and sha256(target)!=expected:
       errors.append(f"Generated pseudopotential SHA-256 does not match manifest: {filename}")
+  try: ArtifactResolver(workflow, ArtifactRegistry(root, "validation")).validate()
+  except ArtifactError as error: errors.append(str(error))
   if int(self.tools.cpu_cores) < 1: errors.append("Local CPU cores must be at least 1.")
   if int(self.tools.omp_threads) < 1: errors.append("OpenMP threads must be at least 1.")
   for task in workflow.tasks:
@@ -89,11 +110,25 @@ class LocalExecutionManager:
  def cancel(self):
   self._cancel.set(); self._terminate_current()
  def _run_task(self,workflow,task,record):
-  root=Path(workflow.root).resolve(); runtime=record.tasks[task.task_id]; runtime.attempt_count += 1; runtime.state=TaskState.RUNNING; runtime.started_at=now(); runtime.timeout_seconds=task.timeout_seconds; self._emit(record,task.task_id,runtime.state)
-  directory=self._safe(root,"",task.working_directory); command=task.command; executable=self.tools.resolve(task.tool_id,command.program,task.engine_id); runtime.resolved_executable=str(executable)
+  root=Path(workflow.root).resolve(); runtime=record.tasks[task.task_id]; directory=self._safe(root,"",task.working_directory)
+  try: ArtifactResolver(workflow, ArtifactRegistry(root, record.execution_id)).materialize(task)
+  except (ArtifactError, RequiredArtifactMissing) as error:
+   runtime.state=TaskState.FAILED; runtime.error_type="PREPARATION_ARTIFACT_MISSING"; runtime.error_message=str(error); runtime.finished_at=now(); self._emit(record,task.task_id,runtime.state); return
+  runtime.attempt_count += 1; runtime.state=TaskState.RUNNING; runtime.started_at=now(); runtime.timeout_seconds=task.timeout_seconds; self._emit(record,task.task_id,runtime.state)
+  command=task.command; executable=self.tools.resolve(task.tool_id,command.program,task.engine_id); runtime.resolved_executable=str(executable)
   argv=[str(executable),*command.arguments]
+  launcher_path=None
+  actual_ranks=1
   if int(self.tools.cpu_cores)>1 and self.tools.mpi_capable(task.tool_id):
-   launcher=self.tools.resolved_mpi_launcher(); flag,count=self.tools.mpi_arguments(launcher,self.tools.cpu_cores); argv=[str(launcher),flag,count,*argv]
+   launcher_path=self.tools.resolved_mpi_launcher(); flag,count=self.tools.mpi_arguments(launcher_path,self.tools.cpu_cores); argv=[str(launcher_path),flag,count,*argv]; actual_ranks=int(self.tools.cpu_cores)
+   if task.tool_id == "epw.x" and actual_ranks > 1:
+    argv.extend(("-npool", str(actual_ranks)))
+  runtime.requested_cores=int(self.tools.cpu_cores)
+  runtime.actual_mpi_ranks=actual_ranks
+  runtime.omp_threads_per_rank=int(self.tools.omp_threads)
+  runtime.mpi_launcher=str(launcher_path) if launcher_path is not None else None
+  runtime.command_argv=list(argv)
+  runtime.engine_version=str(task.metadata.get("backend_version") or self.tools.qe_version or "") or None
   stdin=self._safe(root,task.working_directory,command.stdin_file).open("rb") if command.stdin_file else None
   stdout_name=command.stdout_file or "stdout.log"; stderr_name=command.stderr_file or "stderr.log"
   if record.execution_id:
@@ -103,6 +138,8 @@ class LocalExecutionManager:
    with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
     env=os.environ.copy(); env.update(self.tools.environment); env.update(command.environment); env["OMP_NUM_THREADS"]=str(int(self.tools.omp_threads))
     process=subprocess.Popen(argv,cwd=directory,stdin=stdin,stdout=stdout,stderr=stderr,env=env,shell=False,start_new_session=(os.name=="posix"))
+    runtime.process_id=process.pid
+    if self._store: self._store.save(record)
     with self._lock:self._process=process
     started=time.monotonic()
     while process.poll() is None:
@@ -118,6 +155,10 @@ class LocalExecutionManager:
     # projwfc.x or other wavefunction consumers, so classify it as failed before
     # dependency scheduling can launch a postprocessor.
     if runtime.state is TaskState.COMPLETED and task.engine_id == "quantum_espresso":
+     if task.semantic_task_type == "qe_ph" and (task.metadata.get("task_metadata", {}) or {}).get("purpose") == "harmonic_qmesh":
+      problem = _validate_qgrid_artifacts(directory, task.metadata)
+      if problem:
+       runtime.state=TaskState.FAILED; runtime.error_message=problem
      try:
       stdout_text=stdout_path.read_text(encoding="utf-8", errors="replace")
       stderr_text=stderr_path.read_text(encoding="utf-8", errors="replace")
@@ -126,6 +167,10 @@ class LocalExecutionManager:
      if "convergence NOT achieved" in stdout_text:
       runtime.state=TaskState.FAILED
       runtime.error_message=extract_qe_failure(stdout_text, stderr_text, runtime.return_code) or "Quantum ESPRESSO SCF did not converge; restart wavefunctions were not produced."
+    if runtime.state is TaskState.COMPLETED:
+     try: ArtifactRegistry(root, record.execution_id).register(task, ArtifactResolver.declarations(task))
+     except RequiredArtifactMissing as error:
+      runtime.state=TaskState.FAILED; runtime.error_type="REQUIRED_ARTIFACT_MISSING"; runtime.error_message=str(error)
     if runtime.state is TaskState.FAILED and not runtime.error_message:
      stdout.flush(); stderr.flush()
      try:
@@ -134,7 +179,13 @@ class LocalExecutionManager:
      except OSError:
       stdout_text=stderr_text=""
      detail=extract_qe_failure(stdout_text, stderr_text, runtime.return_code)
-     runtime.error_message=detail or f"Process exited with code {runtime.return_code}."
+     oom_signal = runtime.return_code in {137, -9}
+     oom_evidence = oom_signal and any(token.lower() in (stdout_text + "\n" + stderr_text).lower() for token in ("estimated total dynamical ram", "estimated max dynamical ram", "out of memory", "oom", "cannot allocate"))
+     if oom_evidence:
+      runtime.error_type="RESOURCE_OOM"
+      runtime.error_message="Process was terminated by the operating system, most likely because the calculation exceeded available memory. " + (detail or f"Process exited with code {runtime.return_code}.")
+     else:
+      runtime.error_message=detail or f"Process exited with code {runtime.return_code}."
   finally:
    if stdin:stdin.close()
    with self._lock:self._process=None
@@ -154,6 +205,13 @@ class LocalExecutionManager:
   if self._store: self._store.save(record)
   return record
 
+ def reconcile_completed_artifacts(self, workflow, record):
+  """Register declared outputs of completed compatible tasks without rerunning them."""
+  registry=ArtifactRegistry(workflow.root, record.execution_id)
+  for task in workflow.tasks:
+   if record.tasks[task.task_id].state is TaskState.COMPLETED:
+    registry.register(task, ArtifactResolver.declarations(task))
+  return registry.load()
  def resume(self, workflow, record, store=None):
   retryable={TaskState.FAILED, TaskState.INTERRUPTED, TaskState.CANCELLED}
   first=next((task.task_id for task in workflow.tasks if record.tasks[task.task_id].state in retryable), None)

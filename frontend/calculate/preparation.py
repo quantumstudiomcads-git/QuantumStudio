@@ -32,13 +32,14 @@ class CalculationPreparationWorker(QThread):
 
     progress = Signal(str)
 
-    def __init__(self, service, prepared_request, output_root, provisioner=None, parent=None, repair_workflow_root=None):
+    def __init__(self, service, prepared_request, output_root, provisioner=None, parent=None, repair_workflow_root=None, execution_profile="STANDARD"):
         super().__init__(parent)
         self.service = service
         self.prepared_request = prepared_request
         self.output_root = str(output_root)
         self.provisioner = provisioner or PseudoProvisioner()
         self.repair_workflow_root = str(repair_workflow_root) if repair_workflow_root else None
+        self.execution_profile = str(execution_profile or "STANDARD")
         self.result = None
         self.error = None
 
@@ -73,7 +74,7 @@ class CalculationPreparationWorker(QThread):
                 location = self.service.materialize_existing_qe_workflow(self.repair_workflow_root)
             else:
                 self.progress.emit("Generating QE inputs…")
-                location = self.service.generate_engine_inputs(prepared, self.output_root)
+                location = self.service.generate_engine_inputs(prepared, self.output_root, execution_profile=self.execution_profile)
             self.result = (prepared, plan, str(location))
         except Exception as error:
             if isinstance(error, ProvisionError) and "untrusted download location" in str(error):

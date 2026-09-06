@@ -13,6 +13,8 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from backend.runtime import runtime_paths
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -40,6 +42,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
+    QStackedWidget,
 )
 
 from frontend.calculations.catalog import CALCULATIONS
@@ -85,6 +88,8 @@ class CalculateWorkspace(QWidget):
         self.selected_support_error = ""
 
         self.selected_ids = []
+        self._configured_selection_ids = []
+        self._request_status = {}
 
         self.execution_plan = None
         self.calculation_request = None
@@ -477,11 +482,14 @@ class CalculateWorkspace(QWidget):
         self.calculation_list = QListWidget()
 
         self.calculation_list.setSelectionMode(
-            QAbstractItemView.SelectionMode.NoSelection
+            QAbstractItemView.SelectionMode.ExtendedSelection
         )
 
         self.calculation_list.itemChanged.connect(
             self._calculation_item_changed
+        )
+        self.calculation_list.itemSelectionChanged.connect(
+            self._catalog_selection_changed
         )
 
         catalog_layout.addWidget(
@@ -525,7 +533,7 @@ class CalculateWorkspace(QWidget):
         selection_layout.addWidget(configured_header)
         self.configured_list = QListWidget()
         self.configured_list.setMaximumHeight(140)
-        self.configured_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.configured_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.configured_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.configured_list.customContextMenuRequested.connect(self._configured_context_menu)
         self.configured_list.itemDoubleClicked.connect(lambda item: self._configure_configured_item(item))
@@ -923,6 +931,16 @@ class CalculateWorkspace(QWidget):
 
         self._refresh_selection()
 
+    def _catalog_selection_changed(self):
+        """Make ordinary extended-list highlighting addable as catalog selection."""
+        highlighted = [
+            item.data(Qt.ItemDataRole.UserRole)
+            for item in self.calculation_list.selectedItems()
+        ]
+        if highlighted:
+            self.selected_ids = list(dict.fromkeys([*self.selected_ids, *highlighted]))
+            self._refresh_selection()
+
     def _refresh_selection(self):
 
         self.selected_list.clear()
@@ -966,9 +984,8 @@ class CalculateWorkspace(QWidget):
             else "calculations"
         )
 
-        self.selected_count.setText(
-            f"{count} {label}"
-        )
+        self.selected_count.setText(f"{count} {label}")
+        self.catalog_create_button.setText("Add Selected Calculations" if count == 0 else f"Add Selected Calculations ({count})")
 
         self._update_compile_availability()
 
@@ -1045,7 +1062,8 @@ class CalculateWorkspace(QWidget):
                 supported = False
                 self.selected_support_error = str(error)
         structure_ready = bool(getattr(self.current_structure_summary, "valid", False))
-        request_ready = self._selected_configured_request_id() is not None and self.calculation_request is not None
+        configured_count = len(self._selected_configured_request_ids()) if hasattr(self, "configured_list") else 0
+        request_ready = configured_count > 1 or (self._selected_configured_request_id() is not None and self.calculation_request is not None)
         enabled = supported and structure_ready
         if hasattr(self, "catalog_create_button"):
             self.catalog_create_button.setEnabled(enabled)
@@ -1064,7 +1082,12 @@ class CalculateWorkspace(QWidget):
             self._more_preview_action.setEnabled(qe_available)
             self.generate_qe_button.setEnabled(request_ready and not self._workflow_generated)
             self.execute_button.setEnabled(request_ready)
-            self.workflow_status.setText("Status: QE inputs ready" if self._workflow_generated else ("Status: Ready to generate QE inputs" if request_ready else "Status: Select a calculation and add it to your project"))
+            self.execute_button.setText(f"Run Selected ({configured_count})" if configured_count > 1 else "Run")
+            self.generate_qe_button.setText(f"Generate QE Inputs ({configured_count})" if configured_count > 1 else "Generate QE Inputs")
+            current_status = self.workflow_status.text()
+            protected_status = current_status.startswith("Status: Failed") or current_status.startswith("Status: Calculation completed") or current_status.startswith("Status: Results ready") or self._preparation_worker is not None or self._active_execution is not None
+            if not protected_status:
+                self.workflow_status.setText("Status: QE inputs ready" if self._workflow_generated else ("Status: Ready to generate QE inputs" if request_ready else "Status: Select a calculation and add it to your project"))
 
     def refresh(self):
         """Refresh derived display state; existing request snapshots are intentionally unchanged."""
@@ -1076,9 +1099,14 @@ class CalculateWorkspace(QWidget):
     # PERSISTENT CONFIGURED REQUESTS
     # ============================================================
 
+    def _selected_configured_request_ids(self):
+        if not hasattr(self, "configured_list"):
+            return []
+        return [item.data(Qt.ItemDataRole.UserRole) for item in self.configured_list.selectedItems()]
+
     def _selected_configured_request_id(self):
-        item = self.configured_list.currentItem() if hasattr(self, "configured_list") else None
-        return None if item is None else item.data(Qt.ItemDataRole.UserRole)
+        selected = self._selected_configured_request_ids()
+        return selected[0] if selected else None
 
     def _set_configured_action_enabled(self, enabled):
         enabled = bool(enabled)
@@ -1107,7 +1135,9 @@ class CalculateWorkspace(QWidget):
     def _refresh_configured_calculations(self, selected_id=None):
         if not hasattr(self, "configured_list"):
             return
-        selected_id = self._selected_configured_request_id() if selected_id is None else selected_id
+        selected_ids = list(self._configured_selection_ids)
+        if selected_id is not None:
+            selected_ids = [selected_id]
         self.configured_list.blockSignals(True)
         self.configured_list.clear()
         for request in self.project.get_calculations():
@@ -1119,12 +1149,14 @@ class CalculateWorkspace(QWidget):
                 status = "Compile Error"
                 summary = None
             atom_text = f"{summary.atom_count} atoms" if summary is not None else "saved snapshot"
+            display_status = self._request_status.get(request.id, "READY" if summary is not None else "FAILED")
             item = QListWidgetItem(request.name or request.calculation_id)
+            item.setData(Qt.ItemDataRole.UserRole + 1, display_status)
             item.setData(Qt.ItemDataRole.UserRole, request.id)
-            item.setToolTip(f"{status}\nRequest ID: {request.id}")
+            item.setToolTip(f"{display_status}\nRequest ID: {request.id}")
             self.configured_list.addItem(item)
-            if request.id == selected_id:
-                self.configured_list.setCurrentItem(item)
+            if request.id in selected_ids:
+                item.setSelected(True)
         self.configured_list.blockSignals(False)
         self._configured_selection_changed()
 
@@ -1148,10 +1180,21 @@ class CalculateWorkspace(QWidget):
         self._configure_parameters()
 
     def _configured_selection_changed(self):
-        request_id = self._selected_configured_request_id()
+        request_ids = self._selected_configured_request_ids()
+        self._configured_selection_ids = request_ids
+        request_id = request_ids[0] if request_ids else None
         request = self.project.get_calculation(request_id) if request_id else None
-        self._set_configured_action_enabled(request is not None)
+        self._set_configured_action_enabled(bool(request_ids))
         if request is None:
+            self._update_compile_availability()
+            return
+        if len(request_ids) > 1:
+            self.request_name.clear()
+            self.execution_plan = None
+            self.calculation_request = None
+            self.execution_preview.setText(f"{len(request_ids)} calculations selected. Configure or run the selected jobs together.")
+            self.workflow_status.setText(f"Status: {len(request_ids)} calculations selected")
+            self._update_compile_availability()
             return
         self.request_name.setText(request.name)
         self.selected_ids = list(request.selected_calculations)
@@ -1184,7 +1227,20 @@ class CalculateWorkspace(QWidget):
                 recommendation = recommended_band_path(self.project.get_structure().to_dict())
                 parameters["kpath"] = normalize_band_path(materialize_path(recommendation.segments, (True,) * len(recommendation.segments), 40))
             parameters["postprocessing"] = True
-        elif set(self.selected_ids) & {"dos", "pdos", "charge_density", "spin_density", "electron_localization", "electrostatic_potential", "work_function", "phonon_dos"}:
+        elif "phonon_dos" in self.selected_ids:
+            # The harmonic DOS workflow also records a real matdyn path result.
+            # Reuse the canonical reciprocal-space recommendation; this is an engine
+            # input default, not an Analyze-layer interpolation.
+            existing_path = parameters.get("phonon_path")
+            if existing_path:
+                parameters["phonon_path"] = normalize_band_path(existing_path)
+            else:
+                recommendation = recommended_band_path(self.project.get_structure().to_dict())
+                if recommendation.segments:
+                    parameters["phonon_path"] = normalize_band_path(materialize_path(recommendation.segments, (True,) * len(recommendation.segments), 24))
+                    parameters["phonon_path_convention"] = "Quantum Studio " + recommendation.bravais_label + " recommendation"
+            parameters["postprocessing"] = True
+        elif set(self.selected_ids) & {"dos", "pdos", "charge_density", "spin_density", "electron_localization", "electrostatic_potential", "work_function"}:
             # These public intents expand into private QE terminal tasks only
             # when this workflow flag is present; never silently run SCF-only.
             parameters["postprocessing"] = True
@@ -1198,14 +1254,24 @@ class CalculateWorkspace(QWidget):
 
     def _create_calculation_requested(self):
         try:
-            prepared = self.create_persistent_calculation()
-            self.configured_list.setCurrentRow(self.configured_list.count() - 1)
-            return prepared
+            prepared_requests = []
+            checked_ids = list(self.selected_ids)
+            for calculation_id in checked_ids:
+                self.selected_ids = [calculation_id]
+                prepared_requests.append(self.create_persistent_calculation())
+            self.selected_ids = checked_ids
+            if prepared_requests:
+                self._refresh_configured_calculations(prepared_requests[-1].id)
+                return prepared_requests[-1]
+            return None
         except Exception as error:
             QMessageBox.warning(self, "Create Calculation", str(error))
             return None
 
     def _configure_parameters(self):
+        configured_ids = self._selected_configured_request_ids()
+        if len(configured_ids) > 1:
+            return self._configure_batch_parameters(configured_ids)
         if not self.selected_ids:
             request = self.project.get_calculation(self._selected_configured_request_id())
             if request is not None:
@@ -1235,7 +1301,7 @@ class CalculateWorkspace(QWidget):
         form=QFormLayout(); fields={}
         for item in descriptors(self.selected_ids):
             key=item["key"]; value=existing.get(key,item["default"])
-            if key=="kpath":
+            if key in {"kpath", "phonon_path"}:
                 field=QPushButton("Choose Band Path…  [" + band_path_summary(value) + "]",dialog); field.band_path=normalize_band_path(value)
                 def choose_path(_checked=False, button=field):
                     try:
@@ -1247,14 +1313,45 @@ class CalculateWorkspace(QWidget):
                     except Exception as error:
                         QMessageBox.warning(dialog, "Band Path", str(error))
                 field.clicked.connect(choose_path)
-            else: field=make_control(key,value,dialog)
+            else: field=make_control(key,value,dialog,structure=structure)
             field.setToolTip(item["key"]); fields[key]=field; form.addRow(item["label"]+(f" ({item['unit']})" if item["unit"] else ""),field)
-        layout.addLayout(form)
-        resolved=QTableWidget(dialog); resolved.setColumnCount(2); resolved.setHorizontalHeaderLabels(("Parameter", "Value")); resolved.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents); resolved.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch); resolved.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); resolved.setMaximumHeight(180); layout.addWidget(QLabel("Resolved parameters (read-only)")); layout.addWidget(resolved)
+        magnet_label = next((form.labelForField(fields["starting_magnetization"]) for _ in (0,) if "starting_magnetization" in fields), None)
+        total_label = next((form.labelForField(fields["tot_magnetization"]) for _ in (0,) if "tot_magnetization" in fields), None)
+        def collinear_selected():
+            if "spin_treatment" in fields:
+                return control_value("spin_treatment", fields["spin_treatment"]) == "COLLINEAR_SPIN"
+            return bool(control_value("spin", fields["spin"])) if "spin" in fields else False
+        def update_magnetization_visibility(*_):
+            visible=collinear_selected()
+            for key,label_widget in (("starting_magnetization",magnet_label),("tot_magnetization",total_label)):
+                if key in fields:
+                    fields[key].setVisible(visible)
+                    if label_widget is not None: label_widget.setVisible(visible)
+        def update_occupation_visibility(*_):
+            occupation = control_value("occupations", fields["occupations"]).strip().lower() if "occupations" in fields else ""
+            visible = occupation == "smearing"
+            for key in ("smearing", "degauss"):
+                if key in fields:
+                    fields[key].setVisible(visible)
+                    label_widget = form.labelForField(fields[key])
+                    if label_widget is not None: label_widget.setVisible(visible)
+        if "spin_treatment" in fields: fields["spin_treatment"].currentTextChanged.connect(update_magnetization_visibility)
+        elif "spin" in fields: fields["spin"].toggled.connect(update_magnetization_visibility)
+        if "occupations" in fields: fields["occupations"].currentTextChanged.connect(update_occupation_visibility)
+        update_magnetization_visibility(); update_occupation_visibility()
+        form_container = QWidget(dialog); form_container.setLayout(form)
+        resolved=QTableWidget(dialog); resolved.setColumnCount(2); resolved.setHorizontalHeaderLabels(("Parameter", "Value")); resolved.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents); resolved.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch); resolved.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); resolved.setMaximumHeight(180)
+        scroll_content = QWidget(dialog); scroll_layout = QVBoxLayout(scroll_content); scroll_layout.setContentsMargins(0, 0, 0, 0); scroll_layout.addWidget(form_container); scroll_layout.addWidget(QLabel("Resolved parameters (read-only)")); scroll_layout.addWidget(resolved)
+        scroll = QScrollArea(dialog); scroll.setWidgetResizable(True); scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); scroll.setWidget(scroll_content); layout.addWidget(scroll, 1)
         def values_from_fields():
             values={}
+            occupation = control_value("occupations", fields["occupations"]).strip().lower() if "occupations" in fields else ""
             for key,field in fields.items():
-                values[key]=normalize_band_path(field.band_path) if key=="kpath" else control_value(key,field)
+                if key == "starting_magnetization" and not collinear_selected():
+                    continue
+                if key in {"smearing", "degauss"} and occupation != "smearing":
+                    continue
+                values[key]=normalize_band_path(field.band_path) if key in {"kpath", "phonon_path"} else control_value(key,field)
             return values
         def refresh():
             values=preset_parameters(self.selected_ids,preset.currentData(),values_from_fields()); values.update(scientific_state)
@@ -1264,8 +1361,8 @@ class CalculateWorkspace(QWidget):
                 resolved.setItem(row, 0, QTableWidgetItem(str(key)))
                 resolved.setItem(row, 1, QTableWidgetItem(json.dumps(value, sort_keys=True) if isinstance(value, (dict, list, tuple)) else str(value)))
         preset.currentIndexChanged.connect(refresh); refresh()
-        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel,dialog); buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject); layout.addWidget(buttons)
-        dialog.resize(720,620)
+        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel,dialog); buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject); layout.addWidget(buttons, 0)
+        CalculateWorkspace._fit_configuration_dialog(dialog, 720, 620)
         if dialog.exec()==QDialog.DialogCode.Accepted:
             values=values_from_fields(); values.update(scientific_state)
             if set(self.selected_ids) & {"bands", "dos", "pdos", "charge_density", "spin_density", "electron_localization", "electrostatic_potential", "work_function", "phonon_dos"}:
@@ -1282,6 +1379,104 @@ class CalculateWorkspace(QWidget):
                     self.workflow_status.setText("Status: Parameters updated — ready to compile")
                 except Exception as error:
                     QMessageBox.warning(self, "Save Calculation Parameters", str(error))
+
+
+    def _batch_root(self):
+        base = Path(self.project.file_path).parent if getattr(self.project, "file_path", None) else runtime_paths().workflows
+        return base / ".quantum_studio_workflows" / "batch"
+
+    def _fit_configuration_dialog(dialog, width=720, height=620):
+        parent = dialog.parentWidget()
+        screen = QGuiApplication.screenAt(parent.mapToGlobal(parent.rect().center())) if parent else QGuiApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else None
+        if available is None:
+            available = dialog.screen().availableGeometry() if dialog.screen() else None
+        if available is None:
+            dialog.resize(width, height)
+            return
+        max_height = max(240, int(available.height() * 0.78))
+        max_width = max(520, int(available.width() * 0.82))
+        initial_width = min(width, max_width)
+        initial_height = min(height, max_height)
+        dialog.setMinimumSize(min(initial_width, max_width), min(240, max_height))
+        dialog.resize(initial_width, initial_height)
+        frame = dialog.frameGeometry()
+        frame.moveCenter(available.center())
+        if frame.left() < available.left(): frame.moveLeft(available.left())
+        if frame.top() < available.top(): frame.moveTop(available.top())
+        if frame.right() > available.right(): frame.moveRight(available.right())
+        if frame.bottom() > available.bottom(): frame.moveBottom(available.bottom())
+        dialog.move(frame.topLeft())
+
+    def _configure_batch_parameters(self, request_ids):
+        """Edit selected requests one at a time without sharing dictionaries."""
+        requests = [self.project.get_calculation(item) for item in request_ids]
+        requests = [item for item in requests if item is not None]
+        if not requests:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Batch Configuration ({len(requests)} calculations)")
+        layout = QVBoxLayout(dialog)
+        heading = QLabel(dialog)
+        layout.addWidget(heading)
+        stack = QStackedWidget(dialog)
+        pages = []
+        for request in requests:
+            page = QWidget(stack)
+            form = QFormLayout(page)
+            fields = {}
+            for item in descriptors(request.selected_calculations):
+                key = item["key"]
+                field = make_control(key, request.parameters.get(key, item["default"]), page, structure=request.structure)
+                fields[key] = field
+                form.addRow(item["label"] + (f" ({item['unit']})" if item["unit"] else ""), field)
+                if key in {"starting_magnetization", "tot_magnetization"}:
+                    method = request.parameters.get("spin_treatment", "COLLINEAR_SPIN" if request.parameters.get("spin") else "SCALAR_NONSPIN")
+                    visible = method == "COLLINEAR_SPIN"
+                    field.setVisible(visible)
+                    label_widget = form.labelForField(field)
+                    if label_widget is not None: label_widget.setVisible(visible)
+            stack.addWidget(page)
+            pages.append((request, fields))
+        layout.addWidget(stack, 1)
+        navigation = QHBoxLayout()
+        back = QPushButton("Back", dialog); next_button = QPushButton("Next", dialog)
+        cancel = QPushButton("Cancel", dialog); apply_button = QPushButton("Apply", dialog)
+        for button in (back, next_button): navigation.addWidget(button)
+        navigation.addStretch(); navigation.addWidget(cancel); navigation.addWidget(apply_button)
+        layout.addLayout(navigation)
+
+        def save_page(index):
+            request, fields = pages[index]
+            values = dict(request.parameters)
+            values.update({key: control_value(key, field) for key, field in fields.items()})
+            method = values.get("spin_treatment", "COLLINEAR_SPIN" if values.get("spin") else "SCALAR_NONSPIN")
+            if method != "COLLINEAR_SPIN": values.pop("starting_magnetization", None)
+            pages[index] = (request, fields)
+            return request, values
+
+        staged = {}
+        def stage_page(index):
+            request, values = save_page(index); staged[request.id] = values
+
+        def refresh_navigation():
+            index = stack.currentIndex()
+            heading.setText(f"Calculation {index + 1} of {len(pages)}: {pages[index][0].name or pages[index][0].calculation_id}")
+            back.setEnabled(index > 0); next_button.setVisible(index < len(pages) - 1); apply_button.setVisible(index == len(pages) - 1)
+
+        def previous():
+            stage_page(stack.currentIndex()); stack.setCurrentIndex(stack.currentIndex() - 1); refresh_navigation()
+        def following():
+            stage_page(stack.currentIndex()); stack.setCurrentIndex(stack.currentIndex() + 1); refresh_navigation()
+        back.clicked.connect(previous); next_button.clicked.connect(following); cancel.clicked.connect(dialog.reject); apply_button.clicked.connect(dialog.accept)
+        refresh_navigation(); CalculateWorkspace._fit_configuration_dialog(dialog, 680, 620)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        stage_page(stack.currentIndex())
+        for request, _fields in pages:
+            values = staged.get(request.id, dict(request.parameters))
+            self.project.update_calculation(self.calculation_service.update_request_parameters(request, values, name=request.name))
+        self._refresh_configured_calculations(request_ids[0])
 
     def _save_selected_request(self):
         request = self.project.get_calculation(self._selected_configured_request_id())
@@ -1464,7 +1659,10 @@ class CalculateWorkspace(QWidget):
             detail = "; ".join(str(error) for error in errors)
             prefix = "DOS calculation completed, but Quantum Studio could not parse the DOS result: " if any(str(error).startswith("qe_dos:") for error in errors) else "PDOS calculation completed, but Quantum Studio could not parse the PDOS result: " if any(str(error).startswith("qe_projwfc:") for error in errors) else "Calculation completed, but Quantum Studio could not parse one or more results: "
             self.workflow_status.setText("Status: " + prefix + detail)
-            self.execution_preview.appendPlainText("\nResult parsing failed: " + detail)
+            if hasattr(self.execution_preview, "appendPlainText"):
+                self.execution_preview.appendPlainText("\nResult parsing failed: " + detail)
+            else:
+                self.execution_preview.setText(self.execution_preview.text() + "\nResult parsing failed: " + detail)
         else:
             self.workflow_status.setText("Status: Results ready")
         self._update_compile_availability()
@@ -1472,8 +1670,8 @@ class CalculateWorkspace(QWidget):
     def _generated_root(self):
         existing = self.project.execution_roots().get(str(self.calculation_request.id)) if hasattr(self.project, "execution_roots") and self.calculation_request else None
         if existing: return existing
-        base = Path(self.project.file_path).parent if getattr(self.project, "file_path", None) else Path.cwd()
-        return str(base / ".quantum_studio_workflows" / str(self.calculation_request.id))
+        base = Path(self.project.file_path).parent if getattr(self.project, "file_path", None) else runtime_paths().workflows
+        return str(base / ".quantum_studio_workflows")
 
     def _preview_qe_inputs(self):
         root = getattr(self, "_generated_root_path", None)
@@ -1507,7 +1705,7 @@ class CalculateWorkspace(QWidget):
             return
         self._preparation_for_run=bool(for_run)
         self._set_preparation_active(True)
-        worker=CalculationPreparationWorker(self.calculation_service,self.calculation_request,self._generated_root(),self._pseudo_provisioner,self,repair_workflow_root=repair_workflow_root)
+        worker=CalculationPreparationWorker(self.calculation_service,self.calculation_request,self._generated_root(),self._pseudo_provisioner,self,repair_workflow_root=repair_workflow_root,execution_profile=getattr(self.local_tool_configuration,"qe_execution_profile","STANDARD"))
         self._preparation_worker=worker
         worker.progress.connect(self._preparation_progress)
         worker.finished.connect(self._preparation_completed)
@@ -1563,6 +1761,19 @@ class CalculateWorkspace(QWidget):
         QMessageBox.warning(self,"Calculation Preparation",str(message))
 
     def _generate_qe_inputs(self, _checked=False):
+        request_ids = self._selected_configured_request_ids()
+        if len(request_ids) > 1:
+            try:
+                requests = [item for item in (self.project.get_calculation(item) for item in request_ids) if item is not None]
+                self.batch_execution_plans = self.calculation_service.compile_batch_requests(requests)
+                self._batch_generated_roots = self.calculation_service.generate_batch_inputs(requests, self._batch_root())
+                self._request_status.update({item.id: "READY" for item in requests})
+                self.workflow_status.setText(f"Status: {len(request_ids)} workflows ready")
+                self.execution_preview.setText("Batch inputs generated in separate workflow directories; each request remains independent.")
+            except Exception as error:
+                self.workflow_status.setText("Status: Batch preparation failed")
+                QMessageBox.warning(self, "Generate QE Inputs", str(error))
+            return
         self._start_preparation(False)
 
     # ============================================================
@@ -1603,7 +1814,7 @@ class CalculateWorkspace(QWidget):
         worker.start()
 
     def _qe_discovery_progress(self, message):
-        if self._workflow_generated: self.workflow_status.setText("Status: QE inputs ready — "+str(message))
+        if self._workflow_generated and self._active_execution is None and self._preparation_worker is None: self.workflow_status.setText("Status: QE inputs ready — "+str(message))
 
     def _qe_discovery_completed(self):
         worker=self._qe_discovery_worker
@@ -1615,13 +1826,15 @@ class CalculateWorkspace(QWidget):
             LOGGER.debug("QE discovery failed:\n%s",error[1])
         installation=result.preferred if result is not None else None
         if installation is None:
-            if self._workflow_generated: self.workflow_status.setText("Status: QE inputs ready — Quantum ESPRESSO not found")
-            if resume: QMessageBox.warning(self,"Quantum ESPRESSO", "Quantum ESPRESSO could not be found automatically.\n\nChoose an installation folder or install Quantum ESPRESSO and try again.")
+            if self._workflow_generated:
+                self.workflow_status.setText("Status: Failed — Quantum ESPRESSO executable not found")
+            if resume:
+                QMessageBox.warning(self,"Quantum ESPRESSO", "Quantum ESPRESSO could not be found automatically.\n\nChoose an installation folder or install Quantum ESPRESSO and try again.")
             return
         self.local_tool_configuration.apply_quantum_espresso(installation)
         try: self.local_tool_configuration.save_machine_configuration()
         except OSError as save_error: LOGGER.debug("Could not persist local QE configuration: %s",save_error)
-        if self._workflow_generated: self.workflow_status.setText(f"Status: QE inputs ready — Quantum ESPRESSO {installation.version} detected")
+        if self._workflow_generated and self._active_execution is None and self._preparation_worker is None: self.workflow_status.setText(f"Status: QE inputs ready — Quantum ESPRESSO {installation.version} detected")
         if resume: self._start_prepared_execution()
 
     def _choose_qe_installation_folder(self):
@@ -1665,6 +1878,24 @@ class CalculateWorkspace(QWidget):
             if self.local_tool_configuration.qe_bin_directory: self._start_qe_discovery()
 
     def _execute_requested(self, _checked=False):
+        request_ids = self._selected_configured_request_ids()
+        if not request_ids:
+            self.workflow_status.setText("Status: Select a configured calculation to run")
+            QMessageBox.warning(self, "Run", "Select a configured calculation first.")
+            return
+        if len(request_ids) > 1 and self._active_execution is None:
+            try:
+                requests = [item for item in (self.project.get_calculation(item) for item in request_ids) if item is not None]
+                self.batch_execution_plans = self.calculation_service.compile_batch_requests(requests)
+                self._batch_requests = tuple(requests)
+                self._request_status.update({item.id: "READY" for item in requests})
+                self.workflow_status.setText(f"Status: Run Selected ({len(request_ids)}) compiled")
+                self.execution_preview.setText("Selected public workflows compiled with compatible prerequisites shared by the existing DAG compiler.")
+                self._start_batch_execution(requests)
+            except Exception as error:
+                self.workflow_status.setText("Status: Batch compilation failed")
+                QMessageBox.warning(self, "Run Selected", str(error))
+            return
         if self._active_execution is not None and not self._active_execution.done.is_set():
             self._active_execution.cancel()
             self.execution_preview.setText("Cancelling the active local task; dependent tasks will be blocked.")
@@ -1679,6 +1910,49 @@ class CalculateWorkspace(QWidget):
             self._start_preparation(True)
             return
         self._start_prepared_execution()
+
+    def _start_batch_execution(self, requests):
+        try:
+            bundles = self.calculation_service.generate_batch_workflows(requests, self._batch_root())
+            queue = []
+            manager = LocalExecutionManager(self.local_tool_configuration)
+            for prepared, root, request_ids in bundles:
+                workflow = self.calculation_service.execution_workflow(prepared, root)
+                errors = manager.preflight(workflow)
+                if errors:
+                    raise RuntimeError(f"Batch workflow preflight failed for {', '.join(request_ids)}:\n" + "\n".join(errors))
+                queue.append((prepared, workflow, root, request_ids))
+            if not queue:
+                raise RuntimeError("Workflow contains no executable tasks.")
+            if QMessageBox.question(self, "Run Selected", f"Preflight passed for {len(requests)} selected calculations. Run the batch?") != QMessageBox.StandardButton.Yes:
+                return
+            self._batch_queue = queue
+            self._batch_current = None
+            self._batch_failed = False
+            self._run_next_batch_workflow()
+        except Exception as error:
+            self.workflow_status.setText("Status: Batch execution failed")
+            QMessageBox.warning(self, "Run Selected", str(error))
+
+    def _run_next_batch_workflow(self):
+        if not getattr(self, "_batch_queue", None):
+            self.execute_button.setText("Run")
+            self._active_execution = None
+            if getattr(self, "_batch_failed", False):
+                self.workflow_status.setText("Status: One or more selected calculations failed")
+            else:
+                self.workflow_status.setText("Status: Selected calculations completed")
+            return
+        prepared, workflow, root, request_ids = self._batch_queue.pop(0)
+        self._batch_current = (prepared, workflow, root, request_ids)
+        self._request_status.update({request_id: "RUNNING" for request_id in request_ids})
+        store = ExecutionStore(root)
+        record = store.create(workflow)
+        self._local_execution_service = LocalExecutionService(LocalExecutionManager(self.local_tool_configuration))
+        self._active_execution = self._local_execution_service.start(workflow, record=record, store=store)
+        self.execute_button.setText("Cancel")
+        self.workflow_status.setText(f"Status: Running selected batch ({len(request_ids)} grouped request(s))")
+        QTimer.singleShot(100, self._poll_local_execution)
 
     def _start_prepared_execution(self):
         root = self._generated_root_path or self._generated_root()
@@ -1697,7 +1971,9 @@ class CalculateWorkspace(QWidget):
                     self.workflow_status.setText("Status: QE inputs ready — searching for Quantum ESPRESSO…")
                     self._start_qe_discovery(resume_run=True)
                     return
-                QMessageBox.warning(self,"Local Execution Preflight","Cannot run this workflow:\n\n"+"\n".join(errors))
+                detail = "Cannot run this workflow:\n\n" + "\n".join(errors)
+                self.workflow_status.setText("Status: Failed — " + errors[0])
+                QMessageBox.warning(self,"Local Execution Preflight", detail)
                 return
             if QMessageBox.question(self, "Run Local Workflow", "Preflight passed. Run the generated workflow serially using configured tools/PATH?") != QMessageBox.StandardButton.Yes:
                 return
@@ -1717,7 +1993,8 @@ class CalculateWorkspace(QWidget):
             self.execution_preview.setText("Local execution started. Generated inputs are locked for this run.")
             QTimer.singleShot(100, self._poll_local_execution)
         except Exception as error:
-            QMessageBox.warning(self, "Local Execution", str(error))
+            self.workflow_status.setText("Status: Failed — " + str(error).splitlines()[0])
+            QMessageBox.warning(self, "Local Execution Failed", str(error))
 
     def _poll_local_execution(self):
         handle = self._active_execution
@@ -1726,14 +2003,35 @@ class CalculateWorkspace(QWidget):
         if not handle.done.is_set():
             QTimer.singleShot(150, self._poll_local_execution)
             return
+        if getattr(self, "_batch_current", None) is not None:
+            _prepared, _workflow, _root, request_ids = self._batch_current
+            state = "FAILED" if handle.error is not None or handle.result is None or handle.result.state.value != "COMPLETED" else "COMPLETED"
+            self._request_status.update({request_id: state for request_id in request_ids})
+            self._active_execution = None
+            self._batch_current = None
+            if state == "FAILED":
+                self._batch_failed = True
+                self._request_status.update({request_id: "FAILED" for request_id in request_ids})
+                detail = str(handle.error) if handle.error is not None else next((task.error_message for task in handle.result.tasks.values() if task.error_message), "Workflow execution failed.") if handle.result is not None else "Workflow execution failed."
+                self.workflow_status.setText("Status: Failed — " + detail.splitlines()[0])
+            self._run_next_batch_workflow()
+            return
         self.execute_button.setText("Run")
-        self.workflow_status.setText("Status: Execution finished")
         self._active_execution = None
         if handle.error is not None:
-            QMessageBox.warning(self, "Local Execution", str(handle.error))
+            detail = str(handle.error)
+            self.workflow_status.setText("Status: Failed — " + detail.splitlines()[0])
+            self.execution_preview.setText("Local execution failed:\n" + detail)
+            QMessageBox.warning(self, "Local Execution Failed", detail)
             return
         result = handle.result
-        lines = ["Local execution finished: " + result.state.value]
+        if result is None:
+            detail = "Execution returned no result."
+            self.workflow_status.setText("Status: Failed — " + detail)
+            self.execution_preview.setText(detail)
+            QMessageBox.warning(self, "Local Execution Failed", detail)
+            return
+        lines = ["Local execution result: " + result.state.value]
         for task in result.tasks.values():
             line = f"{task.task_id}: {task.state.value}"
             if task.return_code is not None:
@@ -1753,3 +2051,8 @@ class CalculateWorkspace(QWidget):
             self._result_parsing_worker = worker
             worker.finished_result.connect(self._result_parsing_completed)
             worker.start()
+        else:
+            detail = next((task.error_message for task in result.tasks.values() if task.error_message), None)
+            detail = detail or f"Workflow ended in state {result.state.value}."
+            self.workflow_status.setText("Status: Failed — " + detail.splitlines()[0])
+            QMessageBox.warning(self, "Local Execution Failed", detail)

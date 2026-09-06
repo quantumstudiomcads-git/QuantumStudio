@@ -31,6 +31,7 @@ class CalculationInfo:
     tags: tuple[str, ...] = ()
 
     status: str = "planned"
+    executable_while_partial: bool = False
 
 
 CALCULATIONS: list[CalculationInfo] = []
@@ -44,6 +45,7 @@ def register(
     description: str,
     tags: Iterable[str] = (),
     status: str = "planned",
+    executable_while_partial: bool = False,
 ) -> None:
 
     CALCULATIONS.append(
@@ -55,6 +57,7 @@ def register(
             description=description,
             tags=tuple(tags),
             status=status,
+            executable_while_partial=bool(executable_while_partial),
         )
     )
 
@@ -80,7 +83,7 @@ register(
     "Quantum ESPRESSO",
     "Optimize atomic positions.",
     ["structure", "optimization", "qe"],
-    "ready",
+    "partial",
 )
 
 register(
@@ -414,11 +417,11 @@ register(
 
 register(
     "phonons",
-    "Phonon Dispersion",
+    "Γ-Point Phonons",
     "Vibrational Properties",
     "Quantum ESPRESSO",
-    "Calculate phonon frequencies and dispersion.",
-    ["phonons", "vibrational", "qe"],
+    "Calculate Γ-point DFPT phonon frequencies and eigenmodes.",
+    ["phonons", "vibrational", "qe", "gamma"],
     "ready",
 )
 
@@ -448,6 +451,7 @@ register(
     "Quantum ESPRESSO",
     "Calculate Raman-active vibrational modes.",
     ["raman", "spectroscopy"],
+    "ready",
 )
 
 register(
@@ -457,6 +461,7 @@ register(
     "Quantum ESPRESSO",
     "Calculate infrared-active vibrational modes.",
     ["infrared", "spectroscopy"],
+    "ready",
 )
 
 register(
@@ -466,6 +471,7 @@ register(
     "Quantum ESPRESSO",
     "Calculate longitudinal-transverse optical phonon splitting.",
     ["phonons", "polar"],
+    "ready",
 )
 
 register(
@@ -475,6 +481,7 @@ register(
     "Quantum ESPRESSO",
     "Calculate Born effective charge tensors.",
     ["bec", "dielectric"],
+    "ready",
 )
 
 register(
@@ -484,6 +491,7 @@ register(
     "Quantum ESPRESSO",
     "Calculate dielectric response from lattice vibrations.",
     ["phonons", "dielectric"],
+    "ready",
 )
 
 register(
@@ -493,7 +501,7 @@ register(
     "EPW",
     "Calculate coupling between electrons and phonons.",
     ["electron_phonon", "epw"],
-    "ready",
+    "partial",
 )
 
 register(
@@ -557,12 +565,13 @@ register(
 
 register(
     "dielectric",
-    "Dielectric Function",
+    "Complex Dielectric Function",
     "Optical Properties",
     "Quantum ESPRESSO",
     "Calculate frequency-dependent dielectric response.",
     ["optical", "dielectric"],
-    "ready",
+    "partial",
+    True,
 )
 
 register(
@@ -572,7 +581,8 @@ register(
     "Quantum ESPRESSO",
     "Calculate optical absorption spectrum.",
     ["optical", "absorption"],
-    "ready",
+    "partial",
+    True,
 )
 
 register(
@@ -582,6 +592,8 @@ register(
     "Quantum ESPRESSO",
     "Calculate optical reflectivity.",
     ["optical"],
+    "partial",
+    True,
 )
 
 register(
@@ -591,6 +603,8 @@ register(
     "Post-processing",
     "Calculate refractive index and extinction coefficient.",
     ["optical"],
+    "partial",
+    True,
 )
 
 register(
@@ -600,6 +614,8 @@ register(
     "Quantum ESPRESSO",
     "Calculate frequency-dependent optical conductivity.",
     ["optical", "conductivity"],
+    "partial",
+    True,
 )
 
 register(
@@ -609,6 +625,8 @@ register(
     "Quantum ESPRESSO",
     "Calculate electron energy loss spectrum.",
     ["eels", "optical"],
+    "partial",
+    True,
 )
 
 register(
@@ -845,15 +863,15 @@ register(
     "BoltzTraP2",
     "Interpolate electronic bands for transport calculations.",
     ["boltztrap", "bands"],
-    "ready",
+    "partial",
 )
 
 register(
     "electrical_conductivity",
-    "Electrical Conductivity",
+    "Electrical Conductivity / Relaxation Time (σ/τ)",
     "Boltzmann Transport",
     "BoltzTraP2",
-    "Calculate temperature-dependent electrical conductivity.",
+    "Calculate electrical conductivity divided by relaxation time (σ/τ) for validated 3D scalar BoltzTraP2 transport.",
     ["transport", "boltztrap"],
     "ready",
 )
@@ -863,17 +881,17 @@ register(
     "Seebeck Coefficient",
     "Boltzmann Transport",
     "BoltzTraP2",
-    "Calculate thermoelectric Seebeck coefficient.",
+    "Calculate thermoelectric Seebeck coefficient for validated 3D scalar BoltzTraP2 transport.",
     ["thermoelectric"],
     "ready",
 )
 
 register(
     "thermal_conductivity_electronic",
-    "Electronic Thermal Conductivity",
+    "Electronic Thermal Conductivity / Relaxation Time (κe/τ)",
     "Boltzmann Transport",
     "BoltzTraP2",
-    "Calculate electronic contribution to thermal conductivity.",
+    "Calculate electronic thermal conductivity divided by relaxation time (κe/τ) for validated 3D scalar BoltzTraP2 transport.",
     ["thermal", "transport"],
     "ready",
 )
@@ -885,7 +903,7 @@ register(
     "BoltzTraP2",
     "Calculate thermoelectric power factor.",
     ["thermoelectric"],
-    "ready",
+    "partial",
 )
 
 register(
@@ -902,7 +920,7 @@ register(
     "Carrier Concentration",
     "Boltzmann Transport",
     "BoltzTraP2",
-    "Calculate carrier concentration versus temperature.",
+    "Calculate signed carrier concentration versus chemical potential for validated 3D scalar BoltzTraP2 transport.",
     ["transport"],
     "ready",
 )

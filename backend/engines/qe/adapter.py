@@ -24,13 +24,14 @@ from backend.engines.qe.models import (
     UnsupportedQECalculationError,
 )
 from backend.engines.qe.materialization import materialize_workflow_pseudopotentials
-from backend.engines.qe.writer import method_metadata, phonon_input, pw_input
+from backend.engines.qe.writer import method_metadata, phonon_input, polar_phonon_input, raman_phonon_input, pw_input
 from backend.engines.qe.postprocessing import post_input, pw_bands_input
+from backend.engines.qe.optical import OpticalSettings, epsilon_input
 from backend.pseudopotentials import PseudoSet, Relativity, inspect_upf, validate_pseudo_set
 
 
 ENGINE_ID = "quantum_espresso"
-SUPPORTED_CALCULATIONS = frozenset({"scf", "relax", "vc_relax", "phonons", "qe_pw_bands", "qe_pw_nscf", "qe_pw_nscf_fermi_surface", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_pp_band_decomposed", "qe_ph", "qe_q2r", "qe_matdyn", "qe_fs", "qe_hp", "qe_bader", "qe_pp_bader", "qe_lowdin", "qe_orbital", "qe_matdyn_dos", "qe_pw_nscf_dos", "qe_pw_nscf_pdos", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_q2r", "qe_ph", "qe_pw_bands"})
+SUPPORTED_CALCULATIONS = frozenset({"scf", "relax", "vc_relax", "phonons", "qe_polar_gamma", "qe_pw_bands", "qe_pw_nscf", "qe_pw_nscf_fermi_surface", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_pp_band_decomposed", "qe_ph", "qe_q2r", "qe_matdyn", "qe_epsilon", "qe_fs", "qe_hp", "qe_bader", "qe_pp_bader", "qe_lowdin", "qe_orbital", "qe_matdyn_dos", "qe_matdyn_dispersion", "qe_dynmat_lo_to", "qe_dynmat_infrared", "qe_dynmat_infrared_1", "qe_dynmat_lo_to_1", "qe_dynmat_lo_to_2", "qe_dynmat_lo_to_3", "qe_dynmat_analytic_reference", "qe_dynmat_phonon_dielectric", "qe_dynmat_raman", "qe_raman", "raman", "qe_pw_nscf_dos", "qe_pw_nscf_pdos", "qe_bands", "qe_dos", "qe_projwfc", "qe_pp", "qe_q2r", "qe_ph", "qe_pw_bands"})
 DEFERRED_CALCULATIONS = {
     "bands": "C3 has no reliable explicit band-path model; C4 will not guess a path.",
     "dos": "C3 lacks an explicit NSCF -> dos.x workflow stage required for scientifically sound DOS input.",
@@ -59,6 +60,40 @@ def structure_fingerprint(structure: Mapping[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def hamiltonian_fingerprint(structure: Mapping[str, object], parameters: Mapping[str, object], pseudopotentials: Mapping[str, object] | None = None) -> str:
+    """Hash scientific SCF inputs only; workflow IDs and filesystem paths are excluded."""
+    values = dict(parameters or {})
+    pseudo_values = pseudopotentials if pseudopotentials is not None else values.get("pseudopotentials", {})
+    pseudo_identity = {}
+    for element, item in sorted((pseudo_values or {}).items()):
+        if isinstance(item, Mapping):
+            pseudo_identity[str(element)] = {
+                "sha256": str(item.get("sha256", "")),
+                "element": str(item.get("element", element)),
+            }
+        else:
+            pseudo_identity[str(element)] = {"sha256": str(getattr(item, "sha256", "")), "element": str(element)}
+    scientific = {
+        "structure": {"atoms": structure.get("atoms", []), "cell": structure.get("cell", []), "periodic": structure.get("periodic", [])},
+        "pseudopotentials": pseudo_identity,
+        "functional": str(values.get("input_dft", values.get("xc_functional", values.get("functional", "PBE")))).lower(),
+        "ecutwfc": values.get("ecutwfc"),
+        "ecutrho": values.get("ecutrho"),
+        "occupations": str(values.get("occupations", "fixed")).lower(),
+        "smearing": str(values.get("smearing", "")).lower(),
+        "degauss": values.get("degauss"),
+        "spin_treatment": str(values.get("spin_treatment", "SCALAR_NONSPIN")).upper(),
+        "spin": bool(values.get("spin", False)),
+        "soc": bool(values.get("soc", False)),
+        "noncolin": bool(values.get("noncolin", False)),
+        "lspinorb": bool(values.get("lspinorb", False)),
+        "tot_charge": values.get("tot_charge", 0.0),
+        "scf_mesh": values.get("scf_mesh", values.get("kpoints")),
+    }
+    encoded = json.dumps(scientific, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 class QuantumEspressoAdapter(EngineAdapter):
     """Derive validated QE input files from a C3 ExecutionPlan.
 
@@ -76,7 +111,7 @@ class QuantumEspressoAdapter(EngineAdapter):
 
     @classmethod
     def support_reason(cls, calculation_id: str) -> str | None:
-        if calculation_id in SUPPORTED_CALCULATIONS:
+        if calculation_id in SUPPORTED_CALCULATIONS or str(calculation_id).startswith(("qe_dynmat_phonon_dielectric", "qe_pw_nscf")):
             return None
         return DEFERRED_CALCULATIONS.get(calculation_id, "No C4 Quantum ESPRESSO writer is defined for this calculation.")
 
@@ -86,7 +121,11 @@ class QuantumEspressoAdapter(EngineAdapter):
 
     def _context_for(self, plan) -> QEWorkflowContext:
         request_token = _safe_identifier(plan.calculation_id, "request")
-        prefix = f"qs_{request_token[:16]}"
+        runtime_metadata = plan.metadata.get("request_metadata", {}) if isinstance(getattr(plan, "metadata", None), Mapping) else {}
+        override = runtime_metadata.get("qe_prefix_override") if isinstance(runtime_metadata, Mapping) else None
+        prefix = _safe_identifier(override, "") if isinstance(override, str) and override.strip() else f"qs_{request_token[:16]}"
+        if not prefix:
+            raise InvalidQEParameterError("QE runtime prefix override is invalid.")
         return QEWorkflowContext(
             request_id=plan.calculation_id,
             prefix=prefix,
@@ -164,7 +203,7 @@ class QuantumEspressoAdapter(EngineAdapter):
         pseudos = self._pseudopotentials_for(plan.structure, plan)
         self._validate_pseudo_compatibility(plan, pseudos)
 
-    def compile_plan(self, plan) -> QEGeneration:
+    def compile_plan(self, plan, *, execution_profile="STANDARD") -> QEGeneration:
         self.validate_plan(plan)
         context = self._context_for(plan)
         pseudos = self._pseudopotentials_for(plan.structure, plan)
@@ -177,6 +216,19 @@ class QuantumEspressoAdapter(EngineAdapter):
                 pseudo_dir=Path(os.path.relpath("pseudos", start=directory)).as_posix(),
             )
             parameters = dict(task.parameters)
+            if execution_profile != "STANDARD":
+                parameters["execution_profile"] = execution_profile
+            if task.semantic_task_type == "qe_q2r":
+                dependency = next((candidate for candidate in plan.tasks if candidate.id in task.depends_on_task_ids), None)
+                parameters["fildyn"] = f"../{plan.tasks.index(dependency)+1:03d}_{_safe_identifier(dependency.calculation_id, "task")}/{context.prefix}.dyn"
+            if task.semantic_task_type == "qe_matdyn":
+                dependency = next((candidate for candidate in plan.tasks if candidate.id in task.depends_on_task_ids), None)
+                parameters["flfrc"] = f"../{plan.tasks.index(dependency)+1:03d}_{_safe_identifier(dependency.calculation_id, "task")}/force_constants"
+            if task.semantic_task_type == "qe_dynmat":
+                dependency = next((candidate for candidate in plan.tasks if candidate.id in task.depends_on_task_ids), None)
+                if dependency is None:
+                    raise InvalidQEParameterError("dynmat polar task requires the polar Gamma artifact producer.")
+                parameters["fildyn"] = f"../{plan.tasks.index(dependency)+1:03d}_{_safe_identifier(dependency.calculation_id, 'task')}/{'raman.dyn' if dependency.calculation_id == 'raman' else 'polar_gamma'}"
             if task.calculation_id in {"scf", "relax", "vc_relax"}:
                 input_text = pw_input(task.calculation_id, parameters, plan.structure, task_context, pseudos)
                 executable, input_filename = "pw.x", f"{task.calculation_id}.in"
@@ -184,12 +236,18 @@ class QuantumEspressoAdapter(EngineAdapter):
                 input_text, executable, input_filename = pw_bands_input(parameters, plan.structure, task_context, pseudos), "pw.x", "bands_pw.in"
             elif task.semantic_task_type.startswith("qe_pw_nscf"):
                 input_text, executable, input_filename = pw_input("qe_pw_nscf", parameters, plan.structure, task_context, pseudos), "pw.x", "nscf.in"
-            elif task.semantic_task_type in {"qe_bands","qe_dos","qe_projwfc","qe_pp","qe_q2r","qe_matdyn","qe_fs","qe_hp","qe_lowdin"}:
-                input_text, executable, input_filename = post_input(task.semantic_task_type, parameters, task_context), {"qe_bands":"bands.x","qe_dos":"dos.x","qe_projwfc":"projwfc.x","qe_pp":"pp.x","qe_q2r":"q2r.x","qe_matdyn":"matdyn.x","qe_fs":"fs.x","qe_hp":"hp.x","qe_lowdin":"projwfc.x"}[task.semantic_task_type], task.semantic_task_type.removeprefix("qe_") + ".in"
+            elif task.semantic_task_type == "qe_epsilon":
+                input_text, executable, input_filename = epsilon_input(OpticalSettings.from_parameters(parameters), task_context), "epsilon.x", "epsilon.in"
+            elif task.semantic_task_type in {"qe_bands","qe_dos","qe_projwfc","qe_pp","qe_q2r","qe_matdyn","qe_dynmat","qe_fs","qe_hp","qe_lowdin"}:
+                input_text, executable, input_filename = post_input(task.semantic_task_type, parameters, task_context), {"qe_bands":"bands.x","qe_dos":"dos.x","qe_projwfc":"projwfc.x","qe_pp":"pp.x","qe_q2r":"q2r.x","qe_matdyn":"matdyn.x","qe_dynmat":"dynmat.x","qe_fs":"fs.x","qe_hp":"hp.x","qe_lowdin":"projwfc.x"}[task.semantic_task_type], task.semantic_task_type.removeprefix("qe_") + ".in"
             elif task.semantic_task_type == "qe_bader":
                 input_text, executable, input_filename = "", "bader", "bader.args"
             elif task.semantic_task_type == "qe_ph":
                 input_text, executable, input_filename = phonon_input(parameters, task_context), "ph.x", "phonons.in"
+            elif task.semantic_task_type == "qe_polar_gamma":
+                input_text, executable, input_filename = polar_phonon_input(parameters, task_context), "ph.x", "polar_phonons.in"
+            elif task.calculation_id == "raman" or task.semantic_task_type == "qe_raman":
+                input_text, executable, input_filename = raman_phonon_input(parameters, task_context), "ph.x", "raman.in"
             elif task.calculation_id == "phonons":
                 input_text = phonon_input(parameters, task_context)
                 executable, input_filename = "ph.x", "phonons.in"
@@ -200,7 +258,7 @@ class QuantumEspressoAdapter(EngineAdapter):
                 input_filename=input_filename, output_filename=input_filename.removesuffix(".in") + ".out",
                 working_directory=directory, input_text=input_text,
                 depends_on_task_ids=tuple(task.depends_on_task_ids),
-                metadata={"engine_id":task.engine_id,"semantic_task_type":task.semantic_task_type, **({"command":["bader", "../%03d_qe_pp_bader/bader_charge.cube" % (index-1)]} if task.semantic_task_type == "qe_bader" else {}),"parameter_signature":task.parameter_signature,"artifact_inputs":list(task.artifact_inputs),"artifact_outputs":list(task.artifact_outputs),"qe_prefix": task_context.prefix, "qe_outdir": task_context.outdir, "qe_pseudo_dir": task_context.pseudo_dir, "structure_fingerprint": structure_fingerprint(plan.structure), "pseudopotentials": pseudo_provenance, "task_metadata": task.metadata, "electronic_method": method_metadata({**plan.parameters, **parameters})},
+                metadata={"engine_id":task.engine_id,"semantic_task_type":task.semantic_task_type, **({"command":["bader", "../%03d_qe_pp_bader/bader_charge.cube" % (index-1)]} if task.semantic_task_type == "qe_bader" else {}),"parameter_signature":task.parameter_signature,"artifact_inputs":list(task.artifact_inputs),"artifact_outputs":list(task.artifact_outputs),"artifact_declarations":[{**dict(item), "relative_path":str(dict(item).get("relative_path", "")).replace("{qe_prefix}", task_context.prefix)} for item in task.metadata.get("artifact_declarations", ())],"qe_prefix": task_context.prefix, "qe_outdir": task_context.outdir, "qe_pseudo_dir": task_context.pseudo_dir, "structure_fingerprint": structure_fingerprint(plan.structure), "pseudopotentials": pseudo_provenance, "task_metadata": task.metadata, "electronic_method": method_metadata({**plan.parameters, **parameters})},
             ))
         manifest = {
             "engine_id": self.engine_id,
@@ -269,7 +327,7 @@ class QuantumEspressoAdapter(EngineAdapter):
                 temporary.unlink()
         return root
 
-    def write_plan(self, plan, output_root, *, overwrite: bool = False) -> Path:
+    def write_plan(self, plan, output_root, *, overwrite: bool = False, execution_profile="STANDARD") -> Path:
         """Write an all-or-nothing derived export; existing request exports are refused.
 
         ``overwrite`` is deliberately rejected in C4: ownership-safe replacement
@@ -277,7 +335,7 @@ class QuantumEspressoAdapter(EngineAdapter):
         """
         if overwrite:
             raise QEOutputExistsError("C4 does not overwrite existing QE input exports; choose a new output root.")
-        generation = self.compile_plan(plan)
+        generation = self.compile_plan(plan, execution_profile=execution_profile)
         root = Path(output_root).expanduser()
         if root.exists() and not root.is_dir():
             raise QEInputGenerationError(f"QE output root is not a directory: {root}")

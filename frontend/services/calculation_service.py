@@ -13,6 +13,7 @@ import numpy as np
 from ase.data import atomic_numbers
 
 from backend.compiler.request_compiler import RequestCompiler
+from backend.engines.qe.writer import electronic_method
 from backend.core.calculation_request import CalculationRequest
 from frontend.core import Structure
 from frontend.calculations.reconciliation import (
@@ -23,7 +24,50 @@ from frontend.calculations.reconciliation import (
 )
 
 
-_PERIODIC_WORKFLOWS = frozenset({"bands", "dos", "pdos", "nscf", "phonons", "phonon_dos", "boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration"})
+def normalize_spin_parameters(parameters):
+    """Remove spin-only fields that are incompatible with the canonical mode."""
+    values=dict(parameters or {})
+    raw=str(values.get("spin_treatment", "")).strip().upper().replace(" ", "_")
+    aliases={"NONSPIN":"SCALAR_NONSPIN", "NON_SPIN":"SCALAR_NONSPIN", "SCALAR":"SCALAR_NONSPIN", "COLLINEAR":"COLLINEAR_SPIN", "SPIN":"COLLINEAR_SPIN"}
+    method=aliases.get(raw, raw) if raw else electronic_method(values)
+    if method == "SCALAR_NONSPIN":
+        for key in ("starting_magnetization", "tot_magnetization", "noncolin", "lspinorb"):
+            values.pop(key, None)
+        values["spin"] = False; values["soc"] = False
+    elif method == "COLLINEAR_SPIN":
+        for key in ("noncolin", "lspinorb"):
+            values.pop(key, None)
+        values["spin"] = True; values["soc"] = False
+        if values.get("tot_magnetization") is None or values.get("tot_magnetization") == "": values.pop("tot_magnetization", None)
+    elif method == "NONCOLLINEAR":
+        for key in ("starting_magnetization", "tot_magnetization", "lspinorb"):
+            values.pop(key, None)
+        values["spin"] = False; values["soc"] = False; values["noncolin"] = True
+    else:  # SOC
+        for key in ("starting_magnetization", "tot_magnetization"):
+            values.pop(key, None)
+        values["spin"] = False; values["soc"] = True; values["noncolin"] = True; values["lspinorb"] = True
+    return values
+
+
+def normalize_qe_parameters(parameters):
+    """Normalize optional QE values before they cross the request boundary."""
+    values = normalize_spin_parameters(parameters)
+    if values.get("scf_mesh") is not None and values.get("kpoints") is None:
+        values["kpoints"] = list(values["scf_mesh"])
+    occupations = str(values.get("occupations", "")).strip().lower()
+    for key in ("degauss", "ecutwfc", "ecutrho", "conv_thr", "mixing_beta", "nbnd", "electron_maxstep"):
+        if isinstance(values.get(key), str) and not values[key].strip():
+            values[key] = None
+    if occupations != "smearing":
+        values.pop("smearing", None)
+        values.pop("degauss", None)
+    for key in ("chemical_potential_range", "carrier_concentrations", "carrier_concentration_range", "interpolation", "relaxation_time", "effective_thickness"):
+        if values.get(key) is None or values.get(key) == "": values.pop(key, None)
+    return values
+
+
+_PERIODIC_WORKFLOWS = frozenset({"bands", "dos", "pdos", "nscf", "phonons", "phonon_dos", "boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration", "born_charges", "lo_to_splitting", "infrared", "dielectric_phonon"})
 
 
 @dataclass(frozen=True)
@@ -73,7 +117,7 @@ class CalculationService:
     def get_calculation_descriptors(self) -> tuple[CalculationDescriptor, ...]:
         return self.get_catalog_reconciliation_report().descriptors
 
-    def validate_selected_calculations(self, selected_calculations) -> tuple[CalculationDescriptor, ...]:
+    def validate_selected_calculations(self, selected_calculations, *, allow_validation_product=False) -> tuple[CalculationDescriptor, ...]:
         selected = tuple(str(item) for item in selected_calculations)
         if not selected:
             raise ValueError("Select at least one calculation before preparing a request.")
@@ -81,7 +125,8 @@ class CalculationService:
         unknown = [item for item in selected if item not in descriptors]
         if unknown:
             raise RuntimeError("Unknown calculation: " + ", ".join(unknown))
-        unsupported = [item for item in selected if not descriptors[item].backend_supported]
+        transport_ids = {"boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration"}
+        unsupported = [item for item in selected if not descriptors[item].backend_supported and item not in transport_ids and not (allow_validation_product and item in {"electron_phonon", "eliashberg_function"})]
         if unsupported:
             labels = ", ".join(
                 f"{descriptors[item].info.name} ({descriptors[item].status_label})" for item in unsupported
@@ -195,7 +240,7 @@ class CalculationService:
         self.validate_selected_calculations(selected)
         structure, summary = self.validate_structure(project, selected)
         snapshot = structure.copy()
-        request_parameters = dict(parameters or {})
+        request_parameters = normalize_qe_parameters(parameters or {})
         if "bands" in selected and not request_parameters.get("kpath"):
             from frontend.builder.brillouin_zone.path_api import materialize_path, normalize_band_path, recommended_band_path
             recommendation = recommended_band_path(snapshot.to_dict())
@@ -212,11 +257,14 @@ class CalculationService:
         """Rebuild transient native state from one persisted request without using Project.structure."""
         if not isinstance(request, CalculationRequest):
             raise TypeError("Expected a CalculationRequest.")
-        self.validate_selected_calculations(request.selected_calculations)
+        allow_validation_product = str(request.metadata.get("purpose", "")).upper() == "E5C_FINAL_PRODUCT"
+        self.validate_selected_calculations(request.selected_calculations, allow_validation_product=allow_validation_product)
         snapshot = Structure.from_dict(request.structure)
         summary = self.summarize_native_structure(snapshot)
         self._validate_summary_for_selection(summary, request.selected_calculations)
-        return PreparedCalculationRequest(snapshot, summary, request)
+        normalized=normalize_qe_parameters(request.parameters)
+        prepared_request=request if normalized == request.parameters else request.copy_with(parameters=normalized)
+        return PreparedCalculationRequest(snapshot, summary, prepared_request)
 
     def duplicate_request(self, request: CalculationRequest) -> CalculationRequest:
         duplicate_name = f"{request.name or request.calculation_id.replace('_', ' ').title()} Copy"
@@ -224,7 +272,7 @@ class CalculationService:
 
     def update_request_parameters(self, request: CalculationRequest, parameters, *, name=None) -> CalculationRequest:
         from datetime import datetime, timezone
-        changes = {"parameters": dict(parameters), "updated_at": datetime.now(timezone.utc).isoformat()}
+        changes = {"parameters": normalize_qe_parameters(parameters), "updated_at": datetime.now(timezone.utc).isoformat()}
         if name is not None:
             changes["name"] = str(name).strip()
         return request.copy_with(**changes)
@@ -246,6 +294,87 @@ class CalculationService:
         # This package import registers the existing backend calculation catalog; no engine is executed.
         import backend.calculations  # noqa: F401
         return RequestCompiler(prepared_request.backend_request).compile()
+
+    def _batch_groups(self, requests):
+        """Group requests only when their resolved SCF prerequisite is identical."""
+        groups = {}
+        for request in requests:
+            if not isinstance(request, CalculationRequest):
+                raise TypeError("Expected CalculationRequest objects.")
+            prepared = self.prepare_persisted_request(request)
+            plan = self.compile_request(prepared)
+            scf = next((task for task in plan.tasks if task.semantic_task_type == "scf"), None)
+            key = json.dumps({
+                "structure": request.structure,
+                "target": request.execution_target,
+                "scf_signature": scf.parameter_signature if scf else None,
+            }, sort_keys=True, separators=(",", ":"), default=str)
+            groups.setdefault(key, []).append(request)
+        return tuple(groups.values())
+
+    @staticmethod
+    def _combined_parameters(group):
+        """Merge only request metadata needed by the combined public plan."""
+        values = {}
+        for request in group:
+            for key, value in request.parameters.items():
+                values.setdefault(key, value)
+        return values
+
+    def compile_batch_requests(self, requests):
+        """Compile selected jobs while sharing only compatible SCF prerequisites."""
+        plans = []
+        for index, group in enumerate(self._batch_groups(tuple(requests)), 1):
+            first = group[0]
+            selected = list(dict.fromkeys(item for request in group for item in request.selected_calculations))
+            combined = CalculationRequest(
+                structure=first.structure, selected_calculations=selected,
+                parameters=self._combined_parameters(group), execution_target=first.execution_target,
+                id=f"batch-{index}-" + first.id,
+                metadata={"batch_request_ids": [request.id for request in group]},
+            )
+            snapshot = Structure.from_dict(first.structure)
+            plan = self.compile_request(PreparedCalculationRequest(snapshot, self.summarize_native_structure(snapshot), combined))
+            plan.metadata["batch_request_ids"] = [request.id for request in group]
+            plans.append(plan)
+        return tuple(plans)
+
+    def generate_batch_workflows(self, requests, output_root):
+        """Build generated workflows for compatible groups with request provenance."""
+        bundles = []
+        base = Path(output_root)
+        for index, group in enumerate(self._batch_groups(tuple(requests)), 1):
+            first = group[0]
+            selected = list(dict.fromkeys(item for request in group for item in request.selected_calculations))
+            combined = CalculationRequest(
+                structure=first.structure, selected_calculations=selected,
+                parameters=self._combined_parameters(group), execution_target=first.execution_target,
+                id=f"batch-{index}-" + first.id,
+                metadata={"batch_request_ids": [request.id for request in group]},
+            )
+            snapshot = Structure.from_dict(first.structure)
+            prepared = PreparedCalculationRequest(snapshot, self.summarize_native_structure(snapshot), combined)
+            root = self.generate_engine_inputs(prepared, base / f"group-{index}")
+            bundles.append((prepared, str(root), tuple(request.id for request in group)))
+        return tuple(bundles)
+
+    def generate_batch_inputs(self, requests, output_root):
+        """Generate isolated directories for the compiler's compatible groups."""
+        roots = []
+        base = Path(output_root)
+        for index, group in enumerate(self._batch_groups(tuple(requests)), 1):
+            first = group[0]
+            selected = list(dict.fromkeys(item for request in group for item in request.selected_calculations))
+            combined = CalculationRequest(
+                structure=first.structure, selected_calculations=selected,
+                parameters=self._combined_parameters(group), execution_target=first.execution_target,
+                id=f"batch-{index}-" + first.id,
+                metadata={"batch_request_ids": [request.id for request in group]},
+            )
+            snapshot = Structure.from_dict(first.structure)
+            prepared = PreparedCalculationRequest(snapshot, self.summarize_native_structure(snapshot), combined)
+            roots.append(str(self.generate_engine_inputs(prepared, base / f"group-{index}")))
+        return tuple(roots)
 
     def qe_input_support(self, calculation_ids):
         """Report C4 QE generation support through the Calculate service boundary."""
@@ -307,20 +436,26 @@ class CalculationService:
         if set(plan.selected_calculations) & {"boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration"}:
             from backend.engines.boltztrap2 import BoltzTraP2WorkflowAdapter
             return BoltzTraP2WorkflowAdapter().compile_plan(plan)[0]
+        if "electron_phonon" in plan.selected_calculations:
+            from backend.engines.epw import EPWWorkflowAdapter
+            return EPWWorkflowAdapter().compile_plan(plan)
         if "wannierization" in plan.selected_calculations:
             from backend.engines.wannier90 import Wannier90WorkflowAdapter
             return Wannier90WorkflowAdapter().compile_plan(plan)[0]
         from backend.engines.qe import QuantumEspressoAdapter
         return QuantumEspressoAdapter().compile_plan(plan).tasks
 
-    def generate_engine_inputs(self, prepared_request: PreparedCalculationRequest, output_root):
+    def generate_engine_inputs(self, prepared_request: PreparedCalculationRequest, output_root, *, execution_profile="STANDARD"):
         """Explicit derived export only; never discovers or executes an engine."""
         plan = self.compile_request(prepared_request)
         if set(plan.selected_calculations) & {"boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration"}:
             from backend.engines.boltztrap2 import BoltzTraP2WorkflowAdapter
             return BoltzTraP2WorkflowAdapter().write_plan(plan, output_root)
+        if "electron_phonon" in plan.selected_calculations:
+            from backend.engines.epw import EPWWorkflowAdapter
+            return EPWWorkflowAdapter().write_plan(plan, output_root)
         if "wannierization" in plan.selected_calculations:
             from backend.engines.wannier90 import Wannier90WorkflowAdapter
             return Wannier90WorkflowAdapter().write_plan(plan, output_root)
         from backend.engines.qe import QuantumEspressoAdapter
-        return QuantumEspressoAdapter().write_plan(plan, output_root)
+        return QuantumEspressoAdapter().write_plan(plan, output_root, execution_profile=execution_profile)

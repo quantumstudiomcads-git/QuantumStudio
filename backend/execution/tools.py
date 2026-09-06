@@ -5,7 +5,7 @@ from pathlib import Path
 import json, os, shutil
 from .errors import ExecutableNotFoundError
 
-MPI_CAPABLE_TOOLS=frozenset({"pw.x","ph.x","bands.x","dos.x","projwfc.x","pp.x","q2r.x","matdyn.x","pw2wannier90.x","wannier90.x","epw.x"})
+MPI_CAPABLE_TOOLS=frozenset({"pw.x","ph.x","bands.x","dos.x","projwfc.x","pp.x","q2r.x","matdyn.x","epsilon.x","pw2wannier90.x","epw.x"})
 
 def available_logical_cpus():
  try:
@@ -17,7 +17,7 @@ def available_logical_cpus():
 @dataclass
 class LocalToolConfiguration:
  tool_paths:dict[str,str]=field(default_factory=dict); engine_directories:dict[str,str]=field(default_factory=dict); environment:dict[str,str]=field(default_factory=dict)
- cpu_cores:int=1; omp_threads:int=1; mpi_launcher:str="auto"; qe_bin_directory:str=""; qe_version:str=""
+ cpu_cores:int=1; omp_threads:int=1; mpi_launcher:str="auto"; qe_bin_directory:str=""; qe_version:str=""; qe_execution_profile:str="STANDARD"
 
  @staticmethod
  def machine_config_path(): return Path(os.environ.get("QUANTUM_STUDIO_LOCAL_TOOLS","~/.local/share/QuantumStudio/local_tools.json")).expanduser()
@@ -27,14 +27,16 @@ class LocalToolConfiguration:
   path=cls.machine_config_path()
   try:
    data=json.loads(path.read_text(encoding="utf-8"))
-   return cls(tool_paths=dict(data.get("tool_paths",{})),engine_directories=dict(data.get("engine_directories",{})),cpu_cores=int(data.get("cpu_cores",1)),omp_threads=int(data.get("omp_threads",1)),mpi_launcher=str(data.get("mpi_launcher","auto")),qe_bin_directory=str(data.get("qe_bin_directory","")),qe_version=str(data.get("qe_version","")))
+   return cls(tool_paths=dict(data.get("tool_paths",{})),engine_directories=dict(data.get("engine_directories",{})),cpu_cores=int(data.get("cpu_cores",1)),omp_threads=int(data.get("omp_threads",1)),mpi_launcher=str(data.get("mpi_launcher","auto")),qe_bin_directory=str(data.get("qe_bin_directory","")),qe_version=str(data.get("qe_version","")),qe_execution_profile=str(data.get("qe_execution_profile","STANDARD")))
   except (OSError,ValueError,json.JSONDecodeError,TypeError): return cls()
  def save_machine_configuration(self):
   path=self.machine_config_path(); path.parent.mkdir(parents=True,exist_ok=True); staging=path.with_suffix(path.suffix+".staging")
-  data={"tool_paths":self.tool_paths,"engine_directories":self.engine_directories,"cpu_cores":self.cpu_cores,"omp_threads":self.omp_threads,"mpi_launcher":self.mpi_launcher,"qe_bin_directory":self.qe_bin_directory,"qe_version":self.qe_version}
+  data={"tool_paths":self.tool_paths,"engine_directories":self.engine_directories,"cpu_cores":self.cpu_cores,"omp_threads":self.omp_threads,"mpi_launcher":self.mpi_launcher,"qe_bin_directory":self.qe_bin_directory,"qe_version":self.qe_version,"qe_execution_profile":self.qe_execution_profile}
   staging.write_text(json.dumps(data,sort_keys=True)+"\n",encoding="utf-8"); os.replace(staging,path)
  def apply_quantum_espresso(self, installation):
   self.qe_bin_directory=installation.bin_directory; self.qe_version=installation.version; self.engine_directories["quantum_espresso"]=installation.bin_directory; self.tool_paths.update(installation.tools)
+ def apply_engine_family(self, family):
+  self.qe_bin_directory=str(Path(family.tools["pw"]).parent); self.qe_version=family.qe_version; self.engine_directories["quantum_espresso"]=family.root; self.engine_directories["epw"]=family.root; self.tool_paths.update({name+".x":str(path) for name,path in family.tools.items()})
  def resolve(self,tool_id,program,engine_id=None):
   candidates=[]
   if tool_id in self.tool_paths:
@@ -48,6 +50,14 @@ class LocalToolConfiguration:
    from .discovery import discover_bader
    found = discover_bader(environment=self.environment)
    if found: return Path(found[0]).resolve()
+  if program == "btp2":
+   from .discovery import discover_boltztrap2
+   found = discover_boltztrap2(environment=self.environment)
+   if found: return Path(found[0]).resolve()
+  if program == "btp2-python":
+   from .discovery import discover_boltztrap2
+   found = discover_boltztrap2(environment=self.environment)
+   if found: return Path(found[0]).with_name("python").resolve()
   raise ExecutableNotFoundError(f"Local executable for {tool_id!r} ({program!r}) is not configured or executable.")
  def mpi_capable(self,tool_id): return tool_id in MPI_CAPABLE_TOOLS
  def resolved_mpi_launcher(self):

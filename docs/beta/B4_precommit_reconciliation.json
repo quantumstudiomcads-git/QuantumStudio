@@ -1,0 +1,997 @@
+{
+  "schema_version": "B4-precommit-1",
+  "generated_at": "2026-09-06T16:32:05.371700+00:00",
+  "repository": {
+    "worktree": "<repository-root>",
+    "branch": "v0.2",
+    "head": "1b9ab4c626c0c74e77dd2bd3f84ea10974c0aaad",
+    "dirty": true
+  },
+  "test_reconciliation": {
+    "historical_b3_reported": 435,
+    "pre_config_current_collected": 404,
+    "legitimate_omitted": 35,
+    "current_canonical_collected": 435,
+    "current_passed": 435,
+    "failed": 0,
+    "skipped": 0,
+    "xfail": 0,
+    "warnings": 320,
+    "reason": "pytest default norecursedirs excludes directories named build; tests/builder/build contains 35 legitimate unittest cases. pytest.ini now sets testpaths=tests and a controlled norecursedirs list that preserves this package.",
+    "historical_report_verdict": "435 was accurate for the intended suite; the 404 run was a collection-configuration defect."
+  },
+  "environment": {
+    "python": "3.13.0",
+    "pytest": "9.1.1",
+    "pytest_qt": "4.5.0",
+    "pyside6": "6.11.2",
+    "ase": "3.28.0",
+    "numpy": "2.5.2",
+    "scipy": "1.18.1",
+    "matplotlib": "3.11.1",
+    "rootdir": "<repository-root>",
+    "config": "pytest.ini",
+    "testpaths": [
+      "tests"
+    ],
+    "plugins": [
+      "pytest-qt 4.5.0"
+    ]
+  },
+  "warnings": {
+    "count": 320,
+    "classification": "DEPENDENCY_WARNING / LOW",
+    "source": "ASE atoms.py direct ndarray.shape assignment under NumPy 2.5",
+    "beta_impact": "No failures or runtime breakage observed; do not patch or globally suppress ASE warning."
+  },
+  "dependencies": {
+    "runtime": "requirements-runtime.txt",
+    "test": "requirements-test.txt",
+    "build": "scripts/build_linux.py / .venv-build (not runtime requirements)",
+    "validation": "pip install --no-index --no-deps -r requirements-test.txt reported all pinned requirements already satisfied in .venv-test"
+  },
+  "worktree_counts": {
+    "SOURCE_B1_B4": 104,
+    "PACKAGING_SOURCE": 4,
+    "TEST_B1_B4": 27,
+    "DOC_B1_B4": 16
+  },
+  "worktree_entries": [
+    {
+      "path": ".gitignore",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/analyze/__init__.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/analyze/export.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/analyze/transforms.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/api/app.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/calculations/__init__.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/calculations/electronic.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/calculations/epw.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/calculations/optical.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/calculations/vibrational.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/compiler/boltztrap2.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/compiler/calculation_compiler.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/compiler/parameter_resolver.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/compiler/postprocessing.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/boltztrap2/__init__.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/boltztrap2/adapter.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/epw/__init__.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/epw/adapter.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/epw/models.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/epw/writer.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/qe/__init__.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/qe/adapter.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/qe/postprocessing.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/qe/writer.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/registry.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/wannier90/models.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/wannier90/writer.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/execution/__init__.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/execution/discovery.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/execution/generated.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/execution/local.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/execution/models.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/execution/normalize.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/execution/persistence.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/execution/tools.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/parameters/defaults.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/pseudopotentials/__init__.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/pseudopotentials/providers.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/pseudopotentials/provisioner.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/pseudopotentials/registry.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/pseudopotentials/upf.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/results/__init__.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/results/models.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/results/parsers.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/results/store.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/analyze/plots/bands.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/analyze/plots/base.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/analyze/workspace.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/builder/brillouin_zone/path_api.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/calculate/parameter_session.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/calculate/preparation.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/calculate/typed_parameter_controls.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/calculate/workspace.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/calculations/catalog.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/calculations/reconciliation.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/core/project.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/main.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/services/calculation_service.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/services/result_service.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "launcher/quantum-studio-v0.1.desktop",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "PACKAGING_SOURCE"
+    },
+    {
+      "path": "scripts/run_quantum_studio_v01.sh",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "tests/analyze/test_analyze_ux_regression.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_boltztrap2_workflow.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_dag_registry.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_local_execution.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_local_resources.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_qe_adapter.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_result_service.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_results.py",
+      "index_status": " ",
+      "worktree_status": "M",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "backend/calculations/optical_family.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/compiler/optical.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/compiler/polar.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/boltztrap2/dense.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/boltztrap2/discovery.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/boltztrap2/runner.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/epw/collector.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/epw/grid.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/epw/reciprocal.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/epw/scdm.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/epw/wannier_capabilities.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/engines/qe/optical.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/execution/artifacts.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/execution/branch.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/execution/engine_family.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/execution/recovery.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/execution/reuse.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/optical/__init__.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/optical/bundle.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/optical/convergence.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/optical/coverage.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/optical/derived.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/optical/grid.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/optical/models.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/results/eliashberg.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/results/epw.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/results/optical.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/results/transport.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/runtime/__init__.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/runtime/engine_pack.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/runtime/identity.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "backend/runtime/paths.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "docs/beta/B1_product_integrity_audit.json",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/B1_product_integrity_audit.md",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/B2_failure_recovery_audit.json",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/B2_failure_recovery_audit.md",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/B3_distribution_runtime_audit.json",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/B3_distribution_runtime_audit.md",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/B4_manual_gui_validation.md",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/B4_precommit_reconciliation.json",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/B4_precommit_reconciliation.md",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/B4_release_candidate_audit.json",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/B4_release_candidate_audit.md",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/B4_release_candidate_manifest.json",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/KNOWN_LIMITATIONS_0.2.0_BETA_RC1.md",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/QUICK_START_0.2.0_BETA_RC1.md",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/RELEASE_NOTES_0.2.0_BETA_RC1.md",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "docs/beta/THIRD_PARTY_NOTICES_0.2.0_BETA_RC1.md",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "DOC_B1_B4"
+    },
+    {
+      "path": "frontend/analyze/plots/eliashberg.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/analyze/plots/optical.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/analyze/plots/transport.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "frontend/analyze/plots/vibrational.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "launcher/quantum-studio-project.xml",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "PACKAGING_SOURCE"
+    },
+    {
+      "path": "launcher/quantum-studio.desktop",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "PACKAGING_SOURCE"
+    },
+    {
+      "path": "pytest.ini",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "requirements-runtime.txt",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "requirements-test.txt",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "scripts/audit/b1_product_integrity.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "scripts/audit/b2_failure_recovery.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "scripts/audit/b3_distribution_runtime.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "scripts/build_linux.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "PACKAGING_SOURCE"
+    },
+    {
+      "path": "scripts/validation/e5_pb_coarse_state_validation.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "scripts/validation/overnight_full_scientific_audit.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "SOURCE_B1_B4"
+    },
+    {
+      "path": "tests/analyze/test_e3c_acceptance.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/analyze/test_e3d_dielectric.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/analyze/test_transport_analyze.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_b1_integrity.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_b2_failure_recovery.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_b3_runtime.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_calculate_ux_completion.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_e3b_polar.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_eliashberg_e5d.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_engine_family_discovery.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_epw_e5_foundation.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_optical_architecture.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_raman_e4b_closure.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_scdm_w10.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_transport_foundation.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_transport_gui_acceptance.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_vibrational_e2_closure.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_workflow_artifacts.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    },
+    {
+      "path": "tests/calculate/test_workflow_reuse.py",
+      "index_status": "?",
+      "worktree_status": "?",
+      "classification": "TEST_B1_B4"
+    }
+  ],
+  "artifact_finding": {
+    "backend_artifacts_present": true,
+    "active_production_runtime_write_found": false,
+    "legacy_manual_script": "backend/test_manifest.py writes an explicit historical backend/artifacts path when run manually",
+    "current_test_runtime_write_found": false,
+    "preserved": true
+  },
+  "large_files": {
+    "tracked_over_10MiB": [],
+    "staged_over_10MiB": []
+  },
+  "commit_plan": {
+    "status": "DO_NOT_COMMIT",
+    "groups": [
+      {
+        "name": "pre-beta calculation/workflow implementation",
+        "scope": "backend/frontend calculation, engine, execution, result and related source changes; review as one coherent dependency-safe unit"
+      },
+      {
+        "name": "optical architecture and validation provenance",
+        "scope": "backend/optical, optical engine/parser/result/analyze additions and tests/docs directly owned by optical work"
+      },
+      {
+        "name": "B1-B4 hardening and distribution",
+        "scope": "runtime/recovery/engine-pack/build scripts, pytest.ini, requirements manifests, packaging metadata, beta docs and tests"
+      }
+    ],
+    "excluded": "generated deployment trees, backend/artifacts, CRASH/scientific scratch, RC packages, Engine Pack binaries, .venv directories, user validation data",
+    "release_condition": "Review/split with Git diff before staging; no commit performed."
+  }
+}

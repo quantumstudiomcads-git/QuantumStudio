@@ -1,8 +1,8 @@
 """Engine-neutral Analyze transforms and exports."""
 from .transforms import result_kind, tabular_data, energy_reference, exact_difference, frequency_convert
-from .export import export_csv
+from .export import export_csv, export_optical_bundle
 from .comparison import AnalysisSeries, ComparisonModel, compatible_results, provenance_differences, difference_eligible
-__all__ = ["result_kind", "tabular_data", "energy_reference", "exact_difference", "frequency_convert", "export_csv", "export_volumetric_npz", "export_slice_csv", "export_profile_csv", "AnalysisSeries", "ComparisonModel", "compatible_results", "provenance_differences", "difference_eligible"]
+__all__ = ["result_kind", "tabular_data", "energy_reference", "exact_difference", "frequency_convert", "export_csv", "export_optical_bundle", "export_volumetric_npz", "export_slice_csv", "export_profile_csv", "AnalysisSeries", "ComparisonModel", "compatible_results", "provenance_differences", "difference_eligible"]
 
 from .volumetric import export_volumetric_npz, export_slice_csv, export_profile_csv
 from .electronic import BandEdge, BandGapAnalysis, FitDirection, EffectiveMassFit, ElectronicAnalysisResult, analyze_band_edges, minimum_sampled_direct_gap, available_fit_directions, fit_effective_mass, strain_gap_trend

@@ -9,18 +9,19 @@ or execution engines.
 """
 
 from fastapi import FastAPI
+from backend.runtime import PRODUCT_NAME, VERSION
 
 from backend.api.routes.calculations import router as calculations_router
 from backend.api.routes.compile import router as compile_router
 
 
 app = FastAPI(
-    title="Quantum Studio API",
+    title=PRODUCT_NAME,
     description=(
         "Backend API for Quantum Studio computational "
         "materials workflows."
     ),
-    version="0.1.0",
+    version=VERSION,
 )
 
 

@@ -2,7 +2,7 @@
 
 from .registry import PseudoLibrary
 
-PROVIDER_LABELS = {"sssp_efficiency":"SSSP Efficiency", "sssp_precision":"SSSP Precision", "pseudodojo":"PseudoDojo", "pslibrary":"PSLibrary", "sg15":"SG15 / ONCV", "gbrv":"GBRV", "local":"Local/User Library"}
+PROVIDER_LABELS = {"sssp_efficiency":"SSSP Efficiency", "sssp_precision":"SSSP Precision", "pseudodojo":"PseudoDojo", "pslibrary":"PSLibrary", "sg15":"SG15 / ONCV", "gbrv":"GBRV", "qe_official":"Quantum ESPRESSO Official PP Library", "local":"Local/User Library"}
 
 def provider_library(library_id, root, *, version=""):
     """Create a locally-indexed provider library without downloading anything."""

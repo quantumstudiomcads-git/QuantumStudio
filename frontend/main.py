@@ -1,8 +1,16 @@
+import os
 import sys
+from pathlib import Path
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
+from backend.runtime import BUILD_CHANNEL, PRODUCT_NAME, VERSION, build_identity
 
 from frontend.app.project_hub import ProjectHub
+from frontend.analyze import AnalyzeWorkspace
+from frontend.builder import Builder
+from frontend.calculate import CalculateWorkspace
+from frontend.core.project import Project
 
 
 def main():
@@ -11,21 +19,80 @@ def main():
         sys.argv
     )
 
-    app.setApplicationName(
-        "Quantum Studio"
-    )
+    app.setApplicationName(PRODUCT_NAME)
+    app.setApplicationVersion(VERSION)
 
     app.setOrganizationName(
-        "Quantum Studio"
+        PRODUCT_NAME
     )
 
-    app.setApplicationDisplayName(
-        "Quantum Studio"
-    )
+    display_identity = f"{PRODUCT_NAME} {VERSION} Beta RC1" if BUILD_CHANNEL == "beta-rc1" else PRODUCT_NAME
+    app.setApplicationDisplayName(display_identity)
 
     hub = ProjectHub()
 
     hub.show()
+
+    if os.environ.get("QUANTUM_STUDIO_PACKAGED_SMOKE") == "1":
+        def packaged_smoke() -> None:
+            project = Project("Packaged Smoke")
+            smoke_root = Path(os.environ.get("XDG_DATA_HOME", Path.home())) / "Quantum Studio Smoke ü"
+            smoke_root.mkdir(parents=True, exist_ok=True)
+            project_path = smoke_root / "My Quantum Studio Test.qs"
+            project.save(project_path)
+            restored = Project.load(project_path)
+            if restored.name != project.name:
+                raise RuntimeError("packaged project round-trip failed")
+            Builder(project)
+            CalculateWorkspace(project)
+            AnalyzeWorkspace(project)
+            smoke_detail = "QS_ROUNDTRIP PASS"
+            if os.environ.get("QUANTUM_STUDIO_PACKAGED_SCF_SMOKE") == "1":
+                from backend.execution import ExecutionStore, LocalExecutionManager, LocalToolConfiguration
+                from backend.pseudopotentials.models import sha256
+                from frontend.calculations.catalog import CALCULATIONS
+                from frontend.services.calculation_service import CalculationService
+                from frontend.services.result_service import ResultService
+                from frontend.core import Atom, Structure
+                engine_root = Path(os.environ["QUANTUM_STUDIO_RC_ENGINE_ROOT"])
+                pseudo = Path(os.environ["QUANTUM_STUDIO_RC_SI_PSEUDO"])
+                structure = Structure([Atom("Si", 0.0, 0.0, 0.0), Atom("Si", 1.3575, 1.3575, 1.3575)], [[5.43, 0.0, 0.0], [0.0, 5.43, 0.0], [0.0, 0.0, 5.43]], "Si RC Smoke")
+                project.set_structure(structure)
+                parameters = {"xc_functional": "pbe", "ecutwfc": 12.0, "ecutrho": 48.0, "conv_thr": 1.0e-6, "electron_maxstep": 50, "kpoints": [1, 1, 1], "pseudopotentials": {"Si": {"element": "Si", "filename": pseudo.name, "source": str(pseudo), "sha256": sha256(pseudo), "pseudo_type": "USPP", "xc_functional": "pbe"}}}
+                service = CalculationService(CALCULATIONS)
+                prepared = service.create_request(project, ["scf"], parameters, name="Si RC Engine Smoke")
+                project.add_calculation(prepared.backend_request)
+                workflow_parent = Path(os.environ.get("XDG_DATA_HOME", Path.home())) / "Quantum Studio RC Engine Smoke"
+                generated = service.generate_engine_inputs(prepared, workflow_parent)
+                workflow = service.execution_workflow(prepared, generated)
+                pw_candidates = (
+                    engine_root / "bin" / "pw.x",
+                    engine_root / "PW" / "src" / "pw.x",
+                )
+                pw_path = next((candidate for candidate in pw_candidates if candidate.is_file()), pw_candidates[0])
+                tools = LocalToolConfiguration(tool_paths={"pw.x": str(pw_path)}, qe_version="7.6", cpu_cores=1, omp_threads=1)
+                manager = LocalExecutionManager(tools)
+                errors = manager.preflight(workflow)
+                if errors:
+                    raise RuntimeError("Packaged SCF preflight failed: " + "\n".join(errors))
+                store = ExecutionStore(generated)
+                record = store.create(workflow)
+                record = manager.execute(workflow, record=record, store=store)
+                if record.state.value != "COMPLETED":
+                    raise RuntimeError(f"Packaged SCF execution failed: {record.state.value}")
+                parsed = ResultService().parse(generated, record.execution_id)
+                if parsed["errors"] or not parsed["parsed"]:
+                    raise RuntimeError(f"Packaged SCF parse failed: {parsed['errors']}")
+                project.register_execution_root(prepared.backend_request.id, generated)
+                project_path = smoke_root / "Si-RC-Smoke.qs"
+                project.save(project_path)
+                restored = Project.load(project_path)
+                if not restored.execution_roots():
+                    raise RuntimeError("Packaged SCF project persistence failed")
+                smoke_detail = f"QS_ROUNDTRIP PASS SCF execution={record.execution_id} result={parsed['parsed'][0]}"
+            print(f"PACKAGED_SMOKE: {build_identity()} ProjectHub Builder Calculate Analyze {smoke_detail}", flush=True)
+            app.quit()
+        QTimer.singleShot(0, packaged_smoke)
 
     sys.exit(
         app.exec()

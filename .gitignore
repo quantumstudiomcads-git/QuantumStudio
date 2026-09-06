@@ -55,3 +55,28 @@ frontend/backups/
 *.before_*
 *.before_*.py
 *.syntax_error_backup.py
+
+# B3 generated distribution output
+dist/
+build/
+*.spec
+.venv-build/
+.venv-test/
+# Source-tree runtime/result material; authoritative artifacts belong under user workflow roots
+/backend/artifacts/
+
+# Packaging/deployment output
+/frontend/deployment/
+*.dist/
+*.build/
+nuitka-crash-report.xml
+
+# Transient scientific-engine scratch (preserve locally; never commit)
+/CRASH
+/EPW.bib
+/dynmat.axsf
+/dynmat.mold
+/input_tmp.in
+
+# Local scientific validation orchestrators (preserve locally; not release source)
+/scripts/validation/

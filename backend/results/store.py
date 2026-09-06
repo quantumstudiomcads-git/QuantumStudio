@@ -1,6 +1,7 @@
 """Atomic result metadata/array storage beneath C7 execution history."""
 from __future__ import annotations
 import hashlib, json, os
+import tempfile
 from pathlib import Path
 import numpy as np
 from .models import ResultProvenance, ResultStatus, ScientificResult
@@ -13,7 +14,13 @@ class ResultStore:
   if self.root not in value.parents: raise ResultStoreError("Result path escapes workflow root.")
   return value
  def save(self,result):
-  self.data.mkdir(parents=True,exist_ok=True); arrays={key:np.asarray(value) for key,value in result.arrays.items()}; np.savez_compressed(self._safe(self.data/(result.result_id+".npz")),**arrays)
+  self.data.mkdir(parents=True,exist_ok=True); arrays={key:np.asarray(value) for key,value in result.arrays.items()}; array_target=self._safe(self.data/(result.result_id+".npz")); fd, temporary=tempfile.mkstemp(prefix="."+result.result_id+".", suffix=".npz", dir=str(self.data)); os.close(fd)
+  try:
+   np.savez_compressed(temporary,**arrays); os.replace(temporary,array_target)
+  except Exception:
+   try: os.unlink(temporary)
+   except FileNotFoundError: pass
+   raise
   payload={"result_id":result.result_id,"result_type":result.result_type,"status":result.status.value,"provenance":result.provenance.__dict__,"scalars":result.scalars,"metadata":result.metadata,"warnings":result.warnings,"array_file":"data/"+result.result_id+".npz"}
   target=self._safe(self.base/(result.result_id+".json")); temporary=target.with_suffix(".tmp"); target.parent.mkdir(parents=True,exist_ok=True)
   with temporary.open("w",encoding="utf-8") as stream: json.dump(payload,stream,sort_keys=True); stream.flush(); os.fsync(stream.fileno())

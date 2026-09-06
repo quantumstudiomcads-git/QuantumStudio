@@ -61,14 +61,17 @@ class CatalogRegistryReconciliationTests(unittest.TestCase):
     def test_active_catalog_has_exact_implemented_mapping_and_explicit_nonimplemented_entries(self):
         report = CalculationService(CALCULATIONS).get_catalog_reconciliation_report()
         self.assertEqual(report.frontend_count, 147)
-        self.assertEqual(report.backend_count, 34)
+        self.assertEqual(report.backend_count, 44)
         self.assertEqual(report.invalid_mappings, ())
         self.assertTrue(set(report.implemented_ids) <= {item.id for item in active_registry.all()})
-        self.assertEqual(len(report.planned_ids), 110)
+        self.assertEqual(len(report.planned_ids), 101)
         self.assertFalse(any(item.id in {"fermi_surface", "band_gap", "effective_mass", "bader_charge", "mulliken_population", "charge_transfer", "band_decomposed_charge", "spin_texture", "orbital_texture", "magnetic_moment", "exchange_parameters", "hubbard_u", "hybrid_electronic"} for item in report.descriptors if item.execution_support is ExecutionSupport.PLANNED))
         nscf = next(item for item in report.descriptors if item.id == "nscf")
         self.assertEqual(nscf.execution_support, ExecutionSupport.PARTIAL)
         self.assertFalse(nscf.backend_supported)
+        raman = next(item for item in report.descriptors if item.id == "raman")
+        self.assertEqual(raman.execution_support, ExecutionSupport.IMPLEMENTED)
+        self.assertTrue(raman.backend_supported)
 
     def test_duplicate_frontend_mapping_fails_and_backend_only_is_diagnostic(self):
         backend = temporary_registry(CalculationDefinition("scf", "SCF", "Test"))
@@ -118,10 +121,10 @@ class DependencyDagTests(unittest.TestCase):
 
     def test_deep_phonon_dos_dag_is_topologically_ordered(self):
         plan = CalculationCompiler(request(["phonon_dos"])).compile()
-        self.assertEqual(plan.resolved_calculations, ["scf", "phonons", "phonon_dos"])
+        self.assertEqual(plan.resolved_calculations, ["scf", "qe_ph", "qe_q2r", "qe_matdyn_dos"])
         self.assertEqual(
-            plan.task_for_calculation("phonon_dos").depends_on_task_ids,
-            (plan.task_for_calculation("phonons").id,),
+            plan.task_for_calculation("qe_matdyn_dos").depends_on_task_ids,
+            (plan.task_for_calculation("qe_q2r").id,),
         )
 
     def test_cycle_and_missing_dependency_are_rejected_with_clear_errors(self):

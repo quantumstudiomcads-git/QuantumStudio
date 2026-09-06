@@ -150,8 +150,39 @@ CALCULATION_DEFAULTS = {
 
         "tr2_ph": 1e-14,
 
-        "qmesh": [4, 4, 4],
+        "q_point": [0.0, 0.0, 0.0],
 
         "lo_to_splitting": False,
     },
+
+    "born_charges": {
+        "conv_thr": 1e-10,
+        "tr2_ph": 1e-12,
+        "q_point": [0.0, 0.0, 0.0],
+        "spin_treatment": "SCALAR_NONSPIN",
+    },
+
+    "lo_to_splitting": {
+        "direction": [1.0, 0.0, 0.0],
+        "asr": "crystal",
+    },
+
+    "infrared": {
+        "direction": [1.0, 0.0, 0.0],
+        "asr": "crystal",
+    },
 }
+
+# QE epsilon.x source contract: ENERGY_GRID quantities are all expressed in eV.
+CALCULATION_DEFAULTS["dielectric"] = {
+    "energy_min_eV": 0.0,
+    "energy_max_eV": 15.0,
+    "number_of_points": 601,
+    "interband_broadening_eV": 0.10,
+    "intraband_broadening_eV": None,
+    "optical_k_mesh": [12, 12, 12],
+    "optical_nbnd": 16,
+    "smeartype": "gauss",
+    "polarization_directions": ["xx", "yy", "zz"],
+}
+CALCULATION_DEFAULTS["absorption"] = dict(CALCULATION_DEFAULTS["dielectric"])

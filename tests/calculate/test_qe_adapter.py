@@ -10,6 +10,8 @@ import unittest
 import backend.calculations  # noqa: F401 -- registers active definitions
 from backend.compiler.calculation_compiler import CalculationCompiler
 from backend.core.calculation_request import CalculationRequest
+from backend.engines.qe.models import QEWorkflowContext
+from backend.engines.qe.writer import pw_input
 from backend.engines.qe import (
     InvalidQEParameterError,
     MissingPseudopotentialError,
@@ -45,6 +47,30 @@ class QENamelistTests(unittest.TestCase):
         with self.assertRaisesRegex(InvalidQEParameterError, "Unsupported QE namelist"):
             serialize_namelist("SYSTEM", {"bad": [1, 2]})
 
+    def test_empty_and_malformed_numeric_namelist_values_are_rejected(self):
+        with self.assertRaisesRegex(InvalidQEParameterError, "requires an integer or float"):
+            serialize_namelist("SYSTEM", {"degauss": ""})
+        with self.assertRaisesRegex(InvalidQEParameterError, "ecutwfc requires"):
+            serialize_namelist("SYSTEM", {"ecutwfc": "None"})
+        self.assertNotIn("note", serialize_namelist("CONTROL", {"note": "", "prefix": "qs"}))
+        with self.assertRaises(InvalidQEParameterError):
+            serialize_namelist("SYSTEM", {"ecutwfc": float("nan")})
+
+    def test_fixed_occupations_omit_smearing_and_degauss(self):
+        context = QEWorkflowContext("r", "qs_r", "../qe_out", "../pseudos")
+        text = pw_input("scf", {"occupations": "fixed", "smearing": "", "degauss": "", "ecutwfc": 40.0, "ecutrho": 320.0, "conv_thr": 1e-6, "kpoints": [1, 1, 1]}, STRUCTURE_A, QEWorkflowContext("r", "qs_r", "../qe_out", "../pseudos"), {"C": type("Pseudo", (), {"filename": "C.UPF"})()})
+        self.assertNotIn("degauss", text)
+        self.assertNotIn("smearing", text)
+
+    def test_smearing_requires_and_serializes_numeric_degauss(self):
+        values = {"occupations": "smearing", "smearing": "mv", "degauss": 0.01, "ecutwfc": 40.0, "ecutrho": 320.0, "conv_thr": 1e-6, "kpoints": [1, 1, 1]}
+        text = pw_input("scf", values, STRUCTURE_A, QEWorkflowContext("r", "qs_r", "../qe_out", "../pseudos"), {"C": type("Pseudo", (), {"filename": "C.UPF"})()})
+        self.assertIn("occupations = 'smearing'", text)
+        self.assertIn("smearing = 'mv'", text)
+        self.assertIn("degauss = 0.01", text)
+        with self.assertRaisesRegex(InvalidQEParameterError, "Smearing width requires"):
+            pw_input("scf", {**values, "degauss": ""}, STRUCTURE_A, QEWorkflowContext("r", "qs_r", "../qe_out", "../pseudos"), {"C": type("Pseudo", (), {"filename": "C.UPF"})()})
+
     def test_structure_cards_preserve_geometry_and_first_appearance_species_order(self):
         snapshot = json.loads(json.dumps(STRUCTURE_A))
         text = structure_cards(snapshot, {"C": type("Pseudo", (), {"filename": "C.UPF"})()})
@@ -55,6 +81,9 @@ class QENamelistTests(unittest.TestCase):
 
 
 class QEAdapterTests(unittest.TestCase):
+    def test_private_raman_dynmat_task_is_supported(self):
+        self.assertTrue(QuantumEspressoAdapter().is_supported("qe_dynmat_raman"))
+
     def test_scf_preview_has_pw_input_geometry_parameters_and_shared_context(self):
         plan = CalculationCompiler(request(["scf"], parameters={"pseudopotentials": PSEUDOS, "ecutwfc": 72})).compile()
         generated = QuantumEspressoAdapter().compile_plan(plan)

@@ -150,6 +150,20 @@ def discover_bader(**kwargs):
     return tuple(dict.fromkeys(str(item.resolve()) for item in candidates if item.is_file() and os.access(item, os.X_OK)))
 
 
+def discover_boltztrap2(*, environment: dict[str, str] | None = None) -> tuple[str, ...]:
+    environment = environment or {}
+    path_value = environment.get("PATH") or os.environ.get("PATH", "")
+    candidates = []
+    found = shutil.which("btp2", path=path_value)
+    if found: candidates.append(Path(found))
+    repo = _repo_root()
+    candidates.extend(repo.glob("software/engines/boltztrap2/*/bin/btp2"))
+    candidates.extend(repo.glob("software/engines/bin/btp2"))
+    home = Path.home()
+    for root in (home / "QuantumStudio", home / "software", home / "Software", home / "Desktop"):
+        if root.is_dir(): candidates.extend(root.glob("**/software/engines/boltztrap2/*/bin/btp2"))
+    return tuple(dict.fromkeys(str(item.resolve()) for item in candidates if item.is_file() and os.access(item, os.X_OK)))
+
 def discover_quantum_espresso(*, existing_directory: str | None = None, environment: dict[str, str] | None = None, deep: bool = False) -> ToolDiscoveryResult:
     """Discover local QE installs, ranking exact 7.6 first then highest version."""
     candidates = list(_known_candidates(existing_directory, environment))

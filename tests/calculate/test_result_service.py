@@ -1,8 +1,10 @@
-import tempfile, unittest
+import json, tempfile, unittest
+from unittest.mock import patch
+import numpy as np
 from pathlib import Path
 from backend.execution import ExecutionStore
 from backend.execution.models import WorkflowExecutionRecord, TaskExecutionRecord, TaskState
-from backend.results import DEFAULT_PARSERS, ResultStore
+from backend.results import DEFAULT_PARSERS, ResultStore, ResultProvenance, ResultStatus, ScientificResult
 from frontend.services.result_service import ResultService
 
 class ResultServiceTests(unittest.TestCase):
@@ -39,6 +41,43 @@ class ResultServiceTests(unittest.TestCase):
    record=WorkflowExecutionRecord("request",str(root),{"scf":TaskExecutionRecord("scf",state=TaskState.COMPLETED,stdout_path=str(scf/"scf.out")),"pdos":TaskExecutionRecord("pdos",state=TaskState.COMPLETED,stdout_path=str(pdos/"projwfc.out"))},execution_id="e"); ExecutionStore(root).save(record)
    rows=ResultService().parse(root,"e")["rows"]; result=ResultService().load_result(root,"e",next(row["result_id"] for row in rows if row["type"]=="PDOSResult"))
    self.assertEqual(result.metadata["fermi_energy_eV"],2.5); self.assertEqual(result.metadata["fermi_reference"]["source_task"],"scf")
+
+ def test_raman_final_dynmat_uses_parent_ph_tensor_and_parses_once(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp); scf=root/"001_scf"; parent=root/"002_raman"; final=root/"003_qe_dynmat_raman"; scf.mkdir(); parent.mkdir(); final.mkdir()
+   (scf/"scf.in").write_text("ecutwfc = 40\necutrho = 160\nK_POINTS automatic\n12 12 12 0 0 0\n")
+   (parent/"raman.in").write_text("eth_rps=1e-9\neth_ns=1e-12\ndek=1e-3\ntr2_ph=1e-12\n")
+   (final/"dynmat.in").write_text("asr='crystal'\n")
+   parent_out=parent/"raman.out.attempt001"; parent_out.write_text("PARENT RAMAN TENSORS")
+   final_source=final/"raman.dynmat.out"; final_source.write_text("FINAL MODES")
+   final_out=final/"dynmat.out.attempt001"; final_out.write_text("FINAL ACTIVITIES")
+   manifest={"tasks":[
+    {"task_id":"scf","semantic_task_type":"scf","working_directory":"001_scf","input_filename":"scf.in"},
+    {"task_id":"raman","semantic_task_type":"raman","working_directory":"002_raman","input_filename":"raman.in","dependencies":["scf"]},
+    {"task_id":"dynmat","calculation_id":"qe_dynmat_raman","semantic_task_type":"qe_dynmat","working_directory":"003_qe_dynmat_raman","input_filename":"dynmat.in","dependencies":["raman"],"metadata":{"pseudopotentials":{"Si":{"sha256":"digest"}},"task_metadata":{"purpose":"raman","parent_raman_task_id":"raman","expected_mode_count":6}}}
+   ]}
+   (root/"manifest.json").write_text(json.dumps(manifest))
+   record=WorkflowExecutionRecord("request",str(root),{
+    "raman":TaskExecutionRecord("raman",state=TaskState.COMPLETED,stdout_path=str(parent_out)),
+    "dynmat":TaskExecutionRecord("dynmat",state=TaskState.COMPLETED,stdout_path=str(final_out))},execution_id="e")
+   ExecutionStore(root).save(record); calls=[]
+   def parse(route,source,**kwargs):
+    calls.append((route,Path(source),kwargs))
+    provenance=ResultProvenance("request","e","dynmat","quantum_espresso","ph.x",[str(source)],{},"qe.ph.raman")
+    return ScientificResult("RamanResult",ResultStatus.VALID,provenance,arrays={"frequencies_cm1":np.zeros(6),"frequencies_THz":np.zeros(6),"raman_activity":np.zeros(6),"depolarization_ratio":np.zeros(6),"raman_tensors":np.zeros((6,3,3)),"raman_active_mask":np.zeros(6,dtype=bool)})
+   with patch("frontend.services.result_service.DEFAULT_PARSERS.parse",side_effect=parse): outcome=ResultService().parse(root,"e")
+   self.assertEqual(outcome["errors"],())
+   self.assertEqual(len(calls),1)
+   self.assertEqual(calls[0][0],"QE_RAMAN")
+   self.assertEqual(calls[0][1],final_source)
+   self.assertEqual(calls[0][2]["raman_tensor_text"],"PARENT RAMAN TENSORS")
+   self.assertEqual(calls[0][2]["activity_text"],"FINAL ACTIVITIES")
+   self.assertEqual(calls[0][2]["tool_id"],"dynmat.x")
+   self.assertEqual(calls[0][2]["pseudopotentials"]["Si"]["sha256"],"digest")
+   self.assertEqual(calls[0][2]["calculation_settings"]["kpoints"]["mesh"],[12,12,12])
+   self.assertEqual(calls[0][2]["calculation_settings"]["ecutwfc"],40.0)
+   self.assertEqual(calls[0][2]["calculation_settings"]["eth_rps"],1e-9)
+   self.assertEqual(calls[0][2]["calculation_settings"]["asr"],"crystal")
 
  def test_stored_metadata_is_listed_without_qt_parser_access(self):
   with tempfile.TemporaryDirectory() as tmp:

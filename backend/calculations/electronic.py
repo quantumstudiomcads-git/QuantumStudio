@@ -6,7 +6,7 @@ from backend.calculations.registry import registry
 
 _SCF_PARAMETERS = (
     "accuracy", "functional", "pseudopotential", "ecutwfc", "ecutrho",
-    "conv_thr", "kpoints", "spin", "soc", "spin_treatment", "starting_magnetization", "tot_magnetization", "hubbard_terms", "hubbard_projector", "occupations", "smearing", "degauss", "wf_collect", "disk_io",
+    "conv_thr", "kpoints", "scf_mesh", "nbnd", "spin", "soc", "spin_treatment", "starting_magnetization", "tot_magnetization", "hubbard_terms", "hubbard_projector", "occupations", "smearing", "degauss", "wf_collect", "disk_io",
 )
 _POST_SCF_PARAMETERS = (
     "accuracy", "functional", "pseudopotential", "ecutwfc", "ecutrho",

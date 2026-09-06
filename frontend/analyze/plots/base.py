@@ -1,7 +1,8 @@
 from __future__ import annotations
 from pathlib import Path
-from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QCheckBox,QFileDialog,QMessageBox,QDialog,QFormLayout,QComboBox,QDoubleSpinBox,QDialogButtonBox,QLineEdit,QInputDialog,QColorDialog,QSpinBox,QGroupBox,QScrollArea,QLabel)
+from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QCheckBox,QFileDialog,QMessageBox,QDialog,QFormLayout,QComboBox,QDoubleSpinBox,QDialogButtonBox,QLineEdit,QInputDialog,QColorDialog,QSpinBox,QGroupBox,QScrollArea,QLabel,QListWidget,QStackedWidget,QSizePolicy)
 from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from backend.analyze.export import export_csv
@@ -11,33 +12,194 @@ EXPORT_EXTENSIONS = {"PNG (*.png)": ".png", "SVG (*.svg)": ".svg", "PDF (*.pdf)"
 
 def normalize_export_filename(name, extension):
     ext = extension if extension.startswith(".") else "." + extension
-    known = {".png",".jpg",".jpeg",".svg",".pdf",".csv"}
+    known = {".png",".jpg",".jpeg",".svg",".pdf",".csv",".npz"}
     path = Path(str(name))
     return str(path.with_suffix(ext)) if path.suffix.lower() in known else str(path)+ext
 
+class _CategoryCompatibility:
+    """Small read-only compatibility facade for older callers/tests.
+
+    The visible navigation is now a vertical QListWidget, not a horizontal
+    tab bar.
+    """
+    def __init__(self, names):
+        self._names = ("Presets",) + tuple(names)
+    def count(self):
+        return len(self._names)
+    def tabText(self, index):
+        return self._names[index]
+
+
 class PlotAppearanceEditor(QScrollArea):
     def __init__(self, plot, parent=None):
-        super().__init__(parent); self.plot=plot; self.setWidgetResizable(True); body=QWidget(); layout=QVBoxLayout(body)
-        self.controls={}
-        style=QGroupBox("Style"); sf=QFormLayout(style); self.preset=QComboBox(); self.preset.addItem("Default"); self.preset.addItems(plot.presets.names()); sf.addRow("Preset",self.preset)
-        save=QPushButton("Save Appearance Preset…"); load=QPushButton("Load Preset…"); delete=QPushButton("Delete Preset…"); reset=QPushButton("Reset to Default")
-        for button in (save,load,delete,reset): sf.addRow(button)
-        save.clicked.connect(plot.save_appearance_preset); load.clicked.connect(self.load_preset); delete.clicked.connect(self.delete_preset); reset.clicked.connect(plot.reset_appearance); layout.addWidget(style)
-        typography=QGroupBox("Typography"); tf=QFormLayout(typography)
-        self._combo("font_family","Font family",tf,available_font_families())
-        for key,label in (("title_font_size","Title size"),("axis_label_font_size","Axis-label size"),("tick_label_font_size","Tick-label size"),("legend_font_size","Legend size"),("annotation_font_size","Annotation size")): self._spin(key,label,tf,2,48)
-        self._check("title_bold","Title bold",tf); self._check("title_italic","Title italic",tf); self._check("axis_label_bold","Axis-label bold",tf); self._check("axis_label_italic","Axis-label italic",tf); layout.addWidget(typography)
-        figure=QGroupBox("Figure"); ff=QFormLayout(figure); self._spin("figure_width","Width (in)",ff,.1,30,decimals=2); self._spin("figure_height","Height (in)",ff,.1,30,decimals=2); self._color("figure_background","Figure background",ff); self._color("axes_background","Axes background",ff); layout.addWidget(figure)
-        image=QGroupBox("Image / Colorbar"); imf=QFormLayout(image); self._combo("colormap","Colormap",imf,("viridis","plasma","inferno","magma","cividis","RdBu_r","coolwarm")); self._combo("interpolation","Interpolation",imf,("nearest","bilinear","bicubic")); self._spin("color_min","Color minimum",imf,0,1,decimals=5,nullable=True); self._spin("color_max","Color maximum",imf,0,1,decimals=5,nullable=True); self._check("colorbar_visible","Show colorbar",imf); self._line("colorbar_label","Colorbar label",imf); layout.addWidget(image)
-        axes=QGroupBox("Axes"); af=QFormLayout(axes)
-        self._line("x_label_override","X label",af); self._line("y_label_override","Y label",af)
-        for key,label in (("x_min","X minimum"),("x_max","X maximum"),("y_min","Y minimum"),("y_max","Y maximum")): self._spin(key,label,af,-1e6,1e6,decimals=5,nullable=True)
-        self._combo("x_scale","X scale",af,("linear","log")); self._combo("y_scale","Y scale",af,("linear","log")); self._spin("spine_width","Spine width",af,0.1,10,decimals=2); self._combo("major_tick_direction","Major tick direction",af,("in","out")); self._check("minor_ticks_enabled","Minor ticks",af); layout.addWidget(axes)
-        legend=QGroupBox("Legend"); lf=QFormLayout(legend); self._check("show_legend","Show legend",lf); self._combo("legend_location","Position",lf,("best","upper right","upper left","lower right","lower left","center right","center left","lower center","upper center","center")); self._spin("legend_columns","Columns",lf,1,20,decimals=0); self._check("legend_frame","Frame",lf); self._spin("legend_frame_alpha","Frame alpha",lf,0,1,decimals=2); layout.addWidget(legend)
-        grid=QGroupBox("Grid"); gf=QFormLayout(grid); self._check("show_grid","Show grid",gf); self._color("grid_color","Color",gf); self._combo("grid_line_style","Line style",gf,("Solid","Dashed","Dotted","Dash-dot")); self._spin("grid_line_width","Width",gf,.1,10,decimals=2); self._spin("grid_alpha","Opacity",gf,0,1,decimals=2); layout.addWidget(grid)
-        series=QGroupBox("Series"); sf2=QFormLayout(series); self.series_combo=QComboBox(); sf2.addRow("Series",self.series_combo); self._series_control("visible","Visible",sf2); self._series_control("color","Color",sf2); self._series_control("line_width","Line width",sf2); self._series_control("line_style","Line style",sf2,("Solid","Dashed","Dotted","Dash-dot","None")); self._series_control("marker","Marker",sf2,("None","Circle","Square","Triangle Up","Triangle Down","Diamond","Cross","Plus")); self._series_control("marker_size","Marker size",sf2); self._series_control("opacity","Opacity",sf2); all_button=QPushButton("Apply Appearance to All Series"); sf2.addRow(all_button); all_button.clicked.connect(self.apply_all); layout.addWidget(series)
-        references=QGroupBox("Reference Lines"); rf=QFormLayout(references); self.reference_combo=QComboBox(); self.reference_visible=QCheckBox(); self.reference_color=QPushButton(); self.reference_width=QDoubleSpinBox(); self.reference_width.setRange(0,10); self.reference_width.setValue(0.8); self.reference_style=QComboBox(); self.reference_style.addItems(["Solid","Dashed","Dotted","Dash-dot"]); self.reference_opacity=QDoubleSpinBox(); self.reference_opacity.setRange(0,1); self.reference_opacity.setDecimals(2); self.reference_opacity.setValue(1); rf.addRow("Line",self.reference_combo); rf.addRow("Visible",self.reference_visible); rf.addRow("Color",self.reference_color); rf.addRow("Width",self.reference_width); rf.addRow("Style",self.reference_style); rf.addRow("Opacity",self.reference_opacity); layout.addWidget(references); self.reference_combo.currentTextChanged.connect(self._load_reference); self.reference_visible.toggled.connect(self._reference_changed); self.reference_color.clicked.connect(lambda: self._pick_reference_color()); self.reference_width.valueChanged.connect(self._reference_changed); self.reference_style.currentTextChanged.connect(self._reference_changed); self.reference_opacity.valueChanged.connect(self._reference_changed)
-        layout.addStretch(); self.setWidget(body); self._load_state(); self.series_combo.currentIndexChanged.connect(self._load_series)
+        super().__init__(parent)
+        self.plot = plot
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(5)
+
+        # Presets are a compact toolbar shared by every style category.
+        preset_bar = QHBoxLayout()
+        preset_bar.setSpacing(4)
+        preset_bar.addWidget(QLabel("Preset"))
+        self.preset = QComboBox()
+        self.preset.addItem("Default")
+        self.preset.addItems(plot.presets.names())
+        self.preset.setMinimumWidth(100)
+        preset_bar.addWidget(self.preset, 1)
+        save = QPushButton("Save As…")
+        reset = QPushButton("Reset")
+        delete = QPushButton("Delete")
+        save.setToolTip("Save the current visual settings as a reusable preset")
+        delete.setToolTip("Delete the selected user preset")
+        preset_bar.addWidget(save)
+        preset_bar.addWidget(reset)
+        preset_bar.addWidget(delete)
+        layout.addLayout(preset_bar)
+        self._delete_preset_button = delete
+
+        categories = ("Series", "Axes", "Text", "Reference", "Legend", "Figure")
+        self.category_names = categories
+        self.category_tabs = _CategoryCompatibility(categories)
+        self.category_list = QListWidget()
+        self.category_list.addItems(categories)
+        self.category_list.setFixedWidth(96)
+        self.category_list.setSpacing(1)
+        self.category_stack = QStackedWidget()
+        self.style_categories = {}
+        for category in categories:
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(3, 3, 3, 3)
+            page_layout.setSpacing(5)
+            self.style_categories[category] = page_layout
+            self.category_stack.addWidget(page)
+        self.category_list.currentRowChanged.connect(self.category_stack.setCurrentIndex)
+        self.category_list.setCurrentRow(0)
+        category_layout = QHBoxLayout()
+        category_layout.setContentsMargins(0, 0, 0, 0)
+        category_layout.setSpacing(5)
+        category_layout.addWidget(self.category_list, 0)
+        category_layout.addWidget(self.category_stack, 1)
+        layout.addLayout(category_layout, 1)
+
+        self.controls = {}
+        typography = QGroupBox("Typography")
+        tf = QFormLayout(typography)
+        self._combo("font_family", "Font family", tf, available_font_families())
+        for key, label in (("title_font_size", "Title size"), ("axis_label_font_size", "Axis-label size"), ("tick_label_font_size", "Tick-label size"), ("legend_font_size", "Legend size"), ("annotation_font_size", "Annotation size")):
+            self._spin(key, label, tf, 2, 48)
+        self._check("title_bold", "Title bold", tf)
+        self._check("title_italic", "Title italic", tf)
+        self._check("axis_label_bold", "Axis-label bold", tf)
+        self._check("axis_label_italic", "Axis-label italic", tf)
+        self.style_categories["Text"].addWidget(typography)
+
+        figure = QGroupBox("Figure")
+        ff = QFormLayout(figure)
+        self._spin("figure_width", "Export width (in)", ff, .1, 30, decimals=2)
+        self._spin("figure_height", "Export height (in)", ff, .1, 30, decimals=2)
+        self._color("figure_background", "Figure background", ff)
+        self._color("axes_background", "Axes background", ff)
+        self._check("show_title", "Show title", ff)
+        self._line("title", "Title", ff)
+        self.style_categories["Figure"].addWidget(figure)
+        image = QGroupBox("Image / Colorbar")
+        imf = QFormLayout(image)
+        self._combo("colormap", "Colormap", imf, ("viridis", "plasma", "inferno", "magma", "cividis", "RdBu_r", "coolwarm"))
+        self._combo("interpolation", "Interpolation", imf, ("nearest", "bilinear", "bicubic"))
+        self._spin("color_min", "Color minimum", imf, 0, 1, decimals=5, nullable=True)
+        self._spin("color_max", "Color maximum", imf, 0, 1, decimals=5, nullable=True)
+        self._check("colorbar_visible", "Show colorbar", imf)
+        self._line("colorbar_label", "Colorbar label", imf)
+        self.style_categories["Figure"].addWidget(image)
+
+        axes = QGroupBox("Axes")
+        af = QFormLayout(axes)
+        self._line("x_label_override", "X label", af)
+        self._line("y_label_override", "Y label", af)
+        for key, label in (("x_min", "X minimum"), ("x_max", "X maximum"), ("y_min", "Y minimum"), ("y_max", "Y maximum")):
+            self._spin(key, label, af, -1e6, 1e6, decimals=5, nullable=True)
+        self._combo("x_scale", "X scale", af, ("linear", "log"))
+        self._combo("y_scale", "Y scale", af, ("linear", "log"))
+        self._spin("spine_width", "Spine width", af, 0.1, 10, decimals=2)
+        self._combo("major_tick_direction", "Tick direction", af, ("in", "out"))
+        self._check("minor_ticks_enabled", "Minor ticks", af)
+        self.style_categories["Axes"].addWidget(axes)
+        grid = QGroupBox("Grid")
+        gf = QFormLayout(grid)
+        self._check("show_grid", "Show grid", gf)
+        self._color("grid_color", "Color", gf)
+        self._combo("grid_line_style", "Line style", gf, ("Solid", "Dashed", "Dotted", "Dash-dot"))
+        self._spin("grid_line_width", "Width", gf, .1, 10, decimals=2)
+        self._spin("grid_alpha", "Opacity", gf, 0, 1, decimals=2)
+        self.style_categories["Axes"].addWidget(grid)
+
+        series = QGroupBox("Series")
+        sf = QFormLayout(series)
+        self.series_combo = QComboBox()
+        sf.addRow("Series", self.series_combo)
+        self._series_control("visible", "Visible", sf)
+        self._series_control("color", "Color", sf)
+        self._series_control("line_width", "Line width", sf)
+        self._series_control("line_style", "Line style", sf, ("Solid", "Dashed", "Dotted", "Dash-dot", "None"))
+        self._series_control("marker", "Marker", sf, ("None", "Circle", "Square", "Triangle Up", "Triangle Down", "Diamond", "Cross", "Plus"))
+        self._series_control("marker_size", "Marker size", sf)
+        self._series_control("opacity", "Opacity", sf)
+        all_button = QPushButton("Apply to All Series")
+        sf.addRow(all_button)
+        all_button.clicked.connect(self.apply_all)
+        self.style_categories["Series"].addWidget(series)
+
+        references = QGroupBox("Reference Lines")
+        rf = QFormLayout(references)
+        self.reference_combo = QComboBox()
+        self.reference_visible = QCheckBox()
+        self.reference_color = QPushButton()
+        self.reference_width = QDoubleSpinBox()
+        self.reference_width.setRange(0, 10)
+        self.reference_width.setValue(0.8)
+        self.reference_style = QComboBox()
+        self.reference_style.addItems(["Solid", "Dashed", "Dotted", "Dash-dot"])
+        self.reference_opacity = QDoubleSpinBox()
+        self.reference_opacity.setRange(0, 1)
+        self.reference_opacity.setDecimals(2)
+        self.reference_opacity.setValue(1)
+        rf.addRow("Reference", self.reference_combo)
+        rf.addRow("Visible", self.reference_visible)
+        rf.addRow("Color", self.reference_color)
+        rf.addRow("Width", self.reference_width)
+        rf.addRow("Style", self.reference_style)
+        rf.addRow("Opacity", self.reference_opacity)
+        self.style_categories["Reference"].addWidget(references)
+        legend = QGroupBox("Legend")
+        lf = QFormLayout(legend)
+        self._check("show_legend", "Show legend", lf)
+        self._combo("legend_location", "Position", lf, ("best", "upper right", "upper left", "lower right", "lower left", "center right", "center left", "lower center", "upper center", "center"))
+        self._spin("legend_columns", "Columns", lf, 1, 20, decimals=0)
+        self._check("legend_frame", "Frame", lf)
+        self._spin("legend_frame_alpha", "Frame opacity", lf, 0, 1, decimals=2)
+        self.style_categories["Legend"].addWidget(legend)
+        for page_layout in self.style_categories.values():
+            page_layout.addStretch(1)
+
+        save.clicked.connect(self.save_preset_as)
+        reset.clicked.connect(plot.reset_appearance)
+        delete.clicked.connect(self.delete_current_preset)
+        self.preset.currentTextChanged.connect(self._preset_selected)
+        self.reference_combo.currentTextChanged.connect(self._load_reference)
+        self.reference_visible.toggled.connect(self._reference_changed)
+        self.reference_color.clicked.connect(self._pick_reference_color)
+        self.reference_width.valueChanged.connect(self._reference_changed)
+        self.reference_style.currentTextChanged.connect(self._reference_changed)
+        self.reference_opacity.valueChanged.connect(self._reference_changed)
+        self.setWidget(body)
+        self._load_state()
+        self.series_combo.currentIndexChanged.connect(self._load_series)
+
     def _add(self,key,widget,label,form): self.controls[key]=widget; form.addRow(label,widget); widget.destroyed.connect(lambda:None)
     def _spin(self,key,label,form,minimum,maximum,decimals=2,nullable=False):
         if nullable:
@@ -67,13 +229,13 @@ class PlotAppearanceEditor(QScrollArea):
         else: w.valueChanged.connect(self._series_changed)
     def _load_reference(self,*_):
         key=self.reference_combo.currentData() or self.reference_combo.currentText(); value=self.plot.appearance_state.reference_lines.get(key,{})
-        self.reference_visible.setChecked(value.get("visible",True)); self.reference_color.setText(value.get("color","#808080")); self.reference_color.setStyleSheet("background-color: %s; color: transparent;" % self.reference_color.text()); self.reference_width.setValue(float(value.get("line_width",.8))); self.reference_style.setCurrentText({"-":"Solid","--":"Dashed",":":"Dotted","-.":"Dash-dot"}.get(value.get("line_style","--"),"Dashed")); self.reference_opacity.setValue(float(value.get("opacity",1)))
+        self.reference_visible.setChecked(value.get("visible",True)); self._set_color_button(self.reference_color, value.get("color","#808080")); self.reference_color.setProperty("color_value", value.get("color","#808080")); self.reference_width.setValue(float(value.get("line_width",.8))); self.reference_style.setCurrentText({"-":"Solid","--":"Dashed",":":"Dotted","-.":"Dash-dot"}.get(value.get("line_style","--"),"Dashed")); self.reference_opacity.setValue(float(value.get("opacity",1)))
     def _reference_changed(self,*_):
         key=self.reference_combo.currentData() or self.reference_combo.currentText();
-        if key: self.plot.appearance_state.reference_lines[key]={"visible":self.reference_visible.isChecked(),"color":self.reference_color.text(),"line_width":self.reference_width.value(),"line_style":{"Solid":"-","Dashed":"--","Dotted":":","Dash-dot":"-."}.get(self.reference_style.currentText(),"--"),"opacity":self.reference_opacity.value()}; self.plot.redraw()
+        if key: self.plot.appearance_state.reference_lines[key]={"visible":self.reference_visible.isChecked(),"color":self.reference_color.property("color_value") or "#808080","line_width":self.reference_width.value(),"line_style":{"Solid":"-","Dashed":"--","Dotted":":","Dash-dot":"-."}.get(self.reference_style.currentText(),"--"),"opacity":self.reference_opacity.value()}; self.plot.redraw()
     def _pick_reference_color(self):
-        color=QColorDialog.getColor(QColor(self.reference_color.text()),self)
-        if color.isValid(): self.reference_color.setText(color.name()); self._reference_changed()
+        color=QColorDialog.getColor(QColor(self.reference_color.property("color_value") or "#808080"),self)
+        if color.isValid(): self._set_color_button(self.reference_color, color.name()); self.reference_color.setProperty("color_value", color.name()); self._reference_changed()
     def _load_state(self):
         s=self.plot.appearance_state
         for key,w in self.controls.items():
@@ -81,17 +243,20 @@ class PlotAppearanceEditor(QScrollArea):
             value=getattr(s,key)
             if isinstance(w,QComboBox): w.setCurrentText(str(value))
             elif isinstance(w,QCheckBox): w.setChecked(bool(value))
-            elif isinstance(w,QLineEdit): w.setText(str(value))
-            elif isinstance(w,QPushButton): w.setText(str(value))
-            elif isinstance(w,QDoubleSpinBox): w.setValue(float(value or 0))
             elif isinstance(w,QLineEdit): w.setText("" if value is None else str(value))
+            elif isinstance(w,QPushButton): self._set_color_button(w, str(value))
+            elif isinstance(w,QDoubleSpinBox): w.setValue(float(value or 0))
         self._refresh_series(); self.reference_combo.blockSignals(True); self.reference_combo.clear(); self.reference_combo.addItems(list(s.reference_lines)); self.reference_combo.blockSignals(False); self._load_reference()
     def _changed(self,key,value):
         if key in ("x_min","x_max","y_min","y_max") and value == 0 and self.controls[key].specialValueText()=="Auto": value=None
         setattr(self.plot.appearance_state,key,value); self.plot.redraw()
+    def _set_color_button(self, button, color):
+        button.setText("  "+color)
+        button.setProperty("color_value", color)
+        button.setStyleSheet("QPushButton { background-color: %s; color: black; border: 1px solid #68717d; padding: 2px 6px; text-align: left; }" % color)
     def _pick(self,key):
         color=QColorDialog.getColor(QColor(getattr(self.plot.appearance_state,key)),self)
-        if color.isValid(): self.controls[key].setText(color.name()); self.controls[key].setStyleSheet("background-color: %s; color: transparent;" % color.name()); self._changed(key,color.name())
+        if color.isValid(): self._set_color_button(self.controls[key], color.name()); self._changed(key,color.name())
     def _refresh_series(self):
         self.series_combo.blockSignals(True); self.series_combo.clear();
         for key in self.plot.appearance_state.series: self.series_combo.addItem(getattr(self.plot,"series_labels",{}).get(key,key),key); self.series_combo.blockSignals(False); self._load_series()
@@ -107,7 +272,7 @@ class PlotAppearanceEditor(QScrollArea):
             if isinstance(widget,QComboBox): widget.setCurrentText(str(value_for_ui))
             elif isinstance(widget,QCheckBox): widget.setChecked(bool(value_for_ui))
             elif isinstance(widget,QPushButton):
-                color=value_for_ui or "#0072B2"; widget.setText(color); widget.setStyleSheet("background-color: %s; color: transparent;" % color)
+                color=value_for_ui or "#0072B2"; self._set_color_button(widget, color)
             else: widget.setValue(float(value_for_ui or 0))
 
     def _series_changed(self,*_):
@@ -120,7 +285,7 @@ class PlotAppearanceEditor(QScrollArea):
             widget=self.controls["series_"+field]
             if isinstance(widget,QComboBox): current=widget.currentText(); setattr(value,field,style_map.get(current,marker_map.get(current,current)))
             elif isinstance(widget,QCheckBox): setattr(value,field,widget.isChecked())
-            elif isinstance(widget,QPushButton): setattr(value,field,widget.text())
+            elif isinstance(widget,QPushButton): setattr(value,field,widget.property("color_value") or "#0072B2")
             else: setattr(value,field,widget.value())
         self.plot.appearance_state.series[key]=value.__dict__.copy()
         self.plot.redraw()
@@ -131,18 +296,36 @@ class PlotAppearanceEditor(QScrollArea):
         source=dict(self.plot.appearance_state.series.get(key,{}))
         for other in self.plot.appearance_state.series: self.plot.appearance_state.series[other]=dict(source)
         self.plot.redraw()
-    def load_preset(self):
-        name,ok=QInputDialog.getItem(self,"Load Appearance Preset","Preset:",list(self.plot.presets.names()),0,False)
-        if ok and name:
-            self.plot.appearance_state=self.plot.presets.load(name); self._load_state(); self.plot.redraw()
-    def delete_preset(self):
-        name,ok=QInputDialog.getItem(self,"Delete Appearance Preset","Preset:",list(self.plot.presets.names()),0,False)
-        if ok and name: self.plot.presets.delete(name); self.preset.removeItem(self.preset.findText(name))
+    def _refresh_presets(self):
+        current = self.preset.currentText()
+        self.preset.blockSignals(True)
+        self.preset.clear(); self.preset.addItem("Default"); self.preset.addItems(self.plot.presets.names())
+        self.preset.setCurrentText(current if self.preset.findText(current) >= 0 else "Default")
+        self.preset.blockSignals(False)
+        self._delete_preset_button.setEnabled(self.preset.currentText() != "Default")
+    def save_preset_as(self):
+        self.plot.save_appearance_preset()
+        self._refresh_presets()
+    def _preset_selected(self, name):
+        self._delete_preset_button.setEnabled(name != "Default")
+        if name == "Default":
+            self.plot.reset_appearance()
+            return
+        try:
+            self.plot.appearance_state = self.plot.presets.load(name)
+            self._load_state(); self.plot.redraw()
+        except Exception as error:
+            QMessageBox.warning(self, "Appearance", f"Could not load preset: {error}")
+    def delete_current_preset(self):
+        name = self.preset.currentText()
+        if name == "Default": return
+        self.plot.presets.delete(name)
+        self._refresh_presets()
 
 class ScientificPlotWidget(QWidget):
     def __init__(self,parent=None):
-        super().__init__(parent); self.appearance_state=PlotAppearanceState.default(); self.presets=UserPlotPresetStore(); self.figure=Figure(figsize=(self.appearance_state.figure_width,self.appearance_state.figure_height),facecolor="white"); self.canvas=FigureCanvasQTAgg(self.figure); self.axes=self.figure.add_subplot(111); self._result=None
-        layout=QVBoxLayout(self); layout.setContentsMargins(4,4,4,4); layout.addWidget(self.canvas,1)
+        super().__init__(parent); self.appearance_state=PlotAppearanceState.default(); self.presets=UserPlotPresetStore(); self.figure=Figure(figsize=(self.appearance_state.figure_width,self.appearance_state.figure_height),facecolor="white"); self.canvas=FigureCanvasQTAgg(self.figure); self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Expanding); self.canvas.setMinimumSize(0,0); self.axes=self.figure.add_subplot(111); self._result=None
+        layout=QVBoxLayout(self); layout.setContentsMargins(4,4,4,4); layout.setSpacing(4); self.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Expanding); self.interaction_toolbar=QWidget(self); self.interaction_layout=QHBoxLayout(self.interaction_toolbar); self.interaction_layout.setContentsMargins(2,2,2,2); self.interaction_layout.setSpacing(4); self.interaction_toolbar.setVisible(False); layout.addWidget(self.interaction_toolbar,0); layout.addWidget(self.canvas,1)
     def create_appearance_editor(self,parent=None): return PlotAppearanceEditor(self,parent)
     def edit_appearance(self):
         return None
@@ -204,11 +387,11 @@ class ScientificPlotWidget(QWidget):
         if hasattr(artist,"set_markersize"): artist.set_markersize(style.marker_size)
         if hasattr(artist,"set_alpha"): artist.set_alpha(style.opacity)
     def apply_appearance(self):
-        s=self.appearance_state; self.figure.set_size_inches(s.figure_width,s.figure_height,forward=True); self.figure.set_facecolor(s.figure_background); self.axes.set_facecolor(s.axes_background); self.axes.tick_params(direction=s.major_tick_direction,labelsize=s.tick_label_font_size,length=s.major_tick_length,width=s.major_tick_width,colors="black",which="major"); self.axes.tick_params(length=s.minor_tick_length,width=s.minor_tick_width,which="minor"); self.axes.minorticks_on() if s.minor_ticks_enabled else self.axes.minorticks_off(); self.axes.set_xscale(s.x_scale); self.axes.set_yscale(s.y_scale)
+        s=self.appearance_state; self.figure.set_facecolor(s.figure_background); self.axes.set_facecolor(s.axes_background); self.axes.tick_params(direction=s.major_tick_direction,labelsize=s.tick_label_font_size,length=s.major_tick_length,width=s.major_tick_width,colors="black",which="major"); self.axes.tick_params(length=s.minor_tick_length,width=s.minor_tick_width,which="minor"); self.axes.minorticks_on() if s.minor_ticks_enabled else self.axes.minorticks_off(); self.axes.set_xscale(s.x_scale); self.axes.set_yscale(s.y_scale)
         if s.x_min is not None and s.x_max is not None:self.axes.set_xlim(s.x_min,s.x_max)
         if s.y_min is not None and s.y_max is not None:self.axes.set_ylim(s.y_min,s.y_max)
         self.axes.title.set_fontfamily(s.font_family); self.axes.title.set_fontsize(s.title_font_size); self.axes.title.set_fontweight("bold" if s.title_bold else "normal"); self.axes.title.set_fontstyle("italic" if s.title_italic else "normal"); self.axes.title.set_visible(s.show_title)
-        for label in (self.axes.xaxis.label,self.axes.yaxis.label): label.set_fontfamily(s.font_family); label.set_fontsize(s.axis_label_font_size); label.set_fontweight("bold" if s.axis_label_bold else "normal"); label.set_fontstyle("italic" if s.axis_label_italic else "normal")
+        for label in (self.axes.xaxis.label,self.axes.yaxis.label): label.set_fontfamily(s.font_family); label.set_fontsize(s.axis_label_font_size); label.set_fontweight("bold" if s.axis_label_bold else "normal"); label.set_fontstyle("italic" if s.axis_label_italic else "normal"); label.set_color("black")
         if s.x_label_override:self.axes.set_xlabel(s.x_label_override)
         if s.y_label_override:self.axes.set_ylabel(s.y_label_override)
         for label in self.axes.get_xticklabels()+self.axes.get_yticklabels(): label.set_fontfamily(s.font_family); label.set_fontsize(s.tick_label_font_size); label.set_color("black")

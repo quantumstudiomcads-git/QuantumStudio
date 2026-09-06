@@ -101,7 +101,12 @@ def reconcile_catalog(
             support = ExecutionSupport.UNAVAILABLE
             errors.append(f"Frontend calculation '{entry.id}' has unknown support status '{entry.status}'.")
         dependencies = tuple(registry.get(entry.id).requires) if has_backend else ()
-        descriptors.append(CalculationDescriptor(entry, support, support is ExecutionSupport.IMPLEMENTED, dependencies))
+        backend_supported = support is ExecutionSupport.IMPLEMENTED or (
+            support is ExecutionSupport.PARTIAL
+            and has_backend
+            and entry.executable_while_partial
+        )
+        descriptors.append(CalculationDescriptor(entry, support, backend_supported, dependencies))
 
     report = CatalogReconciliationReport(
         frontend_count=len(entries), backend_count=len(backend), descriptors=tuple(descriptors),

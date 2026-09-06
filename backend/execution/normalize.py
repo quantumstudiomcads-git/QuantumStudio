@@ -62,6 +62,9 @@ def normalize_adapter_tasks(
             input_files=(input_task.input_filename,),
             artifact_inputs=tuple(metadata.get("artifact_inputs", ())),
             artifact_outputs=tuple(metadata.get("artifact_outputs", ())),
+            artifact_declarations=tuple(metadata.get("artifact_declarations", ())),
+            artifact_requirements=tuple(metadata.get("artifact_requirements", ())),
+            metadata=metadata,
         ))
     return GeneratedWorkflow(
         request_id=request_id,

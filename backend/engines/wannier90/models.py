@@ -21,17 +21,35 @@ class WannierInputSettings:
     spinors: bool = False
     bands_plot: bool = False
     bands_plot_format: str | None = None
+    subspace_method: str = "ENERGY_DISENTANGLEMENT"
+    auto_projections: bool = False
+    scdm_proj: bool = False
+    scdm_entanglement: str = ""
+    scdm_mu: float | None = None
+    scdm_sigma: float | None = None
+    use_ws_distance: bool = False
 
     @classmethod
     def from_parameters(cls, values: Mapping[str, Any]) -> "WannierInputSettings":
-        missing = [key for key in ("num_wann", "num_bands", "projections", "mp_grid") if key not in values]
+        scdm = str(values.get("subspace_method", "")).upper() == "SCDM_ERFC"
+        required = ["num_wann", "num_bands"]
+        if not scdm:
+            required.extend(("projections", "mp_grid"))
+        elif "mp_grid" not in values and "nk_coarse" not in values:
+            required.append("mp_grid")
+        missing = [key for key in required if key not in values]
         if missing:
             raise WannierInputError("Wannierization requires explicit " + ", ".join(missing) + ".")
-        projections = values["projections"]
+        projections = values.get("projections", ())
         if isinstance(projections, str): projections = (projections,)
-        if not isinstance(projections, Sequence) or not projections or any(not isinstance(item, str) or not item.strip() for item in projections):
+        if not isinstance(projections, Sequence) or (not projections and not scdm) or any(not isinstance(item, str) or not item.strip() for item in projections):
             raise WannierInputError("Wannier projections must be a non-empty list of strings.")
-        grid = values["mp_grid"]
+        if scdm and projections:
+            raise WannierInputError("SCDM_ERFC cannot be combined with manual projections.")
+        if scdm:
+            from backend.engines.epw.scdm import validate_scdm_contract
+            validate_scdm_contract(num_wann=int(values.get("num_wann", 0)), auto_projections=bool(values.get("auto_projections", False)), scdm_proj=bool(values.get("scdm_proj", False)), entanglement=str(values.get("scdm_entanglement", "")), mu_eV=float(values.get("scdm_mu")), sigma_eV=float(values.get("scdm_sigma")))
+        grid = values.get("mp_grid", values.get("nk_coarse"))
         if not isinstance(grid, Sequence) or isinstance(grid, (str, bytes)) or len(grid) != 3:
             raise WannierInputError("Wannier mp_grid must contain three positive integers.")
         try:
@@ -51,6 +69,6 @@ class WannierInputSettings:
                 if not all(isfinite(item) for item in (kwargs[low], kwargs[high])) or kwargs[low] > kwargs[high]:
                     raise WannierInputError(f"Wannier {low} must not exceed {high}.")
         for key in ("num_iter", "dis_num_iter"):
-            if kwargs[key] is not None and int(kwargs[key]) < 1: raise WannierInputError(f"Wannier {key} must be positive.")
+            if kwargs[key] is not None and int(kwargs[key]) < (1 if key == "num_iter" else 0): raise WannierInputError(f"Wannier {key} must be non-negative." if key == "dis_num_iter" else f"Wannier {key} must be positive.")
             if kwargs[key] is not None: kwargs[key] = int(kwargs[key])
-        return cls(num_wann, num_bands, tuple(projections), grid, spinors=bool(values.get("spinors", values.get("soc", False))), bands_plot=bool(values.get("bands_plot", False)), **kwargs)
+        return cls(num_wann, num_bands, tuple(projections), grid, spinors=bool(values.get("spinors", values.get("soc", False))), bands_plot=bool(values.get("bands_plot", False)), subspace_method=str(values.get("subspace_method", "ENERGY_DISENTANGLEMENT")), auto_projections=bool(values.get("auto_projections", False)), scdm_proj=bool(values.get("scdm_proj", False)), scdm_entanglement=str(values.get("scdm_entanglement", "")), scdm_mu=values.get("scdm_mu"), scdm_sigma=values.get("scdm_sigma"), use_ws_distance=bool(values.get("use_ws_distance", False)), **kwargs)

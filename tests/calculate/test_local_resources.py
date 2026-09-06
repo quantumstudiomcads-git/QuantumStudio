@@ -42,6 +42,12 @@ class LocalResourceTests(unittest.TestCase):
             result=LocalExecutionManager(LocalToolConfiguration(tool_paths={"pw.x":tool},mpi_launcher=launcher,cpu_cores=4,omp_threads=3)).execute(flow(root,task))
             self.assertEqual(json.loads((root/"scf"/"mpi-argv.json").read_text())[:3],["-np","4",tool])
             self.assertIn("tool 3",Path(result.tasks["scf"].stdout_path).read_text())
+            runtime=result.tasks["scf"]
+            self.assertEqual(runtime.requested_cores,4)
+            self.assertEqual(runtime.actual_mpi_ranks,4)
+            self.assertEqual(runtime.omp_threads_per_rank,3)
+            self.assertEqual(runtime.mpi_launcher,launcher)
+            self.assertEqual(runtime.command_argv[:2],[launcher,"-np"])
 
     def test_missing_launcher_fails_multi_rank_but_non_mpi_is_direct(self):
         with tempfile.TemporaryDirectory() as tmp:

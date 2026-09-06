@@ -49,3 +49,25 @@ def export_comparison(model, directory, *, operation="overlay", reference="Absol
         manifest["series"].append({"order":index,"label":series.label,"request_id":series.request_id,"execution_id":series.execution_id,"status":series.status,"functional":series.functional,"structure_fingerprint":p.structure_fingerprint,"units":series.units})
     (root/"comparison.json").write_text(json.dumps(manifest,indent=2,sort_keys=True),encoding="utf-8")
     return root
+
+def export_optical_bundle(result, directory):
+    """Export the raw and derived optical spectra as a reproducible bundle."""
+    import json
+    import numpy as np
+    root = Path(directory); root.mkdir(parents=True, exist_ok=True)
+    raw = result if result.result_type == "OpticalDielectricResult" else None
+    if raw is None:
+        raise ValueError("Optical bundle export requires OpticalDielectricResult.")
+    derived = None
+    from backend.results.optical import derive_optical_properties
+    derived = derive_optical_properties(raw)
+    export_csv(raw, root / "dielectric.csv")
+    export_csv(derived, root / "optical_constants.csv")
+    for filename, prefix in (("absorption.csv", "absorption_coefficient_cm1_"), ("loss_function.csv", "loss_function_")):
+        with (root / filename).open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.writer(stream); writer.writerow(["energy_eV", "xx", "yy", "zz"])
+            energy = np.asarray(derived.arrays["energy_eV"], float)
+            writer.writerows(zip(energy, *(np.asarray(derived.arrays[prefix+d], float) for d in ("xx", "yy", "zz"))))
+    np.savez(root / "optical.npz", **{key: np.asarray(value) for key, value in {**raw.arrays, **derived.arrays}.items()})
+    (root / "metadata.json").write_text(json.dumps({"raw_result_id": raw.result_id, "derived_result_id": derived.result_id, "units": derived.metadata.get("units", {}), "provenance": raw.provenance.__dict__}, indent=2, default=str, sort_keys=True), encoding="utf-8")
+    return root

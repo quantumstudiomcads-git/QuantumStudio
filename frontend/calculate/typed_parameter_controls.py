@@ -1,7 +1,8 @@
 """Small schema-keyed Qt controls that preserve JSON-compatible request values."""
 from __future__ import annotations
+import json
 
-from PySide6.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout, QLineEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 
 class HubbardTermsControl(QWidget):
@@ -31,7 +32,35 @@ class HubbardTermsControl(QWidget):
             terms.append({"species":species,"manifold":manifold,"u_eV":u})
         return terms
 
-MESH_KEYS = {"kpoints", "dense_kpoints", "qmesh", "mp_grid", "transport_k_mesh", "exx_q_mesh", "coarse_k_mesh", "coarse_q_mesh", "fine_k_mesh", "fine_q_mesh"}
+
+class SpeciesMagnetizationControl(QWidget):
+    """Typed QE starting-magnetization editor for collinear spin only."""
+    def __init__(self, value=None, species=(), parent=None):
+        super().__init__(parent)
+        form=QFormLayout(self); form.setContentsMargins(0,0,0,0); form.setSpacing(4)
+        supplied=value if isinstance(value,dict) else {}
+        self.boxes={}
+        for label in dict.fromkeys(str(item) for item in species if str(item)):
+            box=QDoubleSpinBox(self); box.setRange(-1.0,1.0); box.setDecimals(3); box.setSingleStep(0.01); box.setValue(float(supplied.get(label,0.0) or 0.0)); form.addRow(label,box); self.boxes[label]=box
+    def value(self):
+        return {label:box.value() for label,box in self.boxes.items()}
+
+
+
+class OptionalDoubleControl(QWidget):
+    """Nullable typed floating-point value for optional scientific constraints."""
+    def __init__(self, value=None, parent=None):
+        super().__init__(parent)
+        layout=QHBoxLayout(self); layout.setContentsMargins(0,0,0,0); layout.setSpacing(4)
+        self.enabled=QCheckBox("Enabled",self); self.box=QDoubleSpinBox(self); self.box.setRange(-1e6,1e6); self.box.setDecimals(6); self.box.setSingleStep(0.1)
+        self.enabled.setChecked(value is not None and value != "")
+        if self.enabled.isChecked(): self.box.setValue(float(value))
+        self.box.setEnabled(self.enabled.isChecked()); self.enabled.toggled.connect(self.box.setEnabled); layout.addWidget(self.enabled); layout.addWidget(self.box,1)
+    def value(self): return self.box.value() if self.enabled.isChecked() else None
+
+
+MESH_KEYS = {"kpoints", "dense_kpoints", "qmesh", "mp_grid", "transport_k_mesh", "exx_q_mesh", "coarse_k_mesh", "coarse_q_mesh", "fine_k_mesh", "fine_q_mesh", "dos_mesh"}
+JSON_NUMERIC_KEYS = {"temperatures", "chemical_potentials", "carrier_concentrations", "chemical_potential_range", "carrier_concentration_range", "interpolation"}
 ENUMS = {
     "occupations": ("fixed", "smearing", "tetrahedra", "tetrahedra_opt"),
     "smearing": ("gaussian", "mp", "mv", "fd"),
@@ -47,8 +76,18 @@ def _mesh(value):
     return list(value) if isinstance(value, (list, tuple)) and len(value)==3 else [1, 1, 1]
 
 
-def make_control(key, value, parent=None):
+def make_control(key, value, parent=None, *, structure=None):
     if key == "hubbard_terms": return HubbardTermsControl(value, parent)
+    if key == "tot_magnetization": return OptionalDoubleControl(value, parent)
+    if key == "degauss":
+        control=QDoubleSpinBox(parent); control.setRange(1e-9, 1e6); control.setDecimals(6); control.setSingleStep(0.01)
+        try: numeric=float(value)
+        except (TypeError, ValueError): numeric=0.01
+        control.setValue(numeric if numeric > 0 else 0.01)
+        return control
+    if key == "starting_magnetization":
+        species=[atom.get("element", "") for atom in (structure or {}).get("atoms", ()) if isinstance(atom, dict)]
+        return SpeciesMagnetizationControl(value, species, parent)
     if key in MESH_KEYS:
         root=QWidget(parent); layout=QHBoxLayout(root); layout.setContentsMargins(0,0,0,0); layout.setSpacing(4); boxes=[]
         for index, item in enumerate(_mesh(value)):
@@ -57,7 +96,10 @@ def make_control(key, value, parent=None):
         root._mesh_boxes=boxes
         return root
     if key in ENUMS:
-        control=QComboBox(parent); control.addItems(ENUMS[key]); control.setCurrentText(str(value or ENUMS[key][0])); return control
+        control=QComboBox(parent); control.addItems(ENUMS[key]); current=str(value or ENUMS[key][0]);
+        if key == "relaxation_time_model" and current.startswith("UNSPECIFIED_"): current="unspecified"
+        elif key == "relaxation_time_model" and current.startswith("CONSTANT_"): current="constant"
+        control.setCurrentText(current); return control
     if key in {"spin", "soc", "lo_to_splitting", "spinors", "bands_plot", "ace"} or isinstance(value,bool):
         control=QCheckBox(parent); control.setChecked(bool(value)); return control
     if isinstance(value,int) and not isinstance(value,bool):
@@ -69,9 +111,19 @@ def make_control(key, value, parent=None):
 
 def control_value(key, control):
     if key == "hubbard_terms": return control.value()
+    if key == "starting_magnetization": return control.value()
+    if key == "tot_magnetization": return control.value()
     if key in MESH_KEYS: return [box.value() for box in control._mesh_boxes]
-    if isinstance(control,QComboBox): return control.currentText()
+    if isinstance(control,QComboBox):
+        value=control.currentText()
+        if key == "relaxation_time_model": return "UNSPECIFIED_RELAXATION_TIME" if value == "unspecified" else "CONSTANT_RELAXATION_TIME"
+        return value
     if isinstance(control,QCheckBox): return control.isChecked()
     if isinstance(control,QSpinBox): return control.value()
     if isinstance(control,QDoubleSpinBox): return control.value()
-    return control.text().strip()
+    text=control.text().strip()
+    if key in JSON_NUMERIC_KEYS:
+        if not text: return None
+        try: return json.loads(text)
+        except json.JSONDecodeError: return text
+    return text

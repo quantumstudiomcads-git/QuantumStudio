@@ -23,12 +23,25 @@ def _path(value, label):
         points.append({"label":str(item.get("label","")),"coordinates":[float(x) for x in item["coordinates"]],"points":count})
     return points
 
+def _expand_phonon_path(path, points_per_segment=24):
+    if not isinstance(path, list) or len(path) < 2: return path
+    expanded = []
+    for index, point in enumerate(path[:-1]):
+        start = point["coordinates"]; end = path[index + 1]["coordinates"]
+        count = max(2, int(point.get("points", points_per_segment)))
+        for step in range(count):
+            if index and step == 0: continue
+            fraction = step / float(count - 1)
+            expanded.append({"coordinates": [float(a) + fraction * (float(b) - float(a)) for a, b in zip(start, end)]})
+    expanded.append({"coordinates": [float(value) for value in path[-1]["coordinates"]]})
+    return expanded
+
 def expand(request, tasks, parameters):
     selected=set(request.selected_calculations); by={task.calculation_id:task for task in tasks}; scf=by.get("scf")
     if not scf: return tasks
     result=[task for task in tasks if task.calculation_id not in {"bands","dos","pdos","charge_density","spin_density","electron_localization","electrostatic_potential","work_function","fermi_surface","hubbard_u","band_gap","effective_mass","bader_charge","charge_transfer","mulliken_population","magnetic_moment","orbital_texture","band_decomposed_charge","hybrid_electronic","phonon_dos"}]
     def add(name, semantic, tool, deps, params, inputs, outputs, metadata=None):
-        signature=_sig({"semantic":semantic,"calculation_id":name,"purpose":(metadata or {}).get("purpose"),"structure":request.structure,"pseudopotentials":_pseudo_identity(request.parameters.get("pseudopotentials",{})),"parameters":params}); task=PlannedTask(id=f"{request.id}:{semantic}:{signature}",calculation_id=name,semantic_task_type=semantic,engine_id="quantum_espresso",tool_id=tool,parameter_signature=signature,depends_on_task_ids=tuple(dep.id for dep in deps),parameters=params,structure_reference="request_snapshot",artifact_inputs=tuple(inputs),artifact_outputs=tuple(outputs),metadata=metadata or {}); result.append(task); return task
+        signature=_sig({"semantic":semantic,"calculation_id":name,"purpose":(metadata or {}).get("purpose"),"structure":request.structure,"pseudopotentials":_pseudo_identity(request.parameters.get("pseudopotentials",{})),"parameters":params,"dependency_signatures":[dep.parameter_signature for dep in deps]}); task=PlannedTask(id=f"{request.id}:{semantic}:{signature}",calculation_id=name,semantic_task_type=semantic,engine_id="quantum_espresso",tool_id=tool,parameter_signature=signature,depends_on_task_ids=tuple(dep.id for dep in deps),parameters=params,structure_reference="request_snapshot",artifact_inputs=tuple(inputs),artifact_outputs=tuple(outputs),metadata=metadata or {}); result.append(task); return task
     if set(selected) & {"bands", "band_gap", "effective_mass", "hybrid_electronic"}:
         values=dict(parameters["bands"]); path=_path(values.get("kpath"),"Band structure")
         bands_purpose = "band_gap" if "band_gap" in selected else "effective_mass" if "effective_mass" in selected else "hybrid_electronic" if "hybrid_electronic" in selected else "bands"
@@ -87,7 +100,27 @@ def expand(request, tasks, parameters):
         ph=by.get("phonons")
         if ph is None: raise InvalidQEParameterError("phonon_dos requires phonons.")
         result=[task for task in result if task is not ph]
-        ph=add("qe_ph","qe_ph","ph.x",[scf],parameters["phonons"],["qe_save"],["QE_DYNAMICAL_MATRIX"])
-        q2r=add("qe_q2r","qe_q2r","q2r.x",[ph],{"fildyn":"dynamical-matrix","flfrc":"force_constants","zasr":"simple"},["QE_DYNAMICAL_MATRIX"],["FORCE_CONSTANTS"])
-        add("qe_matdyn_dos","qe_matdyn","matdyn.x",[q2r],{"mode":"dos","mesh":parameters["phonon_dos"].get("qmesh") or parameters["phonons"].get("qmesh")},["FORCE_CONSTANTS"],["PHONON_DOS_RAW_DATA"])
+        qmesh=parameters.get("phonon_dos",{}).get("qmesh") or parameters.get("qmesh") or parameters.get("phonons",{}).get("qmesh") or [2,2,2]
+        phonon_config = parameters.get("phonon_dos", {}) if isinstance(parameters.get("phonon_dos", {}), dict) else {}
+        if not isinstance(qmesh,(list,tuple)) or len(qmesh)!=3 or any(int(x)<1 for x in qmesh): raise InvalidQEParameterError("phonon_dos qmesh must contain three positive integers.")
+        ph_values=dict(parameters["phonons"]); ph_values.pop("q_point",None); ph_values["qmesh"]=[int(x) for x in qmesh]
+        if phonon_config.get("tr2_ph") is not None:
+            ph_values["tr2_ph"] = float(phonon_config["tr2_ph"])
+        # E2 harmonic phonons (including DFT+U) are ordinary dynamical response
+        # calculations; polar/LO-TO response belongs to the explicit polar DAG.
+        ph_values["epsil"]=False
+        ph=add("qe_ph","qe_ph","ph.x",[scf],ph_values,["qe_save"],["QE_DYNAMICAL_MATRIX_SET"],{"purpose":"harmonic_qmesh","qmesh":list(qmesh),"expected_q_count":int(qmesh[0])*int(qmesh[1])*int(qmesh[2])})
+        q2r=add("qe_q2r","qe_q2r","q2r.x",[ph],{"fildyn":"dynamical-matrix","flfrc":"force_constants","zasr":"crystal"},["QE_DYNAMICAL_MATRIX_SET"],["FORCE_CONSTANTS"],{"purpose":"harmonic_ifc","qmesh":list(qmesh),"asr":"crystal"})
+        dispersion_path=phonon_config.get("phonon_path") or parameters.get("phonon_path")
+        path_points=int(phonon_config.get("path_points_per_segment", parameters.get("path_points_per_segment", 24)))
+        if dispersion_path:
+            original_path = dispersion_path
+            dispersion_path=_expand_phonon_path(dispersion_path, path_points)
+            vertex_indices=[]; cursor=0
+            for vertex in original_path[:-1]:
+                vertex_indices.append(cursor); cursor += max(2, int(vertex.get("points", path_points))) - 1
+            vertex_indices.append(len(dispersion_path) - 1)
+            add("qe_matdyn_dispersion","qe_matdyn","matdyn.x",[q2r],{"mode":"dispersion","flfrc":"force_constants","flfrq":"phonon_dispersion.freq","asr":"crystal","q_path":dispersion_path},["FORCE_CONSTANTS"],["PHONON_DISPERSION_RAW_DATA"],{"purpose":"phonon_dispersion","asr":"crystal","q_coordinate":"crystal_fractional","qmesh":list(qmesh),"expected_mode_count":3 * len(request.structure.get("atoms",())),"cell_A":request.structure.get("cell"),"high_symmetry_labels":[point.get("label","") for point in original_path],"high_symmetry_indices":vertex_indices,"path_points_per_segment":path_points,"path_convention":parameters.get("phonon_path_convention", "Quantum Studio canonical path recommendation")})
+        dos_values={"mode":"dos","flfrc":"force_constants","fldos":"phonon_dos.dat","asr":"crystal","mesh":list(phonon_config.get("dos_mesh") or parameters.get("dos_mesh") or [12,12,12])}
+        add("qe_matdyn_dos","qe_matdyn","matdyn.x",[q2r],dos_values,["FORCE_CONSTANTS"],["PHONON_DOS_RAW_DATA"],{"purpose":"phonon_dos","asr":"crystal","normalization":"3N modes per primitive cell","frequency_unit":"cm^-1","qmesh":list(qmesh),"expected_mode_count":3 * len(request.structure.get("atoms",()))})
     return result

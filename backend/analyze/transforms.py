@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 def result_kind(result):
-    return {"BandStructureResult":"Band Structure", "DOSResult":"Density of States", "PDOSResult":"Projected DOS", "PhononDOSResult":"Phonon DOS", "GroundStateResult":"Ground State", "RelaxationResult":"Relaxation", "WannierizationResult":"Wannier", "ElectronPhononResult":"EPW", "VolumetricResult":"Volumetric Field", "WorkFunctionResult":"Work Function", "BandGapResult":"Band Gap Analysis", "EffectiveMassResult":"Effective Mass", "BaderChargeResult":"Bader Charge Analysis", "ChargeTransferResult":"Atomic Charge Transfer (Bader)", "LowdinPopulationResult":"Löwdin Population Analysis", "MagneticMomentResult":"Magnetic Moments", "OrbitalCharacterResult":"Orbital Character / Orbital Texture"}.get(result.result_type, result.result_type)
+    return {"BandStructureResult":"Band Structure", "DOSResult":"Density of States", "PDOSResult":"Projected DOS", "PhononDOSResult":"Phonon DOS", "GroundStateResult":"Ground State", "RelaxationResult":"Relaxation", "WannierizationResult":"Wannier", "ElectronPhononResult":"EPW", "VolumetricResult":"Volumetric Field", "WorkFunctionResult":"Work Function", "BandGapResult":"Band Gap Analysis", "EffectiveMassResult":"Effective Mass", "BaderChargeResult":"Bader Charge Analysis", "ChargeTransferResult":"Atomic Charge Transfer (Bader)", "LowdinPopulationResult":"Löwdin Population Analysis", "MagneticMomentResult":"Magnetic Moments", "OrbitalCharacterResult":"Orbital Character / Orbital Texture", "TransportResult":"BoltzTraP2 Transport","GammaPhononResult":"Γ-Point Phonons","PhononDispersionResult":"Phonon Dispersion","PhononDOSResult":"Phonon DOS","BornEffectiveChargeResult":"Born Effective Charges","PolarElectronicDielectricResult":"Electronic Dielectric Tensor", "LOTOResult":"LO–TO Splitting", "IRResult":"Infrared Spectrum", "RamanResult":"Raman Spectrum", "OpticalDielectricResult":"Complex Dielectric Function", "OpticalPropertiesResult":"Optical Constants"}.get(result.result_type, result.result_type)
 
 def _values(result, key):
     value = result.arrays.get(key, ())
@@ -10,6 +10,31 @@ def _values(result, key):
 
 def tabular_data(result):
     t=result.result_type
+    if t=="OpticalDielectricResult":
+        import numpy as np
+        energy=np.asarray(result.arrays.get("energy_eV",()),dtype=float); columns=["energy_eV"]; values=[energy]
+        for direction in ("xx","yy","zz"):
+            for part in ("epsilon1","epsilon2"):
+                key=f"{part}_{direction}"
+                if key in result.arrays: columns.append(key); values.append(np.asarray(result.arrays[key],dtype=float))
+        return columns, [[column[i] for column in values] for i in range(len(energy))]
+    if t=="OpticalPropertiesResult":
+        import numpy as np
+        energy=np.asarray(result.arrays.get("energy_eV",()),dtype=float); columns=["energy_eV"]; values=[energy]
+        for direction in ("xx","yy","zz"):
+            for quantity in ("n","kappa","absorption_cm^-1","reflectivity","loss"):
+                key=f"{quantity}_{direction}"
+                if key in result.arrays: columns.append(key); values.append(np.asarray(result.arrays[key],dtype=float))
+        return columns, [[column[i] for column in values] for i in range(len(energy))]
+
+    if t=="TransportResult":
+        import numpy as np
+        x=_values(result,"chemical_potential_eV"); temps=np.asarray(result.arrays.get("temperatures_K",()),float); carrier=np.asarray(result.arrays.get("carrier_concentration_cm3",()),float); values=np.asarray(result.arrays.get("seebeck",()),float)[0,:,0,0] if "seebeck" in result.arrays else ()
+        return ["temperature_K","chemical_potential_eV","carrier_concentration_cm3","seebeck_xx_V_K"], [[temps[0],x[i],carrier[0,i],values[i]] for i in range(len(x))]
+    if t=="PhononDOSResult":
+        x=_values(result,"frequency_cm1"); values=_values(result,"dos"); return ["frequency_cm1","dos"], [[x[i],values[i]] for i in range(min(len(x),len(values)))]
+    if t=="PhononDispersionResult":
+        q=_values(result,"q_distance"); values=result.arrays.get("frequencies_cm1",()); values=values.tolist() if hasattr(values,"tolist") else values; n=len(values[0]) if values else 0; return ["q_distance"]+[f"branch_{i+1}" for i in range(n)], [[q[i],*values[i]] for i in range(min(len(q),len(values)))]
     if t=="BandStructureResult":
         x=_values(result,"path_coordinate") or _values(result,"kpoint") or _values(result,"energy")
         energies=result.arrays.get("energies")
@@ -77,6 +102,37 @@ def tabular_data(result):
         centres=_values(result,"centres_A"); spreads=_values(result,"individual_spreads_A2")
         if centres: return ["wannier_index","centre_x_A","centre_y_A","centre_z_A","spread_A2"], [[index+1,*centre,spreads[index] if index<len(spreads) else ""] for index,centre in enumerate(centres)]
         return ["quantity","value"], [["num_wann",result.metadata.get("num_wann","")],["final_spread_A2",result.scalars.get("final_spread",{}).get("value","")]]
+    if t=="RamanResult":
+        import numpy as np
+        cm=np.asarray(result.arrays.get("frequencies_cm1",()),float); thz=np.asarray(result.arrays.get("frequencies_THz",()),float); activity=np.asarray(result.arrays.get("raman_activity",()),float); active=np.asarray(result.arrays.get("raman_active_mask",()),bool); depol=np.asarray(result.arrays.get("depolarization_ratio",()),float)
+        return ["mode","frequency_cm1","frequency_THz","raman_activity_A4_per_amu","active","depolarization_ratio"], [[i+1,cm[i],thz[i],activity[i],bool(active[i]),depol[i]] for i in range(len(cm))]
+    if t=="GammaPhononResult":
+        import numpy as np
+        cm=np.asarray(result.arrays.get("frequencies_cm1",()),float); thz=np.asarray(result.arrays.get("frequencies_THz",()),float); mask=np.asarray(result.arrays.get("imaginary_mode_mask",np.zeros(len(cm),dtype=bool))); return ["mode","frequency_cm1","frequency_THz","imaginary"], [[i+1,cm[i],thz[i],bool(mask[i])] for i in range(len(cm))]
+    if t=="BornEffectiveChargeResult":
+        import numpy as np
+        tensor=np.asarray(result.arrays.get("born_effective_charges",()),float)
+        elements=list(result.metadata.get("atom_elements",()))
+        rows=[]
+        for atom in range(len(tensor)):
+            for alpha in range(3):
+                for beta in range(3):
+                    rows.append([atom+1, elements[atom] if atom < len(elements) else "", "xyz"[alpha], "xyz"[beta], tensor[atom,alpha,beta]])
+        return ["atom_index","element","polarization","displacement","Zstar_e"], rows
+    if t=="PolarElectronicDielectricResult":
+        import numpy as np
+        tensor=np.asarray(result.arrays.get("epsilon_infinity",()),float)
+        return ["polarization","displacement","epsilon_infinity"], [["xyz"[alpha],"xyz"[beta],tensor[alpha,beta]] for alpha in range(3) for beta in range(3)]
+    if t=="LOTOResult":
+        import numpy as np
+        cm=np.asarray(result.arrays.get("frequencies_nonanalytic_cm1",()),float); ref=np.asarray(result.arrays.get("frequencies_uncorrected_cm1",()),float); shifts=np.asarray(result.arrays.get("frequency_shifts_cm1",()),float)
+        direction=np.asarray(result.metadata.get("direction_unit_cartesian", ()),float)
+        classifications=list(result.metadata.get("classifications", ()))
+        return ["direction_x","direction_y","direction_z","mode","frequency_uncorrected_cm1","frequency_nonanalytic_cm1","frequency_shift_cm1","classification"], [[*(direction.tolist() if direction.size == 3 else ("","","")),i+1,ref[i],cm[i],shifts[i],classifications[i] if i < len(classifications) else "ambiguous"] for i in range(min(len(cm),len(ref),len(shifts)))]
+    if t=="IRResult":
+        import numpy as np
+        cm=np.asarray(result.arrays.get("frequencies_cm1",()),float); ir=np.asarray(result.arrays.get("native_ir_quantity",()),float); active=np.asarray(result.arrays.get("activity_mask",()),bool)
+        return ["mode","frequency_cm1","native_ir_quantity","unit","active"], [[i+1,cm[i],ir[i],result.metadata.get("native_ir_unit",""),bool(active[i])] for i in range(min(len(cm),len(ir),len(active)))]
     if t=="PhononDOSResult":
         x=_values(result,"frequency"); y=_values(result,"dos")
         return ["frequency","dos"], [[x[i],y[i]] for i in range(min(len(x),len(y)))]

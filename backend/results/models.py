@@ -23,6 +23,7 @@ class ScientificResult:
         if "energy" in self.arrays: return f"{self.status.value}, {len(self.arrays['energy'])} samples"
         if self.result_type=="VolumetricResult" and "values" in self.arrays: return f"{self.status.value}, grid {tuple(self.arrays['values'].shape)}"
         if self.result_type=="VolumetricResult" and "values" in self.arrays: return f"{self.status.value}, grid {tuple(self.arrays['values'].shape)}"
+        if self.result_type == "GammaPhononResult" and "frequencies_cm1" in self.arrays: return f"{self.status.value}, {len(self.arrays['frequencies_cm1'])} Γ-point modes"
         if "frequency" in self.arrays: return f"{self.status.value}, {len(self.arrays['frequency'])} samples"
         return self.status.value
 

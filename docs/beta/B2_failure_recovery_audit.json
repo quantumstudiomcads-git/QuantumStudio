@@ -1,0 +1,131 @@
+{
+  "catalogue": {
+    "extinction_coefficient": "DERIVED_OPTICAL_OBSERVABLE",
+    "target_public_count": 147
+  },
+  "generated_at": "2026-09-06T10:38:02.181097+00:00",
+  "known_limitations": [
+    "Full GUI close/shutdown interaction remains a manual validation concern."
+  ],
+  "scenarios": [
+    {
+      "expected_execution_state": "FAILED",
+      "recovery_action": "CONFIGURE_ENGINE",
+      "retryable": false,
+      "scenario": "missing_executable",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "FAILED",
+      "recovery_action": "CONFIGURE_ENGINE",
+      "retryable": false,
+      "scenario": "non_executable",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "FAILED",
+      "recovery_action": "RETRY",
+      "retryable": true,
+      "scenario": "nonzero_exit",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "FAILED",
+      "recovery_action": "RETRY_OR_CHANGE_RESOURCES",
+      "retryable": true,
+      "scenario": "signal_termination",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "CANCELLED",
+      "recovery_action": "RUN_AGAIN",
+      "retryable": false,
+      "scenario": "user_cancellation",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "INTERRUPTED",
+      "recovery_action": "RETRY",
+      "retryable": true,
+      "scenario": "stale_running_after_restart",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "FAILED",
+      "recovery_action": "REPAIR_OR_RETRY",
+      "retryable": false,
+      "scenario": "required_artifact_missing_rc0",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "COMPLETED",
+      "recovery_action": "REPARSE",
+      "retryable": false,
+      "scenario": "parser_failure_after_completed",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "BLOCKED",
+      "recovery_action": "REBUILD_ARTIFACT",
+      "retryable": false,
+      "scenario": "artifact_sha_mismatch",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "BLOCKED",
+      "recovery_action": "RECREATE_PREREQUISITE",
+      "retryable": false,
+      "scenario": "missing_reused_artifact",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "BLOCKED",
+      "recovery_action": "EDIT_CONFIGURATION",
+      "retryable": false,
+      "scenario": "preparation_failure",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "FAILED",
+      "recovery_action": "EDIT_CONFIGURATION_OR_RESOURCES",
+      "retryable": false,
+      "scenario": "retry_exhaustion",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "BLOCKED",
+      "recovery_action": "FREE_DISK_OR_RELOCATE",
+      "retryable": false,
+      "scenario": "disk_preflight",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "FAILED",
+      "recovery_action": "CONFIGURE_ENGINE",
+      "retryable": false,
+      "scenario": "process_start_failure",
+      "status": "TESTED_CONTRACT"
+    },
+    {
+      "expected_execution_state": "RECOVERY_ERROR",
+      "recovery_action": "RESTORE_OR_REPAIR_SIDECAR",
+      "retryable": false,
+      "scenario": "malformed_execution_json",
+      "status": "TESTED_CONTRACT"
+    }
+  ],
+  "schema_version": "0.1",
+  "scientific_engine_launches": {
+    "bader": 0,
+    "btp2": 0,
+    "epsilon.x": 0,
+    "epw.x": 0,
+    "ph.x": 0,
+    "pw.x": 0,
+    "wannier90.x": 0
+  },
+  "state_machine": {
+    "stale_running": "INTERRUPTED",
+    "terminal_states_are_immutable": true
+  }
+}

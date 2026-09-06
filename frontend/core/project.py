@@ -1,3 +1,5 @@
+import os
+import tempfile
 import json
 from pathlib import Path
 
@@ -88,22 +90,21 @@ class Project:
                 "No project file path specified."
             )
 
-        self.file_path.parent.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with self.file_path.open(
-            "w",
-            encoding="utf-8",
-        ) as file:
-
-            json.dump(
-                self.to_dict(),
-                file,
-                indent=4,
-            )
-
+        fd, temporary = tempfile.mkstemp(prefix=f".{self.file_path.name}.", suffix=".tmp", dir=str(self.file_path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                json.dump(self.to_dict(), file, indent=4)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary, self.file_path)
+        except Exception:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+            raise
         self.modified = False
 
     # ============================================================

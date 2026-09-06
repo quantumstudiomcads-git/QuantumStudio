@@ -1,0 +1,159 @@
+{
+  "schema_version": "B4.1",
+  "timestamp": "2026-09-06T16:12:37.270769+00:00",
+  "identity": {
+    "product": "Quantum Studio",
+    "version": "0.2.0",
+    "channel": "beta-rc1",
+    "commit": "bb00835",
+    "working_tree": "CLEAN_SOURCE_PENDING_FINAL_BUILD"
+  },
+  "git": {
+    "branch": "v0.2",
+    "head": "1b9ab4c626c0c74e77dd2bd3f84ea10974c0aaad",
+    "dirty": true,
+    "status_count": 159,
+    "note": "Pre-existing user/scientific changes remain; no commit/tag created."
+  },
+  "rc_build": {
+    "path": "dist/rc/QuantumStudio-0.2.0-beta-rc1-linux-x86_64/QuantumStudio.dist",
+    "bytes": "generated beside final RC artifact",
+    "files": "generated beside final RC artifact",
+    "sha256": "generated beside final RC artifact",
+    "sha256_manifest": "application-files.sha256"
+  },
+  "engine_pack": {
+    "path": "dist/rc/EnginePack-QE-EPW-6.1-linux-x86_64",
+    "manifest": "EnginePack-QE-EPW-6.1-linux-x86_64/engine-pack.json",
+    "manifest_sha256": "b5a37c2a4da872ec16fd9eb6c479fe0a64d8ef1ad78ebe649be2d84067c71f8f",
+    "version": "0.2.0-beta-rc1-qe-epw6.1",
+    "validation": "PASS",
+    "scientific_execution": "not part of pack validation"
+  },
+  "catalogue": {
+    "public_count": 147,
+    "duplicate_ids": 0,
+    "status_counts": {
+      "ready": 28,
+      "partial": 17,
+      "planned": 101,
+      "external_backend_required": 1
+    },
+    "extinction_coefficient": "derived optical observable under Optical Properties, not a public slot"
+  },
+  "automated": {
+    "source_regression_baseline": "435 passing; final count recorded after run",
+    "packaged_no_engine_smoke": "PASS",
+    "packaged_scf_smoke": "PASS",
+    "project_round_trip": "PASS",
+    "engine_launches": {
+      "pw.x": 1,
+      "ph.x": 0,
+      "epsilon.x": 0,
+      "epw.x": 0,
+      "wannier90.x": 0,
+      "btp2": 0,
+      "bader": 0
+    },
+    "candidate_engine_pack_execution_id": "494fb6ae5c8f449da906004eaf77cc5e",
+    "source_regression": "435 passed, 0 failed, 0 skipped, 0 xfail; 320 ASE/NumPy dependency warnings",
+    "engine_activity": {
+      "pw.x": 3,
+      "ph.x": 0,
+      "epsilon.x": 0,
+      "epw.x": 0,
+      "wannier90.x": 0,
+      "btp2": 0,
+      "bader": 0,
+      "note": "one initial integration smoke plus two bounded diagnostics"
+    }
+  },
+  "manual": {
+    "checklist": "B4_manual_gui_validation.md",
+    "status": "PENDING_HUMAN"
+  },
+  "blockers": {
+    "RC_BLOCKER": [],
+    "BETA_BLOCKER": [],
+    "HIGH": [
+      "candidate Engine Pack is binary-only and must be packaged with its required runtime/shared-library contract before public distribution"
+    ],
+    "MEDIUM": [
+      "dirty worktree RC must be rebuilt from clean committed source",
+      "legal notices/licensing require review"
+    ],
+    "LOW": [
+      "manual GUI visual checks pending"
+    ]
+  },
+  "legal_review": "LEGAL_TEXT_PENDING_REVIEW",
+  "deferred_scientific_validation": {
+    "EPC": "VALIDATED_UNCONVERGED",
+    "Eliashberg": "VALIDATED_UNCONVERGED",
+    "Superconducting Tc": "VALIDATED_UNCONVERGED",
+    "Optical family": "VALIDATED_UNCONVERGED",
+    "Optical Conductivity": "IMPLEMENTED_UNVALIDATED"
+  },
+  "artifacts": {
+    "release_notes": "RELEASE_NOTES_0.2.0_BETA_RC1.md",
+    "known_limitations": "KNOWN_LIMITATIONS_0.2.0_BETA_RC1.md",
+    "quick_start": "QUICK_START_0.2.0_BETA_RC1.md",
+    "third_party_notices": "THIRD_PARTY_NOTICES_0.2.0_BETA_RC1.md",
+    "manifest": "B4_release_candidate_manifest.json",
+    "checksums": "SHA256SUMS",
+    "checklist": "B4_manual_gui_validation.md"
+  },
+  "test_reconciliation": {
+    "historical_b3_reported": 435,
+    "pre_config_current_collected": 404,
+    "legitimate_omitted": 35,
+    "current_canonical_collected": 435,
+    "current_passed": 435,
+    "failed": 0,
+    "skipped": 0,
+    "xfail": 0,
+    "warnings": 320,
+    "reason": "pytest default norecursedirs excludes directories named build; tests/builder/build contains 35 legitimate unittest cases. pytest.ini now sets testpaths=tests and a controlled norecursedirs list that preserves this package.",
+    "historical_report_verdict": "435 was accurate for the intended suite; the 404 run was a collection-configuration defect."
+  },
+  "test_environment": {
+    "python": "3.13.0",
+    "pytest": "9.1.1",
+    "pytest_qt": "4.5.0",
+    "pyside6": "6.11.2",
+    "ase": "3.28.0",
+    "numpy": "2.5.2",
+    "scipy": "1.18.1",
+    "matplotlib": "3.11.1",
+    "rootdir": "<repository-root>",
+    "config": "pytest.ini",
+    "testpaths": [
+      "tests"
+    ],
+    "plugins": [
+      "pytest-qt 4.5.0"
+    ]
+  },
+  "warnings": {
+    "count": 320,
+    "classification": "DEPENDENCY_WARNING / LOW",
+    "source": "ASE atoms.py direct ndarray.shape assignment under NumPy 2.5",
+    "beta_impact": "No failures or runtime breakage observed; do not patch or globally suppress ASE warning."
+  },
+  "worktree_classification": {
+    "counts": {
+      "SOURCE_B1_B4": 104,
+      "PACKAGING_SOURCE": 4,
+      "TEST_B1_B4": 27,
+      "DOC_B1_B4": 14
+    },
+    "report": "B4_precommit_reconciliation.json"
+  },
+  "dependency_manifests": {
+    "runtime": "requirements-runtime.txt",
+    "test": "requirements-test.txt",
+    "build": "scripts/build_linux.py / .venv-build (not runtime requirements)",
+    "validation": "pip install --no-index --no-deps -r requirements-test.txt reported all pinned requirements already satisfied in .venv-test"
+  },
+  "release_provenance_policy": "Final package-specific identity is generated under ignored dist/rc after this clean source revision."
+}

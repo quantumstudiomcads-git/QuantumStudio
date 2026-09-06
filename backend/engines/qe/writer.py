@@ -22,6 +22,15 @@ def format_number(value: int | float) -> str:
     return str(value) if isinstance(value, int) else format(value, ".12g")
 
 
+_NUMERIC_NAMELIST_KEYS = frozenset({
+    "ecutwfc", "ecutrho", "conv_thr", "degauss", "nbnd", "electron_maxstep",
+    "mixing_beta", "exx_fraction", "screening_parameter", "nqx1", "nqx2", "nqx3",
+    "tot_magnetization", "emin", "emax", "deltae", "forc_conv_thr",
+    "press_conv_thr", "iverbosity", "max_seconds", "nq1", "nq2", "nq3", "kpoint",
+    "kband", "spin_component", "plot_num", "iflag", "output_format", "nk1", "nk2", "nk3", "nw", "wmin", "wmax", "intersmear", "intrasmear",
+})
+
+
 def format_value(value: Any) -> str:
     if value is None:
         raise InvalidQEParameterError("Unset QE namelist values must be omitted, not serialized.")
@@ -41,8 +50,19 @@ def serialize_namelist(name: str, values: Mapping[str, Any]) -> str:
     lines = [f"&{name.upper()}"]
     for key in sorted(values):
         value = values[key]
-        if value is not None:
-            lines.append(f"  {key} = {format_value(value)}")
+        if value is None:
+            continue
+        normalized_key = str(key).strip().lower()
+        if isinstance(value, str) and not value.strip():
+            if normalized_key in _NUMERIC_NAMELIST_KEYS:
+                raise InvalidQEParameterError(f"{key} requires an integer or float value.")
+            continue
+        if normalized_key in _NUMERIC_NAMELIST_KEYS:
+            if isinstance(value, str) and value.strip().lower() in {"none", "null"}:
+                raise InvalidQEParameterError(f"{key} requires an integer or float value.")
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise InvalidQEParameterError(f"{key} requires an integer or float value.")
+        lines.append(f"  {key} = {format_value(value)}")
     lines.append("/")
     return "\n".join(lines)
 
@@ -117,6 +137,13 @@ def _band_path_card(path: object) -> str:
 
 def k_points_card(parameters: Mapping[str, Any], periodic: object) -> str:
     """Resolve exactly one primary QE K_POINTS card, with explicit band paths taking precedence."""
+    if parameters.get("optical_full_grid") is not None:
+        from backend.optical.grid import full_bz_grid
+        points = full_bz_grid(parameters["optical_full_grid"]); weight = 1.0 / len(points); rows = ["K_POINTS crystal", str(len(points))]; rows.extend(f"{x:.12f} {y:.12f} {z:.12f} {weight:.12f}" for x, y, z in points); return "\n".join(rows)
+    if parameters.get("epw_full_grid") is not None:
+        from backend.engines.epw.grid import qe_full_grid_card
+        from backend.optical.grid import full_bz_grid
+        return qe_full_grid_card(parameters["epw_full_grid"])
     if parameters.get("band_path") is not None:
         return _band_path_card(parameters["band_path"])
     value = parameters.get("kpoints", parameters.get("dense_kpoints"))
@@ -172,7 +199,25 @@ def electronic_method(parameters: Mapping[str, Any]) -> str:
 def method_metadata(parameters: Mapping[str, Any]) -> dict[str, Any]:
     method = electronic_method(parameters)
     terms = parameters.get("hubbard_terms", [])
-    return {"spin_treatment": method, "soc": method == "SOC", "noncollinear": method in {"NONCOLLINEAR", "SOC"}, "dft_plus_u": bool(terms), "hubbard_terms": list(terms) if isinstance(terms, list) else [], "hubbard_projector": parameters.get("hubbard_projector") if terms else None, "qe_hubbard_syntax": "HUBBARD_CARD_QE_7_6" if terms else None}
+    return {"functional": resolve(parameters.get("xc_functional", parameters.get("functional", "pbe"))).id, "spin_treatment": method, "soc": method == "SOC", "noncollinear": method in {"NONCOLLINEAR", "SOC"}, "dft_plus_u": bool(terms), "hubbard_terms": list(terms) if isinstance(terms, list) else [], "hubbard_projector": parameters.get("hubbard_projector") if terms else None, "qe_hubbard_syntax": "HUBBARD_CARD_QE_7_6" if terms else None}
+
+def occupation_values(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only occupation controls applicable to the current QE run."""
+    raw = parameters.get("occupations")
+    occupation = str(raw).strip().lower() if raw is not None else ""
+    if occupation in {"", "fixed", "tetrahedra", "tetrahedra_opt"}:
+        return {"occupations": raw} if raw not in (None, "") else {}
+    if occupation != "smearing":
+        raise InvalidQEParameterError(f"Unsupported QE occupations mode: {raw!r}.")
+    smearing = parameters.get("smearing")
+    if not isinstance(smearing, str) or not smearing.strip():
+        raise InvalidQEParameterError("Smearing method requires a valid QE enum value.")
+    degauss = parameters.get("degauss")
+    if isinstance(degauss, bool) or not isinstance(degauss, (int, float)):
+        raise InvalidQEParameterError("Smearing width requires a numeric value.")
+    if not isfinite(float(degauss)) or float(degauss) <= 0:
+        raise InvalidQEParameterError("Smearing width must be finite and positive.")
+    return {"occupations": "smearing", "smearing": smearing.strip(), "degauss": float(degauss)}
 
 def _species_order(structure: Mapping[str, Any]) -> list[str]:
     order=[]
@@ -183,7 +228,14 @@ def _species_order(structure: Mapping[str, Any]) -> list[str]:
     return order
 
 def _magnetization_values(parameters: Mapping[str, Any], structure: Mapping[str, Any], method: str) -> dict[str, Any]:
+    # Starting magnetization is a collinear-spin initialization only. Ignore
+    # stale scalar/noncollinear values rather than validating or serializing
+    # them as QE nspin=2 inputs.
     initial=parameters.get("starting_magnetization", {})
+    if method != "COLLINEAR_SPIN":
+        if "tot_magnetization" in parameters and parameters.get("tot_magnetization") is not None:
+            raise InvalidQEParameterError("tot_magnetization is only supported for collinear spin in E3.")
+        return {}
     if initial is None: initial={}
     if not isinstance(initial, Mapping): raise InvalidQEParameterError("starting_magnetization must map atomic species to dimensionless QE values.")
     species=_species_order(structure); values={}
@@ -225,15 +277,30 @@ def hubbard_card(parameters: Mapping[str, Any], structure: Mapping[str, Any]) ->
 
 def pw_input(calculation_id: str, parameters: Mapping[str, Any], structure: Mapping[str, Any], context, pseudopotentials: Mapping[str, object]) -> str:
     """Build a valid C4 pw.x input for SCF, relax, or vc-relax."""
-    qe_calculation = {"scf": "scf", "nscf": "nscf", "qe_pw_nscf": "nscf", "relax": "relax", "vc_relax": "vc-relax"}[calculation_id]
+    qe_calculation = {"scf": "scf", "nscf": "nscf", "qe_pw_nscf": ("bands" if parameters.get("epw_full_grid") is not None else "nscf"), "relax": "relax", "vc_relax": "vc-relax"}[calculation_id]
     functional = resolve(parameters.get("xc_functional", parameters.get("functional", "pbe")))
     atoms = structure.get("atoms", [])
     species_count = len({str(atom.get("element", "")) for atom in atoms if isinstance(atom, Mapping)})
+    profile = str(parameters.get("execution_profile", "STANDARD")).strip().upper()
+    if profile not in {"STANDARD", "LOW_MEMORY"}:
+        raise InvalidQEParameterError("Unknown QE execution profile.")
     control = {"calculation": qe_calculation, "prefix": context.prefix, "outdir": context.outdir, "pseudo_dir": context.pseudo_dir, "wf_collect": parameters.get("wf_collect", True), "disk_io": parameters.get("disk_io")}
+    if profile == "LOW_MEMORY":
+        control["disk_io"] = "medium"
     method = electronic_method(parameters)
     magnetization = _magnetization_values(parameters, structure, method)
-    system = {"ibrav": 0, "nat": len(atoms), "ntyp": species_count, "nbnd": parameters.get("nbnd"), "ecutwfc": parameters.get("ecutwfc"), "ecutrho": parameters.get("ecutrho"), "input_dft": functional.qe_input_dft, "exx_fraction": parameters.get("exx_fraction", functional.exx_fraction) if functional.hybrid else None, "screening_parameter": parameters.get("screening_parameter", functional.screening) if functional.screening is not None else None, "ace": parameters.get("ace", True) if functional.hybrid else None, "nqx1": (parameters.get("exx_q_mesh") or ((parameters.get("kpoints") or {}).get("mesh") if isinstance(parameters.get("kpoints"), Mapping) else parameters.get("kpoints")) or [1,1,1])[0] if functional.hybrid else None, "nqx2": (parameters.get("exx_q_mesh") or ((parameters.get("kpoints") or {}).get("mesh") if isinstance(parameters.get("kpoints"), Mapping) else parameters.get("kpoints")) or [1,1,1])[1] if functional.hybrid else None, "nqx3": (parameters.get("exx_q_mesh") or ((parameters.get("kpoints") or {}).get("mesh") if isinstance(parameters.get("kpoints"), Mapping) else parameters.get("kpoints")) or [1,1,1])[2] if functional.hybrid else None, "exxdiv_treatment": parameters.get("exxdiv_treatment", "gygi-baldereschi") if functional.hybrid else None, "nspin": 2 if method == "COLLINEAR_SPIN" else None, "lspinorb": True if method == "SOC" else None, "noncolin": True if method in {"NONCOLLINEAR", "SOC"} else None, **magnetization, "occupations": parameters.get("occupations"), "smearing": parameters.get("smearing"), "degauss": parameters.get("degauss")}
+    system = {"ibrav": 0, "nat": len(atoms), "ntyp": species_count, "nbnd": parameters.get("nbnd"), "ecutwfc": parameters.get("ecutwfc"), "ecutrho": parameters.get("ecutrho"), "input_dft": functional.qe_input_dft, "exx_fraction": parameters.get("exx_fraction", functional.exx_fraction) if functional.hybrid else None, "screening_parameter": parameters.get("screening_parameter", functional.screening) if functional.screening is not None else None, "ace": parameters.get("ace", True) if functional.hybrid else None, "nqx1": (parameters.get("exx_q_mesh") or ((parameters.get("kpoints") or {}).get("mesh") if isinstance(parameters.get("kpoints"), Mapping) else parameters.get("kpoints")) or [1,1,1])[0] if functional.hybrid else None, "nqx2": (parameters.get("exx_q_mesh") or ((parameters.get("kpoints") or {}).get("mesh") if isinstance(parameters.get("kpoints"), Mapping) else parameters.get("kpoints")) or [1,1,1])[1] if functional.hybrid else None, "nqx3": (parameters.get("exx_q_mesh") or ((parameters.get("kpoints") or {}).get("mesh") if isinstance(parameters.get("kpoints"), Mapping) else parameters.get("kpoints")) or [1,1,1])[2] if functional.hybrid else None, "exxdiv_treatment": parameters.get("exxdiv_treatment", "gygi-baldereschi") if functional.hybrid else None, "nspin": 2 if method == "COLLINEAR_SPIN" else None, "lspinorb": True if method == "SOC" else None, "noncolin": True if method in {"NONCOLLINEAR", "SOC"} else None, "nosym": bool(parameters.get("nosym", False)), "noinv": bool(parameters.get("noinv", False)), **magnetization, **occupation_values(parameters)}
     electrons = {"conv_thr": parameters.get("conv_thr")}
+    if profile == "LOW_MEMORY":
+        electrons.update({"diagonalization": "cg", "mixing_ndim": 4})
+    elif parameters.get("diagonalization") is not None:
+        electrons["diagonalization"] = parameters.get("diagonalization")
+    if parameters.get("diago_david_ndim") is not None:
+        electrons["diago_david_ndim"] = parameters.get("diago_david_ndim")
+    if parameters.get("mixing_ndim") is not None and profile != "LOW_MEMORY":
+        electrons["mixing_ndim"] = parameters.get("mixing_ndim")
+    if parameters.get("electron_maxstep") is not None:
+        electrons["electron_maxstep"] = parameters.get("electron_maxstep")
     sections = [serialize_namelist("CONTROL", control), serialize_namelist("SYSTEM", system), serialize_namelist("ELECTRONS", electrons)]
     if calculation_id in {"relax", "vc_relax"}:
         sections.append(serialize_namelist("IONS", {"forc_conv_thr": parameters.get("force_threshold")}))
@@ -250,8 +317,42 @@ def pw_input(calculation_id: str, parameters: Mapping[str, Any], structure: Mapp
 
 
 def phonon_input(parameters: Mapping[str, Any], context) -> str:
+    if parameters.get("q_point") is not None or parameters.get("gamma_only"):
+        q_point = parameters.get("q_point", (0.0, 0.0, 0.0))
+        if not isinstance(q_point, (list, tuple)) or len(q_point) != 3 or any(not isfinite(float(item)) for item in q_point):
+            raise InvalidQEParameterError("Gamma phonons require three finite q-point components.")
+        values = {"prefix": context.prefix, "outdir": context.outdir, "fildyn": parameters.get("fildyn", f"{context.prefix}.dyn"), "tr2_ph": parameters.get("tr2_ph"), "ldisp": False, "verbosity": parameters.get("verbosity", "high")}
+        return serialize_namelist("INPUTPH", values) + "\n0.0 0.0 0.0\n"
     qmesh = _vector(parameters.get("qmesh", ()), "phonon qmesh")
     if any(int(item) != item or item < 1 for item in qmesh):
         raise InvalidQEParameterError("Phonon qmesh values must be positive integers.")
-    values = {"prefix": context.prefix, "outdir": context.outdir, "fildyn": f"{context.prefix}.dyn", "tr2_ph": parameters.get("tr2_ph"), "ldisp": True, "nq1": int(qmesh[0]), "nq2": int(qmesh[1]), "nq3": int(qmesh[2])}
+    values = {"prefix": context.prefix, "outdir": context.outdir, "fildyn": parameters.get("fildyn", f"{context.prefix}.dyn"), "tr2_ph": parameters.get("tr2_ph"), "ldisp": True, "nq1": int(qmesh[0]), "nq2": int(qmesh[1]), "nq3": int(qmesh[2]), "epsil": bool(parameters.get("epsil", False))}
+    if parameters.get("purpose") == "epw": values["fildvscf"] = parameters.get("fildvscf", "dvscf")
     return serialize_namelist("INPUTPH", values) + "\n"
+
+def raman_phonon_input(parameters: Mapping[str, Any], context) -> str:
+    """Write the restricted QE 7.6 native Raman Gamma input."""
+    q_point = parameters.get("q_point", (0.0, 0.0, 0.0))
+    if tuple(float(v) for v in q_point) != (0.0, 0.0, 0.0):
+        raise InvalidQEParameterError("Native Raman response is supported only at Gamma.")
+    values = {
+        "prefix": context.prefix, "outdir": context.outdir,
+        "fildyn": parameters.get("fildyn", "raman.dyn"),
+        "tr2_ph": parameters.get("tr2_ph"),
+        "epsil": bool(parameters.get("epsil", True)),
+        "trans": True, "lraman": True,
+        "eth_rps": parameters.get("eth_rps", 1.0e-9),
+        "eth_ns": parameters.get("eth_ns", 1.0e-12),
+        "dek": parameters.get("dek", 1.0e-3),
+        "fildrho": parameters.get("fildrho", "drho"),
+        "ldisp": False,
+    }
+    return serialize_namelist("INPUTPH", values) + "\n0.0 0.0 0.0\n"
+
+def polar_phonon_input(parameters: Mapping[str, Any], context) -> str:
+    """Write the restricted E3B Gamma electric-response input for QE 7.6."""
+    q_point = parameters.get("q_point", (0.0, 0.0, 0.0))
+    if not isinstance(q_point, (list, tuple)) or len(q_point) != 3 or any(abs(float(item)) > 1.0e-12 for item in q_point):
+        raise InvalidQEParameterError("Polar electric response is supported only at Gamma.")
+    values = {"prefix": context.prefix, "outdir": context.outdir, "fildyn": parameters.get("fildyn", "polar_gamma"), "tr2_ph": parameters.get("tr2_ph"), "epsil": True, "zeu": True, "trans": True, "ldisp": False}
+    return serialize_namelist("INPUTPH", values) + "\n0.0 0.0 0.0\n"

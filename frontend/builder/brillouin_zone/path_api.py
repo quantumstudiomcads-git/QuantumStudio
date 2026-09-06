@@ -90,6 +90,12 @@ def recommended_band_path(structure: Mapping[str, object]) -> BandPathRecommenda
     a, b, c = (_length(vector) for vector in cell)
     alpha, beta, gamma = _angle(cell[1], cell[2]), _angle(cell[0], cell[2]), _angle(cell[0], cell[1])
     gamma_point = HighSymmetryPoint("Γ", (0.0, 0.0, 0.0))
+    if _close(a, b) and _close(b, c) and all(_close(value, 60.0) for value in (alpha, beta, gamma)):
+        x = HighSymmetryPoint("X", (0.0, 0.5, 0.0))
+        w = HighSymmetryPoint("W", (0.25, 0.5, 0.0))
+        k = HighSymmetryPoint("K", (0.375, 0.375, 0.0))
+        l = HighSymmetryPoint("L", (0.5, 0.5, 0.5))
+        return BandPathRecommendation("Face-centred cubic primitive", (RecommendedSegment(gamma_point, x), RecommendedSegment(x, w), RecommendedSegment(w, k), RecommendedSegment(k, gamma_point), RecommendedSegment(gamma_point, l)))
     if _close(a, b) and _close(gamma, 120.0) and _close(alpha, 90.0) and _close(beta, 90.0):
         m = HighSymmetryPoint("M", (0.5, 0.0, 0.0))
         k = HighSymmetryPoint("K", (1.0 / 3.0, 1.0 / 3.0, 0.0))

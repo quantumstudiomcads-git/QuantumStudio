@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-quantum-studio-project">
+    <comment>Quantum Studio project</comment>
+    <glob pattern="*.qs"/>
+  </mime-type>
+</mime-info>

@@ -2,6 +2,22 @@ import re
 from pathlib import Path
 from .models import PseudoPotentialRecord,PseudoType,Relativity,sha256
 class UPFMetadataError(ValueError): pass
+
+def inspect_upf_channels(path):
+    """Return declared pseudo-atomic and nonlocal angular channels for audit."""
+    p=Path(path)
+    try: text=p.read_text(errors="replace")
+    except OSError as e: raise UPFMetadataError(str(e))
+    chi=[]
+    for match in re.finditer(r'<PP_CHI\.\d+[^>]*label="([^"]+)"[^>]*l="(\d+)"[^>]*>', text, re.I):
+        chi.append({"label":match.group(1).strip(),"l":int(match.group(2))})
+    projectors=[int(match.group(1)) for match in re.finditer(r'<PP_BETA\.\d+[^>]*angular_momentum="(\d+)"[^>]*>', text, re.I)]
+    header=re.search(r'<PP_HEADER\b([^>]*)>',text,re.I|re.S)
+    def attr(name):
+        if not header:return None
+        m=re.search(rf'{name}\s*=\s*["\']\s*([^"\']*?)\s*["\']',header.group(1),re.I)
+        return m.group(1).strip() if m else None
+    return {"element":attr("element"),"z_valence":float(attr("z_valence")) if attr("z_valence") else None,"channels":tuple(chi),"projector_l":tuple(projectors),"available_l":tuple(sorted({item["l"] for item in chi}))}
 def inspect_upf(path,library_id="local",library_version=""):
  p=Path(path)
  try: text=p.read_text(errors="replace")[:65536]
@@ -26,12 +42,14 @@ def inspect_upf(path,library_id="local",library_version=""):
   xc_value=next((name for name in ("PBE","PW91","BLYP","PZ","LDA") if name in functional_line.upper()),None)
  xc=(xc_value or "unknown").lower().replace("_","-")
  if "pbx" in xc and "pbc" in xc: xc="pbe"
+ elif " pz " in f" {xc} " or "perdew-zunger" in xc: xc="pz"
  aliases={"lda":"pz","perdew-zunger":"pz","perdew-zunger-lda":"pz","perdew-burke-ernzerhof":"pbe","pbe":"pbe","pw91":"pw91","perdew-wang-91":"pw91","blyp":"blyp","becke-lee-yang-parr":"blyp"}; xc=aliases.get(xc,xc)
  kind=(attr("pseudo_type","pp_type","is-ultrasoft") or "UNKNOWN").upper()
  if kind == "UNKNOWN" and legacy:
   kind = "USPP" if "ultrasoft pseudopotential" in legacy_text.lower() else "NC" if "norm-conserving" in legacy_text.lower() else "PAW" if "paw pseudopotential" in legacy_text.lower() else "UNKNOWN"
  kind={"US":"USPP","USPP":"USPP","PAW":"PAW","NC":"NC"}.get(kind,PseudoType.UNKNOWN.value)
  rel=(attr("relativistic","relativity") or "unknown").lower()
+ if rel in {"no", "non", "non-relativistic", "nonrelativistic"}: rel = "non"
  if rel == "unknown" and legacy:
   rel = "scalar" if "scalar-relativistic" in text.lower() else "non" if "non-relativistic" in text.lower() else "unknown"
  relativity=Relativity.FULLY_RELATIVISTIC if "full" in rel else Relativity.SCALAR_RELATIVISTIC if "scalar" in rel else Relativity.NONRELATIVISTIC if "non" in rel else Relativity.UNKNOWN

@@ -1,11 +1,11 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Quantum Studio v0.1
-Comment=Quantum Studio materials modelling development build
-Exec=/home/bhargava-kalapatapu/QuantumStudio/v0.1/scripts/run_quantum_studio_v01.sh
-Icon=/home/bhargava-kalapatapu/QuantumStudio/v0.1/assets/quantum-studio-v0.1.svg
+Name=Quantum Studio
+Comment=Quantum Studio scientific materials workspace
+Exec=quantum-studio %f
+Icon=quantum-studio
 Terminal=false
 Categories=Science;Engineering;
+MimeType=application/x-quantum-studio-project;
 StartupNotify=true
-StartupWMClass=Quantum Studio

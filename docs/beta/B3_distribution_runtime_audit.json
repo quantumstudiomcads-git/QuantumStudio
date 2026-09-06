@@ -1,0 +1,195 @@
+{
+  "build": {
+    "available": true,
+    "build_python": "<repository-root>/.venv-build/bin/python",
+    "entry_point": "frontend/main.py",
+    "largest_files": [
+      {
+        "bytes": 153309857,
+        "path": "main.bin"
+      },
+      {
+        "bytes": 37555760,
+        "path": "libcblas.so.3"
+      },
+      {
+        "bytes": 32586001,
+        "path": "libpython3.13.so.1.0"
+      },
+      {
+        "bytes": 32035888,
+        "path": "libicudata.so.73"
+      },
+      {
+        "bytes": 24805561,
+        "path": "libscipy_openblas-6cdc3b4a.so"
+      },
+      {
+        "bytes": 11412488,
+        "path": "libQt6Gui.so.6"
+      },
+      {
+        "bytes": 9078929,
+        "path": "numpy/_core/_multiarray_umath.so"
+      },
+      {
+        "bytes": 8274512,
+        "path": "libQt6Quick.so.6"
+      },
+      {
+        "bytes": 8155496,
+        "path": "libQt6Widgets.so.6"
+      },
+      {
+        "bytes": 7524648,
+        "path": "libQt6Core.so.6"
+      },
+      {
+        "bytes": 7351713,
+        "path": "libcrypto.so.3"
+      },
+      {
+        "bytes": 6788592,
+        "path": "libQt6Qml.so.6"
+      },
+      {
+        "bytes": 6769393,
+        "path": "scipy/optimize/_highspy/_core.so"
+      },
+      {
+        "bytes": 6364881,
+        "path": "PySide6/QtWidgets.so"
+      },
+      {
+        "bytes": 4968993,
+        "path": "PySide6/QtGui.so"
+      },
+      {
+        "bytes": 4529161,
+        "path": "scipy/sparse/_sparsetools.so"
+      },
+      {
+        "bytes": 4506016,
+        "path": "libQt6Pdf.so.6"
+      },
+      {
+        "bytes": 4477136,
+        "path": "libicui18n.so.73"
+      },
+      {
+        "bytes": 4215377,
+        "path": "PySide6/QtCore.so"
+      },
+      {
+        "bytes": 2833617,
+        "path": "libgfortran-040039e1-0352e75f.so.5.0.0"
+      },
+      {
+        "bytes": 2752177,
+        "path": "libgfortran-8f1e9814.so.5.0.0"
+      },
+      {
+        "bytes": 2596945,
+        "path": "scipy/linalg/_flapack.so"
+      },
+      {
+        "bytes": 2571736,
+        "path": "libicuuc.so.73"
+      },
+      {
+        "bytes": 2458392,
+        "path": "scipy/special/cython_special.so"
+      },
+      {
+        "bytes": 2149512,
+        "path": "libQt6Network.so.6"
+      }
+    ],
+    "nuitka": "4.2.1",
+    "package_bytes": 468107183,
+    "package_files": 436,
+    "patchelf": "patchelf 0.18.0",
+    "pyside6": "6.11.2",
+    "scientific_engines_bundled": false,
+    "standalone_path": "<repository-root>/frontend/deployment/QuantumStudio.dist",
+    "tool": "<repository-root>/.venv-build/bin/pyside6-deploy"
+  },
+  "distribution": {
+    "desktop_file": "launcher/quantum-studio.desktop",
+    "mime_file": "launcher/quantum-studio-project.xml",
+    "project_extension": ".qs",
+    "source_independent": true
+  },
+  "engine_pack": {
+    "hash_verification": true,
+    "manifest_schema": "1",
+    "missing_pack": "CAPABILITY_GATED",
+    "partial_pack": "FINE_GRAINED_CAPABILITY_GATING",
+    "relocatable": true,
+    "root_contract": "configured root or QUANTUM_STUDIO_ENGINE_PACK / QUANTUM_STUDIO_ENGINE_ROOT"
+  },
+  "environment": {
+    "platform": "Linux-7.0.0-30-generic-x86_64-with-glibc2.39",
+    "python": "3.13.0"
+  },
+  "findings": [
+    {
+      "item": "Final proprietary and third-party legal text requires B4/legal review.",
+      "severity": "LEGAL_REVIEW"
+    },
+    {
+      "item": "Windows/WSL packaging is not in B3 scope.",
+      "severity": "DEFERRED_WINDOWS"
+    }
+  ],
+  "generated_at": "2026-09-06T14:43:31.893798+00:00",
+  "identity": {
+    "build_timestamp": "",
+    "channel": "development",
+    "commit": "1b9ab4c626c0c74e77dd2bd3f84ea10974c0aaad",
+    "platform": "Linux-7.0.0-30-generic-x86_64-with-glibc2.39",
+    "product": "Quantum Studio",
+    "python": "3.13.0",
+    "version": "0.2.0"
+  },
+  "license_inventory": {
+    "application": "LEGAL_TEXT_PENDING_REVIEW",
+    "engine_pack": "MANIFEST_LICENSE_ENTRIES_REQUIRED",
+    "third_party_notice": "TECHNICAL_PLACEHOLDER_PENDING_REVIEW"
+  },
+  "package_forbidden_matches": [],
+  "runtime_paths": {
+    "cache": "$USER_HOME/.cache/QuantumStudio",
+    "config": "$USER_HOME/.config/QuantumStudio",
+    "data": "$USER_HOME/.local/share/QuantumStudio",
+    "engine_config": "$USER_HOME/.config/QuantumStudio/engines",
+    "logs": "$USER_HOME/.local/share/QuantumStudio/logs",
+    "pseudos": "$USER_HOME/.local/share/QuantumStudio/pseudopotentials",
+    "workflows": "$USER_HOME/.local/share/QuantumStudio/workflows"
+  },
+  "safe_probes": {
+    "nuitka_version": true,
+    "patchelf_version": true,
+    "pyside6_deploy_help": true
+  },
+  "schema_version": "B3.1",
+  "scientific_engine_launches": {
+    "bader": 0,
+    "btp2": 0,
+    "epsilon.x": 0,
+    "epw.x": 0,
+    "ph.x": 0,
+    "pw.x": 0,
+    "wannier90.x": 0
+  },
+  "startup_matrix": {
+    "isolated_home": "PASS",
+    "no_engine": "PASS",
+    "offline": "PASS_BY_NETWORK_FREE_STARTUP",
+    "packaged_relocated": "PASS",
+    "read_only_install": "PASS_BY_USER_PATH_SEPARATION",
+    "source_mode": "PASS",
+    "spaces_path": "PASS",
+    "unicode_path": "PASS_SOURCE_RUNTIME"
+  }
+}

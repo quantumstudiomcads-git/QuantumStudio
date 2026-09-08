@@ -72,7 +72,8 @@ class ManagedWSL2Runtime(ComputeRuntime):
                  provisioning_health: ManagedRuntimeHealthState | None = None,
                  agent_bridge: ManagedRuntimeExecutionBridge | None = None,
                  agent_health: RuntimeBridgeHealth | None = None,
-                 runtime_version: str = "", architecture: str = "x86_64"):
+                 runtime_version: str = "", architecture: str = "x86_64",
+                 scientific_service=None):
         self.info = info or current_platform()
         self.identity = ManagedRuntimeIdentity.managed_wsl2(self.info)
         self.health_report = health_report
@@ -81,6 +82,7 @@ class ManagedWSL2Runtime(ComputeRuntime):
         self.agent_health = agent_health
         self.runtime_version = runtime_version
         self.runtime_architecture = architecture
+        self.scientific_service = scientific_service
 
     def _agent_health(self) -> RuntimeBridgeHealth | None:
         if self.agent_health is not None:
@@ -97,7 +99,12 @@ class ManagedWSL2Runtime(ComputeRuntime):
         health = self._agent_health()
         if health is None or not health.ready:
             return RuntimeProbe(RuntimeState.AVAILABLE_NOT_READY, "QuantumStudioRuntime agent is unavailable or incompatible.")
-        return RuntimeProbe(RuntimeState.AVAILABLE_NOT_READY, "Runtime execution bridge is ready; scientific Engine Pack readiness is still unavailable.")
+        if self.scientific_service is None:
+            return RuntimeProbe(RuntimeState.AVAILABLE_NOT_READY, "Runtime execution bridge is ready; scientific Engine Pack readiness is still unavailable.")
+        required = getattr(self.scientific_service, "required_agent_capabilities", frozenset())
+        if not set(required).issubset(set(health.capabilities)):
+            return RuntimeProbe(RuntimeState.AVAILABLE_NOT_READY, "QuantumStudioRuntime agent lacks required managed-science capabilities.")
+        return RuntimeProbe(RuntimeState.READY, "Managed runtime metadata, agent, and verified Engine Pack are ready.")
 
     def _require_execution_ready(self) -> RuntimeBridgeHealth:
         if self.info.operating_system is not OperatingSystem.WINDOWS:
@@ -127,16 +134,22 @@ class ManagedWSL2Runtime(ComputeRuntime):
         return result
 
     def _unavailable(self):
-        raise ExecutionPreflightError("Managed WSL2 host-workflow execution requires W5 staging and artifact collection.")
+        raise ExecutionPreflightError("Managed WSL2 host-workflow execution requires a verified W5 Engine Pack and artifact transport.")
 
     def resolve_executable(self, tool_id, program, engine_id=None):
-        self._unavailable()
+        self._require_execution_ready()
+        if self.scientific_service is None: self._unavailable()
+        return self.scientific_service.resolve_executable(tool_id, program, engine_id)
 
     def execute(self, workflow, record=None, store=None):
-        self._unavailable()
+        self._require_execution_ready()
+        if self.scientific_service is None: self._unavailable()
+        return self.scientific_service.execute(workflow, record=record, store=store)
 
-    def cancel(self):
-        self._unavailable()
+    def cancel(self, task_id=None):
+        if self.scientific_service is None: self._unavailable()
+        if task_id is None: raise ExecutionPreflightError("Managed task cancellation requires an owned task identity.")
+        return self.scientific_service.cancel(task_id)
 
 
 def select_compute_runtime(*, info: PlatformInfo | None = None, tools: LocalToolConfiguration | None = None,
@@ -144,12 +157,13 @@ def select_compute_runtime(*, info: PlatformInfo | None = None, tools: LocalTool
                            provisioning_health: ManagedRuntimeHealthState | None = None,
                            agent_bridge: ManagedRuntimeExecutionBridge | None = None,
                            agent_health: RuntimeBridgeHealth | None = None,
-                           runtime_version: str = "", architecture: str = "x86_64") -> ComputeRuntime:
+                           runtime_version: str = "", architecture: str = "x86_64",
+                           scientific_service=None) -> ComputeRuntime:
     info = info or current_platform()
     if info.operating_system is OperatingSystem.LINUX:
         return LocalLinuxRuntime(tools, info)
     return ManagedWSL2Runtime(info, health_report, provisioning_health, agent_bridge, agent_health,
-                              runtime_version, architecture)
+                              runtime_version, architecture, scientific_service)
 
 
 ExecutionProvider = ComputeRuntime

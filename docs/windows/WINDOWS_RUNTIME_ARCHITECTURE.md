@@ -29,3 +29,18 @@ W4 adds a synchronous, fixed-endpoint runtime-agent control bridge. It can execu
 The canonical managed distribution identity is exactly `QuantumStudioRuntime`. W2 invokes only host-level `wsl.exe --list --verbose` and optional `wsl.exe --version` information probes through structured, `shell=False`, timeout-bounded calls. It never starts a distro or executes a command inside one. User distributions are diagnostic data only and are never adopted.
 
 Registered WSL2 means only that the exact managed identity exists with WSL generation 2. It is not a scientifically verified runtime and is not exposed as ready for execution. Discovery state is host diagnostics, not `.qs` project state.
+
+
+## W5 managed scientific-runtime boundary
+
+W5 keeps three separate products: the native Quantum Studio application, the private `QuantumStudioRuntime` WSL appliance, and a separately versioned Scientific Engine Pack. An Engine Pack is a local/offline artifact with `engine-pack.json`, a platform/architecture identity, per-tool SHA-256 hashes, and a manifest digest supplied by the caller. It is verified before installation, copied to a versioned `packs/<pack-id>-<version>` location, verified again, then activated by atomically replacing `active.json`. The installation root carries a Quantum Studio ownership marker; non-empty unmarked roots and same-version/different-digest conflicts are blocked. Previous packs are retained, and silent downgrade is refused.
+
+Verified manifest entries map a logical tool ID directly to an absolute runtime POSIX path under `/opt/quantumstudio/engines`; managed execution never searches ambient `PATH`. A complete runtime additionally requires WSL2 registration, W3 metadata, a compatible W4 agent, a valid Engine Pack and required tool/capability mapping. This is distinct from a claim that every optional scientific capability is installed.
+
+W5 transfer operations are narrow runtime-agent operations: `stage-in` streams a declared host file into a trusted runtime root via a temporary file, SHA check, and atomic replace; `stage-out` streams one declared trusted runtime file to an atomically replaced host destination. There is no `/mnt/c` conversion, recursive project copy, generic file API, or bulk JSON/base64 transport. Runtime work is placed beneath `/var/lib/quantumstudio/workflows/<workflow-id>/executions/<execution-id>/<task-id>/`; large scratch/restart data stays there. Exact selected pseudopotential bytes and SHA remain host-selected and may later be cached by SHA beneath `/var/lib/quantumstudio/pseudopotentials`.
+
+The runtime agent now records managed task IDs, PID/PGID, start discriminator, executable and cwd in atomically written records under `/var/lib/quantumstudio/runtime/tasks`. `status` and `cancel` accept a validated task ID only. Cancellation signals the recorded owned process group with SIGTERM, then SIGKILL after a grace period; it never accepts a host-provided PID. Recovery does not rerun tasks; a missing/non-live owned task is interrupted unless durable terminal evidence exists.
+
+Result parsing remains host-side: only collected host paths are handed to `ResultService` and `ResultStore`, so Analyze can show persisted results without WSL. W5 preserves the existing distinction between a zero process exit (`COMPLETED`) and parser result validity (`PARSE_FAILED` is not an engine failure).
+
+PUBLIC ENGINE PACK DISTRIBUTION LEGAL REVIEW: **PENDING**. W5 contains no third-party engine binaries, no downloader, no package-manager calls, and no real Windows/QE validation.

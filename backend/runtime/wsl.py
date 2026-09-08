@@ -154,6 +154,48 @@ class WSLCommandRunner:
         """
         return self._run(arguments, input_data=input_data, timeout=timeout)
 
+    def run_with_streaming_input(self, arguments: Sequence[str], prefix: bytes, source_path: str | Path, *, timeout: float | None = None) -> WSLCommandResult:
+        """Send a bounded JSON header plus a file stream to the fixed agent.
+
+        Bulk artifacts are never base64 encoded or accumulated in memory.
+        """
+        argv = (self.executable, *tuple(arguments))
+        try:
+            with Path(source_path).open("rb") as source:
+                process = subprocess.Popen(list(argv), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False)
+                assert process.stdin is not None
+                process.stdin.write(prefix)
+                for block in iter(lambda: source.read(1024 * 1024), b""):
+                    process.stdin.write(block)
+                process.stdin.close()
+                try:
+                    stdout, stderr = process.communicate(timeout=timeout)
+                except ValueError:  # communicate() after explicit close on some Python versions
+                    process.wait(timeout=timeout); stdout = process.stdout.read() if process.stdout else b""; stderr = process.stderr.read() if process.stderr else b""
+        except FileNotFoundError as exc:
+            return WSLCommandResult(argv, error=WSLProbeError.EXECUTABLE_NOT_FOUND, error_message=str(exc))
+        except subprocess.TimeoutExpired as exc:
+            process.kill(); stdout, stderr = process.communicate()
+            return WSLCommandResult(argv, stdout=_as_bytes(stdout), stderr=_as_bytes(stderr), error=WSLProbeError.TIMEOUT, error_message=str(exc))
+        except OSError as exc:
+            return WSLCommandResult(argv, error=WSLProbeError.COMMAND_FAILED, error_message=str(exc))
+        return WSLCommandResult(argv, process.returncode, _as_bytes(stdout), _as_bytes(stderr))
+
+    def run_with_streaming_output(self, arguments: Sequence[str], input_data: bytes, destination_path: str | Path, *, timeout: float | None = None) -> WSLCommandResult:
+        """Stream raw agent output directly to a caller-owned temporary file."""
+        argv = (self.executable, *tuple(arguments))
+        try:
+            with Path(destination_path).open("wb") as destination:
+                completed = subprocess.run(list(argv), input=input_data, stdout=destination, stderr=subprocess.PIPE,
+                                           timeout=timeout, check=False, shell=False)
+        except FileNotFoundError as exc:
+            return WSLCommandResult(argv, error=WSLProbeError.EXECUTABLE_NOT_FOUND, error_message=str(exc))
+        except subprocess.TimeoutExpired as exc:
+            return WSLCommandResult(argv, stderr=_as_bytes(exc.stderr), error=WSLProbeError.TIMEOUT, error_message=str(exc))
+        except OSError as exc:
+            return WSLCommandResult(argv, error=WSLProbeError.COMMAND_FAILED, error_message=str(exc))
+        return WSLCommandResult(argv, completed.returncode, b"", _as_bytes(completed.stderr))
+
     def _run(self, arguments: Sequence[str], *, input_data: bytes | None = None,
              timeout: float | None = None) -> WSLCommandResult:
         argv = (self.executable, *tuple(arguments))

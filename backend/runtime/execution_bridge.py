@@ -19,7 +19,7 @@ from .wsl import MANAGED_DISTRO_NAME, WSLCommandResult, WSLProbeError
 
 RUNTIME_AGENT_PATH = "/opt/quantumstudio/runtime/bin/qs-runtime-agent"
 DEFAULT_AGENT_CONTROL_TIMEOUT_SECONDS = 10.0
-SUPPORTED_AGENT_VERSIONS = frozenset({AGENT_VERSION})
+SUPPORTED_AGENT_VERSIONS = frozenset({"1", AGENT_VERSION})
 
 
 class RuntimeBridgeError(str, Enum):
@@ -39,6 +39,7 @@ class RuntimeBridgeHealth:
     schema_version: int | None = None
     diagnostic: str = ""
     error: RuntimeBridgeError | None = None
+    capabilities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -57,11 +58,13 @@ class RuntimeBridgeResult:
 class RuntimeAgentCommandRunnerProtocol(Protocol):
     def available(self) -> bool: ...
     def run_with_input(self, arguments: Sequence[str], input_data: bytes, *, timeout: float | None = None) -> WSLCommandResult: ...
+    def run_with_streaming_input(self, arguments: Sequence[str], prefix: bytes, source_path: str, *, timeout: float | None = None) -> WSLCommandResult: ...
+    def run_with_streaming_output(self, arguments: Sequence[str], input_data: bytes, destination_path: str, *, timeout: float | None = None) -> WSLCommandResult: ...
 
 
 def agent_argv(command: str) -> tuple[str, ...]:
     """Return the sole permitted WSL agent endpoint; distro identity is fixed."""
-    if command not in {"health", "version", "run"}:
+    if command not in {"health", "version", "run", "stage-in", "stage-out", "status", "cancel", "install-engine-pack"}:
         raise ValueError("Unsupported managed runtime-agent command.")
     return ("--distribution", MANAGED_DISTRO_NAME, "--exec", RUNTIME_AGENT_PATH, command)
 
@@ -88,7 +91,7 @@ class ManagedRuntimeExecutionBridge:
         if health.schema_version != PROTOCOL_SCHEMA_VERSION or health.agent_version not in SUPPORTED_AGENT_VERSIONS:
             return RuntimeBridgeHealth(False, health.agent_version, health.schema_version,
                                        "Runtime-agent protocol schema or version is incompatible.", RuntimeBridgeError.AGENT_UNAVAILABLE)
-        return RuntimeBridgeHealth(True, health.agent_version, health.schema_version, health.diagnostic)
+        return RuntimeBridgeHealth(True, health.agent_version, health.schema_version, health.diagnostic, None, health.capabilities)
 
     def execute(self, request: RuntimeProcessRequest) -> RuntimeBridgeResult:
         if not self.runner.available():

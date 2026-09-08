@@ -10,7 +10,8 @@ import re
 from typing import Any, Mapping
 
 PROTOCOL_SCHEMA_VERSION = 1
-AGENT_VERSION = "1"
+# Schema 1 remains extensible: W5 adds named capabilities without changing W4 run requests.
+AGENT_VERSION = "2"
 
 
 class ProtocolError(ValueError):
@@ -30,6 +31,12 @@ class AgentStatus(str, Enum):
     PROCESS_EXITED = "PROCESS_EXITED"
     PROCESS_TIMEOUT = "PROCESS_TIMEOUT"
     INTERNAL_AGENT_ERROR = "INTERNAL_AGENT_ERROR"
+    TRANSFER_REJECTED = "TRANSFER_REJECTED"
+    TRANSFER_FAILED = "TRANSFER_FAILED"
+    TASK_NOT_FOUND = "TASK_NOT_FOUND"
+    TASK_RUNNING = "TASK_RUNNING"
+    TASK_FINISHED = "TASK_FINISHED"
+    TASK_CANCELLED = "TASK_CANCELLED"
 
 
 @dataclass(frozen=True)
@@ -191,6 +198,7 @@ class RuntimeAgentHealth:
     agent_version: str
     schema_version: int
     diagnostic: str = ""
+    capabilities: tuple[str, ...] = ()
 
     @classmethod
     def from_json(cls, payload: bytes | str) -> "RuntimeAgentHealth":
@@ -198,13 +206,18 @@ class RuntimeAgentHealth:
             data = json.loads(payload.decode("utf-8") if isinstance(payload, bytes) else payload)
             if not isinstance(data, Mapping) or data.get("schema_version") != PROTOCOL_SCHEMA_VERSION or data.get("status") != "READY":
                 raise ValueError
-            return cls(True, _string(data.get("agent_version"), "agent_version"), int(data["schema_version"]), str(data.get("diagnostic", "")))
+            capabilities = data.get("capabilities", [])
+            if not isinstance(capabilities, list) or not all(isinstance(item, str) for item in capabilities):
+                raise ValueError
+            return cls(True, _string(data.get("agent_version"), "agent_version"), int(data["schema_version"]),
+                       str(data.get("diagnostic", "")), tuple(capabilities))
         except (ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
             raise ProtocolError("AGENT_PROTOCOL_ERROR", "Runtime-agent health response is malformed or incompatible.") from error
 
     def to_json(self) -> bytes:
         return (json.dumps({"schema_version": self.schema_version, "agent_version": self.agent_version,
-                            "status": "READY", "diagnostic": self.diagnostic}, sort_keys=True) + "\n").encode("utf-8")
+                            "status": "READY", "diagnostic": self.diagnostic,
+                            "capabilities": list(self.capabilities)}, sort_keys=True) + "\n").encode("utf-8")
 
 
 def timestamp() -> str:

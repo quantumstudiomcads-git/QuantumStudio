@@ -143,10 +143,24 @@ class WSLCommandRunner:
         return shutil.which(self.executable) is not None
 
     def run(self, arguments: Sequence[str]) -> WSLCommandResult:
+        return self._run(arguments)
+
+    def run_with_input(self, arguments: Sequence[str], input_data: bytes, *, timeout: float | None = None) -> WSLCommandResult:
+        """Run a controlled WSL command with a binary stdin control payload.
+
+        W4 uses this only for the fixed managed-runtime agent.  The caller
+        still supplies structured argv; this method never creates a shell.
+        ``None`` deliberately means no artificial task-lifetime timeout.
+        """
+        return self._run(arguments, input_data=input_data, timeout=timeout)
+
+    def _run(self, arguments: Sequence[str], *, input_data: bytes | None = None,
+             timeout: float | None = None) -> WSLCommandResult:
         argv = (self.executable, *tuple(arguments))
         try:
             completed = subprocess.run(
-                list(argv), shell=False, capture_output=True, timeout=self.timeout,
+                list(argv), shell=False, capture_output=True, input=input_data,
+                timeout=self.timeout if timeout is None and input_data is None else timeout,
                 check=False,
             )
         except FileNotFoundError as exc:

@@ -46,6 +46,10 @@ Mutable scientific data must remain conceptually separate under `/var/lib/quantu
 
 The initial import may use root as an appliance bootstrap account. W3 neither requires an interactive Linux user nor creates passwords, sudo prompts, or a first-run Ubuntu desktop flow. A later execution hardening pass may introduce a dedicated runtime user.
 
+## Runtime-agent installation contract
+
+The future reproducible rootfs build must install the first-party, standard-library-only `runtime_agent` source as an executable entry point at `/opt/quantumstudio/runtime/bin/qs-runtime-agent`. The host invokes only this fixed endpoint with `health` or `run`; no agent is downloaded or installed dynamically. Runtime metadata may later record the compatible agent version.
+
 ## Image production
 
 A reproducible production rootfs build pipeline is intentionally deferred: it may require external container, debootstrap, licensing, or Windows validation tooling. Tests use only tiny local mock files. No QE, EPW, Wannier90, BoltzTraP2, or other scientific engine is included by this contract.

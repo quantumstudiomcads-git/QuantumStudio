@@ -35,3 +35,12 @@ __all__ += [
     "inspect_managed_runtime", "parse_runtime_version", "plan_runtime_provisioning",
     "read_runtime_metadata", "validate_runtime_metadata",
 ]
+
+from .execution_bridge import (
+    DEFAULT_AGENT_CONTROL_TIMEOUT_SECONDS, RUNTIME_AGENT_PATH, ManagedRuntimeExecutionBridge,
+    RuntimeBridgeError, RuntimeBridgeHealth, RuntimeBridgeResult, agent_argv,
+)
+__all__ += [
+    "DEFAULT_AGENT_CONTROL_TIMEOUT_SECONDS", "RUNTIME_AGENT_PATH", "ManagedRuntimeExecutionBridge",
+    "RuntimeBridgeError", "RuntimeBridgeHealth", "RuntimeBridgeResult", "agent_argv",
+]

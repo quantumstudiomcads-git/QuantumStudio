@@ -23,7 +23,7 @@ Metadata lives at `/opt/quantumstudio/runtime/runtime.json`. It identifies the r
 
 ## Deferred
 
-WSL installation, Engine Pack provisioning into WSL, host↔runtime path translation, Windows installer, Nuitka Windows build, registry/UAC integration, workflow staging/collection, and scientific execution through WSL remain future work. W3 does not install Windows features, run `wsl.exe --install`, execute engines, or bundle third-party scientific binaries.
+W4 adds a synchronous, fixed-endpoint runtime-agent control bridge. It can execute only a typed task whose executable, working directory, and I/O paths already exist inside the managed runtime. Host-to-runtime staging, artifact collection, Engine Pack installation, scientific workflow execution, cancellation, and recovery remain future work. W3/W4 do not install Windows features, run `wsl.exe --install`, execute engines during provisioning, or bundle third-party scientific binaries.
 ## W2 discovery boundary
 
 The canonical managed distribution identity is exactly `QuantumStudioRuntime`. W2 invokes only host-level `wsl.exe --list --verbose` and optional `wsl.exe --version` information probes through structured, `shell=False`, timeout-bounded calls. It never starts a distro or executes a command inside one. User distributions are diagnostic data only and are never adopted.

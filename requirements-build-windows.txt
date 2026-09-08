@@ -1,0 +1,2 @@
+# Windows build-only dependency; install alongside requirements-runtime.txt on the build machine.
+Nuitka==4.1.1

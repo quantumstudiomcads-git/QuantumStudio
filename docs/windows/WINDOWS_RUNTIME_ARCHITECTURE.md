@@ -44,3 +44,8 @@ The runtime agent now records managed task IDs, PID/PGID, start discriminator, e
 Result parsing remains host-side: only collected host paths are handed to `ResultService` and `ResultStore`, so Analyze can show persisted results without WSL. W5 preserves the existing distinction between a zero process exit (`COMPLETED`) and parser result validity (`PARSE_FAILED` is not an engine failure).
 
 PUBLIC ENGINE PACK DISTRIBUTION LEGAL REVIEW: **PENDING**. W5 contains no third-party engine binaries, no downloader, no package-manager calls, and no real Windows/QE validation.
+
+
+## W6 application bundle boundary
+
+W6 adds a Windows-only Nuitka standalone build plan, centralized source/frozen resource discovery, and writable APPDATA/LOCALAPPDATA application roots. The application bundle is read-only at runtime and excludes Engine Packs, rootfs/VHDX payloads, scientific engines, tests and source-checkout artifacts. Startup is offline and remains usable when WSL, the managed distro, metadata or Engine Pack are absent. A read-only JSON integration harness performs no provisioning or scientific execution. Native Windows build, signing and installer composition remain physical future gates.

@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 from backend.runtime import BUILD_CHANNEL, PRODUCT_NAME, VERSION, build_identity
+from backend.runtime.resources import initialize_application_data
 
 from frontend.app.project_hub import ProjectHub
 from frontend.analyze import AnalyzeWorkspace
@@ -15,6 +16,7 @@ from frontend.core.project import Project
 
 def main():
 
+    initialize_application_data()
     app = QApplication(
         sys.argv
     )
@@ -26,7 +28,7 @@ def main():
         PRODUCT_NAME
     )
 
-    display_identity = f"{PRODUCT_NAME} {VERSION} Beta RC1" if BUILD_CHANNEL == "beta-rc1" else PRODUCT_NAME
+    display_identity = PRODUCT_NAME if BUILD_CHANNEL == "development" else f"{PRODUCT_NAME} {VERSION} {BUILD_CHANNEL}"
     app.setApplicationDisplayName(display_identity)
 
     hub = ProjectHub()

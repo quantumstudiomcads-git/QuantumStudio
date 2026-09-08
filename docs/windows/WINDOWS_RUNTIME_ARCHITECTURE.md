@@ -49,3 +49,20 @@ PUBLIC ENGINE PACK DISTRIBUTION LEGAL REVIEW: **PENDING**. W5 contains no third-
 ## W6 application bundle boundary
 
 W6 adds a Windows-only Nuitka standalone build plan, centralized source/frozen resource discovery, and writable APPDATA/LOCALAPPDATA application roots. The application bundle is read-only at runtime and excludes Engine Packs, rootfs/VHDX payloads, scientific engines, tests and source-checkout artifacts. Startup is offline and remains usable when WSL, the managed distro, metadata or Engine Pack are absent. A read-only JSON integration harness performs no provisioning or scientific execution. Native Windows build, signing and installer composition remain physical future gates.
+
+
+## W7 installer boundary
+
+W7 adds an installer-only, offline-first orchestration layer. It uses a typed,
+atomically journaled state machine beneath `%PROGRAMDATA%\QuantumStudio\installer`
+for host checks, optional fixed prerequisite enablement, reboot/resume, W6 app
+installation, W3 runtime import/verification, W5 Engine Pack verification, and
+shell integration. `QuantumStudio.exe` remains a standard-user app and does not
+self-provision on launch. The only managed distro is exactly
+`QuantumStudioRuntime`; ownership conflicts block destructive work and user
+distros remain untouched. Normal uninstall preserves `.qs` projects and runtime
+scientific data; full cleanup requires explicit confirmation and ownership
+verification. Inno Setup 6 is the planned Windows compiler; actual compilation,
+UAC/reboot behavior, and all real runtime/scientific validation remain
+**PENDING_REAL_WINDOWS**. Public Engine Pack distribution/legal review and code
+signing remain pending.

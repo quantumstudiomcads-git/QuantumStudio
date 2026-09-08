@@ -7,6 +7,7 @@ if str(_REPO) not in sys.path: sys.path.insert(0, str(_REPO))
 from backend.runtime import runtime_paths
 from backend.runtime.platform import current_platform, OperatingSystem
 from backend.runtime.wsl import WSLDiscovery, WSLCommandRunner
+from scripts.windows_installer.state import InstallerStateStore, installer_state_root
 
 
 def main(argv=None) -> int:
@@ -19,6 +20,14 @@ def main(argv=None) -> int:
         health=WSLDiscovery(WSLCommandRunner(), info).probe()
         state="PASS" if health.managed_runtime.registered else "NOT_AVAILABLE"
         report["checks"].append({"name":"managed_wsl","state":state,"host_state":health.host_state.value,"runtime_state":health.managed_runtime.health_state.value})
+    if info.operating_system is not OperatingSystem.WINDOWS:
+        report["checks"].append({"name":"installer_state","state":"PENDING_REAL_WINDOWS","detail":"ProgramData installer state was not read on this host."})
+    else:
+        try:
+            state=InstallerStateStore(installer_state_root()).load()
+            report["checks"].append({"name":"installer_state","state":"NOT_AVAILABLE" if state is None else "PASS","phase":None if state is None else state.phase.value,"repair_required":False if state is None else state.repair_required})
+        except ValueError:
+            report["checks"].append({"name":"installer_state","state":"REPAIR_REQUIRED","detail":"Installer continuation state is corrupt."})
     report["checks"].extend([{"name":"runtime_metadata","state":"PENDING"},{"name":"runtime_agent","state":"PENDING"},{"name":"engine_pack","state":"PENDING"},{"name":"scientific_execution","state":"PENDING_W8"}])
     text=json.dumps(report,indent=2,sort_keys=True); print(text)
     if args.json: args.json.parent.mkdir(parents=True,exist_ok=True); args.json.write_text(text+"\n",encoding="utf-8")

@@ -12,3 +12,5 @@ __all__ = [
 
 from .platform import OperatingSystem, PlatformInfo, current_platform, detect_platform
 from .managed import ManagedRuntimeIdentity, RuntimeState, RuntimeType
+from .wsl import DEFAULT_PROBE_TIMEOUT_SECONDS, MANAGED_DISTRO_NAME, ManagedWSLHealth, WSLCommandResult, WSLCommandRunner, WSLDistributionInfo, WSLDistributionState, WSLDiscovery, WSLHealthReport, WSLHostState, WSLProbeError, WSLRuntimeState, decode_wsl_output, parse_wsl_distributions, probe_wsl_host
+__all__ += ["DEFAULT_PROBE_TIMEOUT_SECONDS", "MANAGED_DISTRO_NAME", "ManagedWSLHealth", "WSLCommandResult", "WSLCommandRunner", "WSLDistributionInfo", "WSLDistributionState", "WSLDiscovery", "WSLHealthReport", "WSLHostState", "WSLProbeError", "WSLRuntimeState", "decode_wsl_output", "parse_wsl_distributions", "probe_wsl_host"]

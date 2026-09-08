@@ -16,3 +16,4 @@ from .artifacts import ArtifactError, ArtifactRegistry, ArtifactResolver, Materi
 from .recovery import FailureClass, RecoveryAction, DiskPreflight, IllegalTaskTransition, require_task_transition, classify_process_result, recovery_actions, disk_preflight, cleanup_disposable, recover_stale_running
 
 from .providers import ComputeRuntime, ExecutionProvider, LocalLinuxRuntime, ManagedWSL2Runtime, RuntimeProbe, select_compute_runtime
+from backend.runtime.wsl import WSLCommandRunner, WSLDiscovery, WSLHealthReport, probe_wsl_host

@@ -80,3 +80,7 @@ nuitka-crash-report.xml
 
 # Local scientific validation orchestrators (preserve locally; not release source)
 /scripts/validation/
+
+# Managed WSL runtime artifacts (never source)
+*.vhdx
+/runtime-rootfs*.tar

@@ -8,6 +8,7 @@ from typing import Any
 from backend.runtime.managed import ManagedRuntimeIdentity, RuntimeState, RuntimeType
 from backend.runtime.platform import OperatingSystem, PlatformInfo, current_platform
 from backend.runtime.wsl import WSLHealthReport, WSLRuntimeState
+from backend.runtime.provisioning import ManagedRuntimeHealthState
 from .errors import ExecutionPreflightError
 from .local import LocalExecutionManager
 from .tools import LocalToolConfiguration
@@ -60,12 +61,16 @@ class LocalLinuxRuntime(ComputeRuntime):
 
 class ManagedWSL2Runtime(ComputeRuntime):
     """Structural WSL2 provider; W2 health is observational and execution remains deferred."""
-    def __init__(self, info: PlatformInfo | None = None, health_report: WSLHealthReport | None = None):
+    def __init__(self, info: PlatformInfo | None = None, health_report: WSLHealthReport | None = None,
+                 provisioning_health: ManagedRuntimeHealthState | None = None):
         self.info = info or current_platform()
         self.identity = ManagedRuntimeIdentity.managed_wsl2(self.info)
         self.health_report = health_report
+        self.provisioning_health = provisioning_health
 
     def probe(self) -> RuntimeProbe:
+        if self.provisioning_health is ManagedRuntimeHealthState.METADATA_VALID:
+            return RuntimeProbe(RuntimeState.AVAILABLE_NOT_READY, "QuantumStudioRuntime metadata is verified, but scientific execution is not implemented.")
         if self.health_report and self.health_report.managed_runtime.health_state is WSLRuntimeState.REGISTERED_WSL2:
             return RuntimeProbe(RuntimeState.AVAILABLE_NOT_READY, "QuantumStudioRuntime is registered as WSL2 but is not verified for scientific execution.")
         return RuntimeProbe(RuntimeState.AVAILABLE_NOT_READY, "Managed WSL2 runtime is not ready; provisioning and verification are deferred.")

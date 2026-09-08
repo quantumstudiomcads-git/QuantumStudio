@@ -12,12 +12,21 @@ class EnginePackError(RuntimeError):
     pass
 
 
-def _sha256(path: Path) -> str:
+def sha256_file(path: Path) -> str:
+    """Return a streaming SHA-256 digest for a local artifact.
+
+    Runtime image provisioning shares this deliberately small integrity
+    primitive; it does not share Engine Pack semantics.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+# Compatibility for the existing local implementation.
+_sha256 = sha256_file
 
 
 @dataclass(frozen=True)

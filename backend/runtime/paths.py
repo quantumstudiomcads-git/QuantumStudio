@@ -31,8 +31,18 @@ class RuntimePaths:
     def diagnostics(self) -> Path:
         return self.data / "diagnostics"
 
+    @property
+    def managed_wsl_runtime(self) -> Path:
+        """Private mutable WSL import root, never a source or project path.
+
+        On Windows this is ``%LOCALAPPDATA%\\QuantumStudio\\runtime\\wsl``.
+        The provisioning layer appends its fixed distro identity; callers must
+        not select an arbitrary distribution directory.
+        """
+        return self.runtime / "wsl"
+
     def ensure_user_dirs(self) -> None:
-        for path in (self.config, self.data, self.cache, self.workflows, self.logs, self.pseudos, self.engine_config, self.runtime, self.diagnostics):
+        for path in (self.config, self.data, self.cache, self.workflows, self.logs, self.pseudos, self.engine_config, self.runtime, self.diagnostics, self.managed_wsl_runtime):
             path.mkdir(parents=True, exist_ok=True)
 
 

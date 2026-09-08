@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from pathlib import Path
 import numpy as np
@@ -6,8 +7,30 @@ from backend.compiler.calculation_compiler import CalculationCompiler
 from backend.core.calculation_request import CalculationRequest
 
 class E3DDielectricTests(unittest.TestCase):
-    def test_real_qe_lperm_result_has_static_sum_and_excludes_acoustic(self):
-        result=parse_phonon_dielectric("/tmp/e3d_mgo_lperm.out", activity_text=Path("/tmp/e3d_mgo_lperm.stdout").read_text())
+    def test_qe_lperm_result_has_static_sum_and_excludes_acoustic(self):
+        # Minimal QE-style lperm/lplasma fragment.  The first three rows are
+        # acoustic modes; the final three contribute one diagonal component.
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            output = directory / "mgo_lperm.out"
+            activity = directory / "mgo_lperm.stdout"
+            output.write_text("\n".join([
+                "freq ( 1 ) = 0.0000 [THz] = 0.0000 [cm-1]",
+                "freq ( 2 ) = 0.0000 [THz] = 0.0000 [cm-1]",
+                "freq ( 3 ) = 0.0000 [THz] = 0.0000 [cm-1]",
+                "freq ( 4 ) = 12.0000 [THz] = 400.0000 [cm-1]",
+                "freq ( 5 ) = 15.0000 [THz] = 500.0000 [cm-1]",
+                "freq ( 6 ) = 18.0000 [THz] = 600.0000 [cm-1]",
+                "Electronic dielectric permittivity tensor (relative, adimensional)",
+                "3 0 0", "0 3 0", "0 0 3",
+                "with zone-center polar mode contributions",
+                "4 0 0", "0 5 0", "0 0 6",
+            ]) + "\n")
+            activity.write_text("\n".join([
+                "1 0 0 0 0 0 0", "2 0 0 0 0 0 0", "3 0 0 0 0 0 0",
+                "4 400 1 0 0 100 1", "5 500 0 1 0 100 2", "6 600 0 0 1 100 3",
+            ]) + "\n")
+            result=parse_phonon_dielectric(output, activity_text=activity.read_text())
         self.assertEqual(result.result_type, "PhononDielectricResult")
         np.testing.assert_allclose(result.arrays["epsilon_static"], result.arrays["epsilon_infinity"] + result.arrays["epsilon_ionic"])
         self.assertEqual(result.arrays["included_mode_mask"].tolist(), [False,False,False,True,True,True])

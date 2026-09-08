@@ -1,3 +1,4 @@
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,21 @@ from backend.engines.epw.reciprocal import (
 )
 from backend.pseudopotentials.provisioner import PSEUDODOJO_PB_PBE_NC_SR, PseudoProvisioner
 from backend.pseudopotentials.upf import inspect_upf, inspect_upf_channels
+
+
+def _write_test_pb_upf(path):
+    """Write metadata-only TEST DATA; this is not a usable Pb potential."""
+    path.write_text("""<?xml version=\"1.0\"?>
+<UPF version=\"2.0.1\">
+<PP_HEADER element=\"Pb\" functional=\"PBE\" pseudo_type=\"NC\"
+ relativistic=\"scalar\" z_valence=\"14.0\" version=\"test-fixture\"/>
+<PP_CHI.1 label=\"5D\" l=\"2\"/>
+<PP_CHI.2 label=\"6S\" l=\"0\"/>
+<PP_CHI.3 label=\"6P\" l=\"1\"/>
+</UPF>
+""")
+
+
 
 class E5FoundationTests(unittest.TestCase):
     def test_epw_settings_and_native_writer_contract(self):
@@ -40,16 +56,22 @@ class E5FoundationTests(unittest.TestCase):
             path=Path(d)/"tc.out"; path.write_text("1 0.7\n2 0.9\n")
             with self.assertRaises(EPWParseError): parse_tc_eigenvalues(path)
 
-    def test_official_pseudodojo_pb_metadata_and_managed_install(self):
-        record=inspect_upf('/tmp/Pb.upf','pseudodojo','nc-sr-05_pbe_standard')
-        self.assertEqual((record.element,record.xc_functional,record.pseudo_type.value,record.relativity.value),("Pb","pbe","NC","SCALAR_RELATIVISTIC"))
-        self.assertEqual(record.sha256,"1c58a8a738fff0b37a3ccbe1c9d45dc5dca11435930a81e628e1d1db363558b1")
+    def test_pseudodojo_pb_metadata_and_managed_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory) / "Pb.test.upf"
+            _write_test_pb_upf(path)
+            record=inspect_upf(path,'pseudodojo','nc-sr-05_pbe_standard')
+            self.assertEqual((record.element,record.xc_functional,record.pseudo_type.value,record.relativity.value),("Pb","pbe","NC","SCALAR_RELATIVISTIC"))
+            self.assertEqual(record.sha256,hashlib.sha256(path.read_bytes()).hexdigest())
 
     def test_pseudodojo_pb_declares_s_p_d_channels(self):
-        channels=inspect_upf_channels("/home/bhargava-kalapatapu/.local/share/QuantumStudio/pseudopotentials/pseudodojo/nc-sr-05_pbe_standard/Pb.upf")
-        self.assertEqual(channels["z_valence"],14.0)
-        self.assertEqual({item["label"] for item in channels["channels"]},{"5D","6S","6P"})
-        self.assertTrue({0,1,2}.issubset(set(channels["available_l"])))
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory) / "Pb.test.upf"
+            _write_test_pb_upf(path)
+            channels=inspect_upf_channels(path)
+            self.assertEqual(channels["z_valence"],14.0)
+            self.assertEqual({item["label"] for item in channels["channels"]},{"5D","6S","6P"})
+            self.assertTrue({0,1,2}.issubset(set(channels["available_l"])))
 
     def test_epw_collector_is_deterministic_and_validates_contract(self):
         with tempfile.TemporaryDirectory() as d:
@@ -90,15 +112,26 @@ class E5CoarseStateTests(unittest.TestCase):
 
 
 class E5BandForensicsTests(unittest.TestCase):
-    def test_real_wannier_block_parser_preserves_shape(self):
-        table = parse_wannier_band_blocks('/tmp/e5b_cutoff/90/epw/pb_band.dat', expected_kpoints=476)
-        self.assertEqual(table['shape'], (476, 4))
-        self.assertEqual(table['distance'].shape, (476,))
-        self.assertTrue(np.all(np.diff(table['distance']) >= 0))
+    def test_wannier_block_parser_preserves_shape(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "pb_band.dat"
+            blocks = []
+            for band in range(4):
+                blocks.append("\n".join(f"{index * 0.01:.8f} {band + index * 0.1:.8f}" for index in range(476)))
+            path.write_text("\n\n".join(blocks) + "\n")
+            table = parse_wannier_band_blocks(path, expected_kpoints=476)
+            self.assertEqual(table['shape'], (476, 4))
+            self.assertEqual(table['distance'].shape, (476,))
+            self.assertTrue(np.all(np.diff(table['distance']) >= 0))
 
-    def test_real_qe_band_parser_preserves_shape(self):
-        table = parse_qe_band_blocks('/tmp/e5b_cutoff/90/pb.direct.dat', expected_bands=10, expected_kpoints=476)
-        self.assertEqual(table['energies'].shape, (476, 10))
+    def test_qe_band_parser_preserves_shape(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "pb.direct.dat"
+            rows = ["nbnd = 10, nks = 476"]
+            rows.extend(" ".join(f"{band + index * 0.01:.8f}" for band in range(10)) for index in range(476))
+            path.write_text("\n".join(rows) + "\n")
+            table = parse_qe_band_blocks(path, expected_bands=10, expected_kpoints=476)
+            self.assertEqual(table['energies'].shape, (476, 10))
 
     def test_one_to_one_matching_is_permutation_safe(self):
         direct = np.array([[1.0, 2.0, 3.0]])

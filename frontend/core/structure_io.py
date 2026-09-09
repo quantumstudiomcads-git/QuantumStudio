@@ -1,7 +1,5 @@
 from pathlib import Path
 
-from ase.io import read, write
-
 from frontend.core.structure import Atom, Structure
 
 
@@ -50,6 +48,8 @@ class StructureIO:
         fmt = cls._detect_format(path)
 
         try:
+            from ase.io import read
+
             atoms = read(
                 str(path),
                 format=fmt,
@@ -166,6 +166,8 @@ class StructureIO:
         )
 
         try:
+            from ase.io import write
+
             write(
                 str(path),
                 atoms,

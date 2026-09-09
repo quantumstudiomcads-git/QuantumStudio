@@ -1,6 +1,6 @@
 import os
 import sys
-from pathlib import Path
+from pathlib import Path as _Path
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
@@ -38,7 +38,7 @@ def main():
     if os.environ.get("QUANTUM_STUDIO_PACKAGED_SMOKE") == "1":
         def packaged_smoke() -> None:
             project = Project("Packaged Smoke")
-            smoke_root = Path(os.environ.get("XDG_DATA_HOME", Path.home())) / "Quantum Studio Smoke ü"
+            smoke_root = _Path(os.environ.get("QUANTUM_STUDIO_PACKAGED_SMOKE_DATA", _Path.home())) / "Quantum Studio Smoke ü"
             smoke_root.mkdir(parents=True, exist_ok=True)
             project_path = smoke_root / "My Quantum Studio Test.qs"
             project.save(project_path)
@@ -56,15 +56,15 @@ def main():
                 from frontend.services.calculation_service import CalculationService
                 from frontend.services.result_service import ResultService
                 from frontend.core import Atom, Structure
-                engine_root = Path(os.environ["QUANTUM_STUDIO_RC_ENGINE_ROOT"])
-                pseudo = Path(os.environ["QUANTUM_STUDIO_RC_SI_PSEUDO"])
+                engine_root = _Path(os.environ["QUANTUM_STUDIO_RC_ENGINE_ROOT"])
+                pseudo = _Path(os.environ["QUANTUM_STUDIO_RC_SI_PSEUDO"])
                 structure = Structure([Atom("Si", 0.0, 0.0, 0.0), Atom("Si", 1.3575, 1.3575, 1.3575)], [[5.43, 0.0, 0.0], [0.0, 5.43, 0.0], [0.0, 0.0, 5.43]], "Si RC Smoke")
                 project.set_structure(structure)
                 parameters = {"xc_functional": "pbe", "ecutwfc": 12.0, "ecutrho": 48.0, "conv_thr": 1.0e-6, "electron_maxstep": 50, "kpoints": [1, 1, 1], "pseudopotentials": {"Si": {"element": "Si", "filename": pseudo.name, "source": str(pseudo), "sha256": sha256(pseudo), "pseudo_type": "USPP", "xc_functional": "pbe"}}}
                 service = CalculationService(CALCULATIONS)
                 prepared = service.create_request(project, ["scf"], parameters, name="Si RC Engine Smoke")
                 project.add_calculation(prepared.backend_request)
-                workflow_parent = Path(os.environ.get("XDG_DATA_HOME", Path.home())) / "Quantum Studio RC Engine Smoke"
+                workflow_parent = _Path(os.environ.get("QUANTUM_STUDIO_PACKAGED_SMOKE_DATA", _Path.home())) / "Quantum Studio RC Engine Smoke"
                 generated = service.generate_engine_inputs(prepared, workflow_parent)
                 workflow = service.execution_workflow(prepared, generated)
                 pw_candidates = (

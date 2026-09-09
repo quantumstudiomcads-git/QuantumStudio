@@ -16,7 +16,7 @@ from backend.runtime import (
 )
 from runtime_agent.agent import execute_request
 from runtime_agent.protocol import AgentStatus, ProtocolError, RuntimePath, RuntimeProcessRequest, RuntimeProcessResult
-from tests.helpers.fake_executable import runtime_path, write_fake_executable
+from tests.helpers.fake_executable import runtime_path, write_python_fixture
 
 WINDOWS = detect_platform(system="Windows", machine="AMD64", python_bits=64)
 LINUX = detect_platform(system="Linux", machine="x86_64", python_bits=64)
@@ -60,13 +60,13 @@ def runtime_request(root, *, exit_code=0):
     working_root = Path(root) / "workflows"
     cwd = working_root / "job space"
     executable_root.mkdir(); cwd.mkdir(parents=True)
-    fake = write_fake_executable(executable_root / "fake-engine", "import json, os, sys\nprint(json.dumps({'argv':sys.argv[1:], 'cwd':os.getcwd(), 'env':os.environ.get('QS_TEST_VALUE'), 'stdin':sys.stdin.buffer.read().decode('utf-8')}))\nprint('deterministic stderr', file=sys.stderr)\nsys.exit(int(os.environ.get('QS_EXIT_CODE', '0')))\n")
+    fake = write_python_fixture(executable_root / "fake-engine.py", "import json, os, sys\nprint(json.dumps({'argv':sys.argv[1:], 'cwd':os.getcwd(), 'env':os.environ.get('QS_TEST_VALUE'), 'stdin':sys.stdin.buffer.read().decode('utf-8')}))\nprint('deterministic stderr', file=sys.stderr)\nsys.exit(int(os.environ.get('QS_EXIT_CODE', '0')))\n")
     stdin, stdout, stderr = cwd / "input.in", cwd / "output.out", cwd / "output.err"
     stdin.write_bytes(b"input with Unicode \xce\xa9\n")
-    request = RuntimeProcessRequest("task ü", RuntimePath(runtime_path(fake)), ("space value", "Ω", "", "--flag=value"),
+    request = RuntimeProcessRequest("task ü", RuntimePath(runtime_path(sys.executable)), (runtime_path(fake), "space value", "Ω", "", "--flag=value"),
                                     RuntimePath(runtime_path(cwd)), {"QS_TEST_VALUE": "hello world", "QS_EXIT_CODE": str(exit_code)},
                                     RuntimePath(runtime_path(stdin)), RuntimePath(runtime_path(stdout)), RuntimePath(runtime_path(stderr)))
-    return request, executable_root, working_root, stdout, stderr
+    return request, Path(sys.executable).parent, working_root, stdout, stderr
 
 
 class RuntimeProtocolAndAgentTests(unittest.TestCase):

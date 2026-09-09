@@ -57,11 +57,13 @@ def build_plan(*, repo: str | Path, output: str | Path, channel: str, version: s
     if not icon.is_file(): raise WindowsBuildError("Canonical Quantum Studio artwork is missing.")
     ico = output / "build-assets" / "QuantumStudio.ico"
     argv = (python_executable, "-m", "nuitka", "--standalone", "--enable-plugin=pyside6", "--windows-console-mode=disable",
-            f"--output-dir={output}", f"--output-filename={EXECUTABLE_NAME}", f"--windows-product-name={PRODUCT_NAME}",
-            f"--windows-file-description={PRODUCT_NAME}", f"--windows-product-version={version}", f"--windows-file-version={version}",
-            f"--windows-original-filename={EXECUTABLE_NAME}", f"--windows-icon-from-ico={ico}",
+            f"--output-dir={output}", f"--output-filename={EXECUTABLE_NAME}", f"--product-name={PRODUCT_NAME}",
+            f"--file-description={PRODUCT_NAME}", f"--product-version={version}", f"--file-version={version}",
+            f"--windows-icon-from-ico={ico}",
             f"--include-data-dir={repo / 'assets'}=assets", "--include-package=backend.runtime", "--include-package=backend.execution",
-            "--include-package=runtime_agent", "--nofollow-import-to=tests", "--nofollow-import-to=pytest", str(entry))
+            "--include-package=runtime_agent",
+            "--include-module=scipy._external.array_api_compat.numpy.fft",
+            "--nofollow-import-to=tests", "--nofollow-import-to=pytest", str(entry))
     return WindowsBuildPlan(repo, output, channel, version, commit, dirty, architecture, entry, icon, ico, argv)
 
 

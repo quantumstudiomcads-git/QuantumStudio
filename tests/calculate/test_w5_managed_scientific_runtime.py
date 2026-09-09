@@ -21,7 +21,7 @@ from backend.runtime.wsl import WSLCommandResult
 from backend.execution.persistence import ExecutionStore
 from backend.execution.models import TaskExecutionRecord, TaskState, WorkflowExecutionRecord
 from frontend.services.result_service import ResultService
-from tests.helpers.fake_executable import runtime_path, write_fake_executable
+from tests.helpers.fake_executable import runtime_path, write_python_fixture
 
 
 def make_pack(root: Path, *, version="1.0", platform="linux", architecture="x86_64", body=b"fake engine"):
@@ -83,24 +83,18 @@ class AgentTransferAndControlTests(unittest.TestCase):
     def test_task_control_uses_owned_task_record_and_process_group_cancellation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); engines, work, records = root / "engines", root / "workflows", root / "tasks"; engines.mkdir(); cwd = work / "task"; cwd.mkdir(parents=True)
-            fake = write_fake_executable(engines / "long", "import os,signal,time\nif os.name != 'nt':\n signal.signal(signal.SIGTERM, signal.SIG_IGN)\n while True: time.sleep(.05)\ntime.sleep(.2)\n")
-            request = RuntimeProcessRequest("owned-task", RuntimePath(runtime_path(fake)), (), RuntimePath(runtime_path(cwd)), {})
+            fake = write_python_fixture(engines / "long_running.py", "import os,signal,time\nif os.name != 'nt':\n signal.signal(signal.SIGTERM, signal.SIG_IGN)\nwhile True:\n time.sleep(.05)\n")
+            request = RuntimeProcessRequest("owned-task", RuntimePath(runtime_path(sys.executable)), (runtime_path(fake),), RuntimePath(runtime_path(cwd)), {})
             result = []
-            thread = threading.Thread(target=lambda: result.append(execute_request(request, trusted_executable_roots=(runtime_path(engines),), trusted_working_roots=(runtime_path(work),), task_control_root=str(records), enable_task_control=True)), daemon=True)
+            thread = threading.Thread(target=lambda: result.append(execute_request(request, trusted_executable_roots=(runtime_path(Path(sys.executable).parent),), trusted_working_roots=(runtime_path(work),), task_control_root=str(records), enable_task_control=True)), daemon=True)
             thread.start()
             for _ in range(100):
                 if task_status("owned-task", task_control_root=str(records))["status"] == AgentStatus.TASK_RUNNING.value: break
                 time.sleep(.02)
             self.assertEqual(task_status("owned-task", task_control_root=str(records))["status"], AgentStatus.TASK_RUNNING.value)
             cancelled = cancel_task("owned-task", grace_seconds=.05, task_control_root=str(records))
-            if os.name == "nt" and cancelled["status"] == AgentStatus.TASK_FINISHED.value:
-                # A native .cmd wrapper may complete its own record between
-                # the running poll and cancellation; Windows does not expose
-                # POSIX process-group signal semantics for that wrapper.
-                self.assertEqual(cancelled["status"], AgentStatus.TASK_FINISHED.value)
-            else:
-                self.assertEqual(cancelled["status"], AgentStatus.TASK_CANCELLED.value)
-                self.assertEqual(cancelled["outcome"], "KILLED_AFTER_GRACE")
+            self.assertEqual(cancelled["status"], AgentStatus.TASK_CANCELLED.value)
+            self.assertEqual(cancelled["outcome"], "KILLED_AFTER_GRACE")
             thread.join(3); self.assertFalse(thread.is_alive())
             allowed_codes = (-9, None, 15) if os.name == "nt" else (-9, None)
             self.assertIn(result[0].return_code, allowed_codes); self.assertIn(result[0].status, {AgentStatus.PROCESS_EXITED, AgentStatus.INTERNAL_AGENT_ERROR})
@@ -161,12 +155,12 @@ class EndToEndFakeScientificPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); runtime_engines = root / "runtime engines"; runtime_work = root / "runtime workflows" / "w"; runtime_engines.mkdir(parents=True); runtime_work.mkdir(parents=True)
             tool = runtime_engines / "fake-bands"; bands_text = " &plot nbnd= 2, nks= 2 /\n 0 0 0\n -1.0 2.0\n 0 .5 0\n -0.5 2.5\n"
-            tool = write_fake_executable(tool, "from pathlib import Path\nPath('bands.dat').write_text(%r)\nprint('JOB DONE')\n" % bands_text)
+            tool = write_python_fixture(tool.with_suffix(".py"), "from pathlib import Path\nPath('bands.dat').write_text(%r)\nprint('JOB DONE')\n" % bands_text)
             host = root / "host workflow Ω"; task_dir = host / "bands"; task_dir.mkdir(parents=True); (task_dir / "generated.in").write_bytes(b"unchanged compiler bytes\n")
             runtime_input = runtime_work / "generated.in"; input_header = {"schema_version": 1, "operation": "stage_in", "destination": runtime_path(runtime_input), "sha256": sha256_file(task_dir / "generated.in")}
             with (task_dir / "generated.in").open("rb") as stream: stage_in(input_header, stream, trusted_roots=(runtime_path(runtime_work.parent),))
-            request = RuntimeProcessRequest("fake-bands", RuntimePath(runtime_path(tool)), (), RuntimePath(runtime_path(runtime_work)), {}, RuntimePath(runtime_path(runtime_input)), RuntimePath(runtime_path(runtime_work / "bands.out")), RuntimePath(runtime_path(runtime_work / "bands.err")))
-            process = execute_request(request, trusted_executable_roots=(runtime_path(runtime_engines),), trusted_working_roots=(runtime_path(runtime_work.parent),))
+            request = RuntimeProcessRequest("fake-bands", RuntimePath(runtime_path(sys.executable)), (runtime_path(tool),), RuntimePath(runtime_path(runtime_work)), {}, RuntimePath(runtime_path(runtime_input)), RuntimePath(runtime_path(runtime_work / "bands.out")), RuntimePath(runtime_path(runtime_work / "bands.err")))
+            process = execute_request(request, trusted_executable_roots=(runtime_path(Path(sys.executable).parent),), trusted_working_roots=(runtime_path(runtime_work.parent),))
             self.assertEqual(process.status, AgentStatus.PROCESS_EXITED); self.assertEqual(process.return_code, 0)
             for name in ("bands.dat", "bands.out"):
                 with (task_dir / name).open("wb") as output:

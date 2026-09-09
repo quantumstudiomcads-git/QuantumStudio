@@ -20,6 +20,13 @@ def write_fake_executable(path: str | os.PathLike[str], body: str) -> Path:
     return target
 
 
+def write_python_fixture(path: str | os.PathLike[str], body: str) -> Path:
+    """Write a Python fixture intended to run through ``sys.executable``."""
+    target = Path(path)
+    target.write_text(body, encoding="utf-8")
+    return target
+
+
 def runtime_path(path: str | os.PathLike[str]) -> str:
     """Represent an E:-drive fixture path in the runtime's POSIX namespace."""
     resolved = Path(path).resolve()

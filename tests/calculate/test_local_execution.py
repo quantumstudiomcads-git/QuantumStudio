@@ -66,6 +66,14 @@ class LocalExecutionTests(unittest.TestCase):
    item=task("slow",code="import time; time.sleep(2)",timeout_seconds=.1); result=manager().execute(workflow(tmp,(item,))); self.assertEqual(result.tasks["slow"].state,TaskState.FAILED); self.assertIn("timeout",result.tasks["slow"].error_message)
   with tempfile.TemporaryDirectory() as tmp:
    started=threading.Event(); item=task("cancel",code="import time; time.sleep(5)"); runner=manager(lambda event: started.set() if event["state"]=="RUNNING" else None); box={}; thread=threading.Thread(target=lambda:box.setdefault("result",runner.execute(workflow(tmp,(item,))))); thread.start(); self.assertTrue(started.wait(2)); runner.cancel(); thread.join(4); self.assertFalse(thread.is_alive()); self.assertEqual(box["result"].tasks["cancel"].state,TaskState.CANCELLED)
+   if sys.platform == "win32":
+    stderr_path=Path(box["result"].tasks["cancel"].stderr_path); deadline=time.monotonic()+3
+    while True:
+     try: stderr_path.unlink(); break
+     except FileNotFoundError: break
+     except PermissionError:
+      if time.monotonic() >= deadline: raise AssertionError(f"Cancelled task still holds {stderr_path}")
+      time.sleep(.03)
  def test_preflight_missing_tool_paths_external_artifact_and_modes(self):
   with tempfile.TemporaryDirectory() as tmp:
    flow=workflow(tmp,(GeneratedTask("bad","bad","test_engine","missing","bad",CommandSpec("missing-tool")),));

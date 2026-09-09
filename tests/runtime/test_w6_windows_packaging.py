@@ -1,15 +1,19 @@
 import json
+import io
 from pathlib import Path
 import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from unittest.mock import patch
 
 from backend.runtime.paths import runtime_paths
 from backend.runtime.resources import ApplicationResources, ResourceError
 from frontend.app.recent_projects import load_recent_projects, save_recent_projects
 from frontend.calculations.catalog import CALCULATIONS
+from scripts import build_windows
 from scripts.windows_packaging import (PACKAGE_MARKER, WindowsBuildError, audit_package_contents, build_plan, installer_input_manifest, safe_clean_output, write_json)
 
 REPO = Path(__file__).resolve().parents[2]
@@ -28,13 +32,29 @@ class WindowsPackagingTests(unittest.TestCase):
             self.assertNotIn("cmd.exe",str(argv)); self.assertNotIn("PowerShell",str(argv))
 
     def test_non_windows_build_is_plan_only_not_fake_success(self):
-        result=subprocess.run([sys.executable,"scripts/build_windows.py","--dry-run","--output","dist/windows test"],cwd=REPO,capture_output=True,text=True,check=False)
-        self.assertEqual(result.returncode,0); self.assertIn('"status": "PLAN_ONLY"',result.stdout)
-        actual=subprocess.run([sys.executable,"scripts/build_windows.py","--output","dist/windows test"],cwd=REPO,capture_output=True,text=True,check=False)
-        if sys.platform.startswith("win"):
-            self.assertEqual(actual.returncode,2); self.assertIn("Refusing a dirty beta/release Windows build",actual.stderr)
-        else:
-            self.assertEqual(actual.returncode,2); self.assertIn("WINDOWS_BUILD_HOST_REQUIRED",actual.stderr)
+        with tempfile.TemporaryDirectory() as tmp, patch.object(build_windows.sys, "platform", "linux"), patch.object(build_windows, "git_value", return_value=""):
+            planned_stdout, planned_stderr = io.StringIO(), io.StringIO()
+            with redirect_stdout(planned_stdout), redirect_stderr(planned_stderr):
+                planned = build_windows.main(["--dry-run", "--output", str(Path(tmp) / "dist")])
+            self.assertEqual(planned, 0); self.assertIn('"status": "PLAN_ONLY"', planned_stdout.getvalue()); self.assertEqual(planned_stderr.getvalue(), "")
+            actual_stdout, actual_stderr = io.StringIO(), io.StringIO()
+            with redirect_stdout(actual_stdout), redirect_stderr(actual_stderr):
+                actual = build_windows.main(["--output", str(Path(tmp) / "dist")])
+            self.assertEqual(actual, 2); self.assertIn("WINDOWS_BUILD_HOST_REQUIRED", actual_stderr.getvalue())
+            self.assertEqual(list(Path(tmp).rglob("QuantumStudio.exe")), [])
+
+    def test_dirty_windows_beta_build_is_refused_before_toolchain(self):
+        def fake_git_value(_repo, *arguments):
+            return "abc123" if arguments == ("rev-parse", "HEAD") else " M synthetic-test-state"
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(build_windows.sys, "platform", "win32"), patch.object(build_windows, "git_value", side_effect=fake_git_value):
+            output, errors = io.StringIO(), io.StringIO()
+            with redirect_stdout(output), redirect_stderr(errors):
+                result = build_windows.main(["--output", str(Path(tmp) / "dist")])
+            self.assertEqual(result, 2)
+            self.assertIn("Refusing a dirty beta/release Windows build", errors.getvalue())
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(list(Path(tmp).rglob("QuantumStudio.exe")), [])
 
     def test_windows_paths_resources_and_recent_projects_do_not_write_install_root(self):
         with tempfile.TemporaryDirectory(prefix="bundle Ω ") as tmp:

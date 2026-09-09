@@ -210,7 +210,9 @@ class PseudoProvisioner:
                 if isinstance(value,dict): metadata=value
             except (OSError,json.JSONDecodeError): pass
         records=[]
-        for path in sorted(root.rglob("*.upf")) + sorted(root.rglob("*.UPF")):
+        # ``Path.rglob`` is case-insensitive on Windows.  Searching both
+        # spellings therefore visits each UPF twice on that platform.
+        for path in sorted(item for item in root.rglob("*") if item.is_file() and item.suffix.lower() == ".upf"):
             try:
                 record=replace(inspect_upf(path,provider.library_id,provider.version), collection=provider.library_id)
                 expected=self._manifest(provider).get(record.element)

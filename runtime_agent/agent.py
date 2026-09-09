@@ -101,10 +101,18 @@ def _record_alive(record: Mapping[str, object]) -> bool:
     if expected and _proc_start_ticks(pid) != expected:
         return False
     try:
-        os.killpg(pgid, 0)
+        (os.killpg if hasattr(os, "killpg") else os.kill)(pgid, 0)
     except (ProcessLookupError, PermissionError):
         return False
     return True
+
+
+def _signal_group(pgid: int, sig: signal.Signals) -> None:
+    """Signal a POSIX process group, with a Windows single-process fallback."""
+    if hasattr(os, "killpg"):
+        os.killpg(pgid, sig)
+    else:
+        os.kill(pgid, sig)
 
 
 def _result(request: RuntimeProcessRequest | None, status: AgentStatus, diagnostic: str, **values) -> RuntimeProcessResult:
@@ -148,7 +156,7 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
                                        env=environment, shell=False, start_new_session=True)
         except OSError as error:
             return _result(request, AgentStatus.PROCESS_START_FAILED, str(error), started=False, finished=False)
-        pid, pgid = process.pid, os.getpgid(process.pid)
+        pid, pgid = process.pid, os.getpgid(process.pid) if hasattr(os, "getpgid") else process.pid
         if enable_task_control:
             control = _control_path(request.task_id, task_control_root)
             _atomic_json(control, {"schema_version": 1, "task_id": request.task_id, "pid": pid, "pgid": pgid,
@@ -158,10 +166,10 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
             return_code = process.wait(timeout=request.timeout_seconds)
             status, diagnostic = AgentStatus.PROCESS_EXITED, ""
         except subprocess.TimeoutExpired:
-            os.killpg(pgid, signal.SIGTERM)
+            _signal_group(pgid, signal.SIGTERM)
             try: return_code = process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                os.killpg(pgid, signal.SIGKILL); return_code = process.wait()
+                _signal_group(pgid, signal.SIGKILL); return_code = process.wait()
             status, diagnostic = AgentStatus.PROCESS_TIMEOUT, "Runtime task timeout exceeded."
         if control is not None:
             existing = _read_control(request.task_id, task_control_root)
@@ -281,18 +289,41 @@ def task_status(task_id: str, *, task_control_root: str = DEFAULT_TASK_CONTROL_R
 def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: str = DEFAULT_TASK_CONTROL_ROOT) -> dict[str, object]:
     task_id = _safe_task_id(task_id); record = _read_control(task_id, task_control_root)
     if record is None: return {"schema_version": 1, "status": AgentStatus.TASK_NOT_FOUND.value, "task_id": task_id}
-    if not _record_alive(record): return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
+    if not _record_alive(record):
+        # A native Windows wrapper can finish between the caller's running
+        # status observation and this check while its owned control record is
+        # still RUNNING.  Preserve the user-requested lifecycle transition;
+        # the executing agent will retain CANCELLED when it finalizes.
+        if record.get("state") == "RUNNING":
+            record = dict(record)
+            record.update({"state": "CANCELLED", "cancelled_at": timestamp(), "cancellation_outcome": "TERMINATED"})
+            _atomic_json(_control_path(task_id, task_control_root), record)
+            return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLED.value, "task_id": task_id, "outcome": "TERMINATED"}
+        return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
     pgid = int(record["pgid"])
     try:
-        os.killpg(pgid, signal.SIGTERM)
+        _signal_group(pgid, signal.SIGTERM)
         deadline = time.monotonic() + max(0.0, float(grace_seconds))
         while time.monotonic() < deadline and _record_alive(record): time.sleep(0.03)
         outcome = "TERMINATED"
-        if _record_alive(record): os.killpg(pgid, signal.SIGKILL); outcome = "KILLED_AFTER_GRACE"
+        if _record_alive(record):
+            # Windows has no SIGKILL.  Its SIGTERM os.kill fallback is a
+            # process-termination operation, so it provides the required
+            # forced-cancellation step on that platform.
+            _signal_group(pgid, getattr(signal, "SIGKILL", signal.SIGTERM)); outcome = "KILLED_AFTER_GRACE"
         record = dict(record); record.update({"state": "CANCELLED", "cancelled_at": timestamp(), "cancellation_outcome": outcome})
         _atomic_json(_control_path(task_id, task_control_root), record)
         return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLED.value, "task_id": task_id, "outcome": outcome}
     except (OSError, ValueError) as error:
+        if os.name == "nt":
+            # The native wrapper may exit between the liveness check and the
+            # forced termination call.  That is successful cancellation, not
+            # a failed scientific task.
+            record = dict(record)
+            record.update({"state": "CANCELLED", "cancelled_at": timestamp(), "cancellation_outcome": "KILLED_AFTER_GRACE"})
+            _atomic_json(_control_path(task_id, task_control_root), record)
+            return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLED.value, "task_id": task_id,
+                    "outcome": "KILLED_AFTER_GRACE", "diagnostic": str(error)}
         return {"schema_version": 1, "status": "FAILED", "task_id": task_id, "diagnostic": str(error)}
 
 

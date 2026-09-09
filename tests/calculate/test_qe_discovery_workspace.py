@@ -2,6 +2,7 @@ import os
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +14,7 @@ from backend.execution.discovery import ToolDiscoveryResult, validate_qe_install
 from backend.pseudopotentials import DownloadableProvider, PseudoProvisioner
 from frontend.calculate import CalculateWorkspace
 from frontend.core import Atom, Project, Structure
+from tests.helpers.fake_executable import write_fake_executable
 
 
 def fake_qe(root):
@@ -21,11 +23,16 @@ def fake_qe(root):
     for name in ("pw.x", "bands.x", "dos.x", "ph.x", "q2r.x", "matdyn.x"):
         path = directory / name
         if name == "pw.x":
-            path.write_text("#!/bin/sh\nif [ \"$1\" = \"-version\" ]; then echo 'Program PWSCF v.7.6'; exit 0; fi\ncat >/dev/null\n", encoding="utf-8")
+            if os.name == "nt":
+                physical = write_fake_executable(path, "import sys\nsys.stdin.read()\nprint('fake-qe-ok')\n")
+                path.write_text("Program PWSCF v.7.6\n", encoding="utf-8")
+            else:
+                path.write_text("#!/bin/sh\ncat >/dev/null\necho 'Program PWSCF v.7.6'\n", encoding="utf-8"); physical = path
         else:
-            path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        path.chmod(0o755)
-    return directory
+            if os.name == "nt": physical = write_fake_executable(path, "pass\n"); path.write_text("fixture\n", encoding="utf-8")
+            else: path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8"); physical = path
+        if os.name != "nt": path.chmod(0o755)
+    return directory, {name: str(directory / name) if os.name != "nt" else str(directory / (name + ".cmd")) for name in ("pw.x", "bands.x", "dos.x", "ph.x", "q2r.x", "matdyn.x")}
 
 
 def pseudo_archive():
@@ -49,8 +56,12 @@ class QuantumEspressoWorkspaceTests(unittest.TestCase):
     def test_real_run_button_auto_discovers_and_resumes(self):
         app = QApplication.instance() or QApplication([])
         with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {"QUANTUM_STUDIO_LOCAL_TOOLS": str(Path(root) / "tools.json")}, clear=False):
-            directory = fake_qe(root)
-            installation = validate_qe_installation(directory)
+            directory, physical = fake_qe(root)
+            if os.name == "nt":
+                with patch("backend.execution.discovery.subprocess.run", return_value=type("Probe", (), {"stdout": "Program PWSCF v.7.6", "stderr": "", "returncode": 0})()):
+                    installation = validate_qe_installation(directory)
+                installation = replace(installation, tools=physical)
+            else: installation = validate_qe_installation(directory)
             discovery = ToolDiscoveryResult((installation,), ())
             payload, checksum = pseudo_archive()
             provider = DownloadableProvider("fixture", "Fixture", "1", "https://archive.materialscloud.org/fixture.tar.gz", checksum, ("pbe",), 1024 * 1024)
@@ -71,7 +82,7 @@ class QuantumEspressoWorkspaceTests(unittest.TestCase):
                     self.assertTrue(wait(app, lambda: bool(responsive)))
                     self.assertTrue(wait(app, lambda: workspace._preparation_worker is None and workspace._active_execution is None, 12))
                 self.assertEqual(workspace.local_tool_configuration.qe_version, "7.6")
-                self.assertEqual(Path(workspace.local_tool_configuration.tool_paths["pw.x"]), directory / "pw.x")
+                self.assertEqual(Path(workspace.local_tool_configuration.tool_paths["pw.x"]), Path(physical["pw.x"]))
                 self.assertIn("COMPLETED", workspace.execution_preview.text())
                 self.assertTrue((Path(workspace._generated_root_path) / "pseudos" / "Si.UPF").is_file())
                 workspace.close()

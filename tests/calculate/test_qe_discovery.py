@@ -3,8 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from backend.execution.discovery import discover_quantum_espresso, validate_qe_installation
+from tests.helpers.fake_executable import write_fake_executable
 
 
 def make_qe(root, version="7.6", tools=("pw.x", "bands.x", "dos.x", "ph.x")):
@@ -13,14 +15,33 @@ def make_qe(root, version="7.6", tools=("pw.x", "bands.x", "dos.x", "ph.x")):
     for tool in tools:
         path = directory / tool
         if tool == "pw.x":
-            path.write_text(f"#!/bin/sh\necho 'Program PWSCF v.{version}'\n", encoding="utf-8")
+            if os.name == "nt":
+                write_fake_executable(path, f"print('Program PWSCF v.{version}')\n")
+                path.write_text(f"Program PWSCF v.{version}\n", encoding="utf-8")
+            else:
+                path.write_text(f"#!/bin/sh\necho 'Program PWSCF v.{version}'\n", encoding="utf-8")
         else:
-            path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        path.chmod(0o755)
+            if os.name == "nt":
+                write_fake_executable(path, "pass\n")
+                path.write_text("fixture\n", encoding="utf-8")
+            else:
+                path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        if os.name != "nt": path.chmod(0o755)
     return directory
 
 
 class QuantumEspressoDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        if os.name == "nt":
+            self._probe = patch(
+                "backend.execution.discovery.subprocess.run",
+                side_effect=lambda argv, **kwargs: SimpleNamespace(stdout=Path(argv[0]).read_text(encoding="utf-8"), stderr="", returncode=0),
+            )
+            self._probe.start()
+
+    def tearDown(self):
+        if hasattr(self, "_probe"): self._probe.stop()
+
     def test_directory_root_and_file_inputs_populate_siblings(self):
         with tempfile.TemporaryDirectory() as root:
             directory = make_qe(root)
@@ -52,10 +73,15 @@ class QuantumEspressoDiscoveryTests(unittest.TestCase):
                 target.write_bytes(item.read_bytes())
                 target.chmod(0o755)
             import backend.execution.discovery as module
-            with patch.object(module, "_repo_root", return_value=root), patch.object(module, "Path") as path_class:
-                path_class.home.return_value = root / "empty-home"
-                path_class.side_effect = Path
-                result = discover_quantum_espresso(environment={"PATH": str(path_bin)})
+            if os.name == "nt":
+                with patch.object(module.shutil, "which", return_value=str(path_bin / "pw.x")):
+                    with patch.object(module, "_repo_root", return_value=root), patch.object(module, "Path") as path_class:
+                        path_class.home.return_value = root / "empty-home"; path_class.side_effect = Path
+                        result = discover_quantum_espresso(environment={"PATH": str(path_bin)})
+            else:
+                with patch.object(module, "_repo_root", return_value=root), patch.object(module, "Path") as path_class:
+                    path_class.home.return_value = root / "empty-home"; path_class.side_effect = Path
+                    result = discover_quantum_espresso(environment={"PATH": str(path_bin)})
             self.assertEqual(result.preferred.version, "7.6")
             self.assertEqual(Path(result.preferred.bin_directory), path_bin)
 

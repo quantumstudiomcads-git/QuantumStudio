@@ -106,7 +106,10 @@ def cleanup_disposable(root: str | os.PathLike[str], target: str | os.PathLike[s
     lexical = target_path.absolute()
     if lexical == root_path or root_path not in lexical.parents:
         raise ValueError("Cleanup target is outside the owned workflow root.")
-    if target_path.is_symlink():
+    # NTFS directory junctions are reparse points just like symlinks for the
+    # purpose of safe cleanup.  Never let rmtree traverse either one.
+    is_link = target_path.is_symlink() or (hasattr(target_path, "is_junction") and target_path.is_junction())
+    if is_link:
         target_path.unlink()
     elif target_path.is_dir():
         shutil.rmtree(target_path)

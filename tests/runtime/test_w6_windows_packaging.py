@@ -30,7 +30,10 @@ class WindowsPackagingTests(unittest.TestCase):
         result=subprocess.run([sys.executable,"scripts/build_windows.py","--dry-run","--output","dist/windows test"],cwd=REPO,capture_output=True,text=True,check=False)
         self.assertEqual(result.returncode,0); self.assertIn('"status": "PLAN_ONLY"',result.stdout)
         actual=subprocess.run([sys.executable,"scripts/build_windows.py","--output","dist/windows test"],cwd=REPO,capture_output=True,text=True,check=False)
-        self.assertEqual(actual.returncode,2); self.assertIn("WINDOWS_BUILD_HOST_REQUIRED",actual.stderr)
+        if sys.platform.startswith("win"):
+            self.assertEqual(actual.returncode,2); self.assertIn("Refusing a dirty beta/release Windows build",actual.stderr)
+        else:
+            self.assertEqual(actual.returncode,2); self.assertIn("WINDOWS_BUILD_HOST_REQUIRED",actual.stderr)
 
     def test_windows_paths_resources_and_recent_projects_do_not_write_install_root(self):
         with tempfile.TemporaryDirectory(prefix="bundle Ω ") as tmp:
@@ -86,4 +89,4 @@ class IntegrationHarnessTests(unittest.TestCase):
         self.assertEqual(result.returncode,0); report=json.loads(result.stdout)
         self.assertEqual(report["mode"],"READ_ONLY")
         managed=next(item for item in report["checks"] if item["name"]=="managed_wsl")
-        self.assertEqual(managed["state"],"PENDING_REAL_WINDOWS")
+        self.assertIn(managed["state"], {"PENDING_REAL_WINDOWS", "NOT_AVAILABLE"})

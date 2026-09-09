@@ -63,9 +63,9 @@ class TransportAnalyzeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             directory = os.path.abspath(directory)
             plot.export_transport_npz(os.path.join(directory, "transport.npz"))
-            archive = np.load(os.path.join(directory, "transport.npz"))
-            self.assertEqual(archive["seebeck"].shape, (2, 3, 3, 3))
-            self.assertEqual(archive["carrier_concentration_cm3"].shape, (2, 3))
+            with np.load(os.path.join(directory, "transport.npz")) as archive:
+                self.assertEqual(archive["seebeck"].shape, (2, 3, 3, 3))
+                self.assertEqual(archive["carrier_concentration_cm3"].shape, (2, 3))
             for suffix in ("png", "pdf", "svg"):
                 plot.export_figure(os.path.join(directory, "transport." + suffix), fmt=suffix, dpi=120)
                 self.assertGreater(os.path.getsize(os.path.join(directory, "transport." + suffix)), 0)

@@ -180,7 +180,7 @@ class LocalExecutionManager:
       stdout_text=stderr_text=""
      detail=extract_qe_failure(stdout_text, stderr_text, runtime.return_code)
      oom_signal = runtime.return_code in {137, -9}
-     oom_evidence = oom_signal and any(token.lower() in (stdout_text + "\n" + stderr_text).lower() for token in ("estimated total dynamical ram", "estimated max dynamical ram", "out of memory", "oom", "cannot allocate"))
+     oom_evidence = runtime.return_code not in (None, 0) and any(token.lower() in (stdout_text + "\n" + stderr_text).lower() for token in ("estimated total dynamical ram", "estimated max dynamical ram", "out of memory", "oom", "cannot allocate"))
      if oom_evidence:
       runtime.error_type="RESOURCE_OOM"
       runtime.error_message="Process was terminated by the operating system, most likely because the calculation exceeded available memory. " + (detail or f"Process exited with code {runtime.return_code}.")

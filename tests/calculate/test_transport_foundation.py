@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+import os
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,7 @@ from backend.engines.boltztrap2 import discover, DenseElectronicState, DenseElec
 from backend.engines.boltztrap2 import BoltzTraP2WorkflowAdapter
 from tests.calculate.test_boltztrap2_workflow import plan as btp_plan
 from backend.results.transport import TransportParseError, parse_transport_result
+from tests.helpers.fake_executable import write_fake_executable
 
 
 def _artifact(root):
@@ -31,7 +33,9 @@ def _artifact(root):
 
 class TransportFoundationTests(unittest.TestCase):
     def test_btp2_discovery_uses_installed_environment(self):
-        installation = discover(environment={"PATH": "/home/bhargava-kalapatapu/QuantumStudio/v0.1/software/engines/bin"})
+        with tempfile.TemporaryDirectory() as root:
+            tool = write_fake_executable(Path(root) / "btp2", "print('BoltzTraP2 26.3.1')\n")
+            installation = discover(environment={"PATH": str(Path(tool).parent)})
         self.assertIsNotNone(installation)
         self.assertRegex(installation.version, r"\d+\.\d+\.\d+")
 

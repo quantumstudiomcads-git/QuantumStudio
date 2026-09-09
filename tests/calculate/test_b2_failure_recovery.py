@@ -51,10 +51,14 @@ class B2RecoveryContractTests(unittest.TestCase):
             (disposable / "partial").write_text("x")
             external_file = external / "keep.txt"
             external_file.write_text("keep")
-            (root / "link").symlink_to(external, target_is_directory=True)
+            link = root / "link"
+            if os.name == "nt":
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(external)], check=True, capture_output=True)
+            else:
+                link.symlink_to(external, target_is_directory=True)
             cleanup_disposable(root, disposable)
             self.assertFalse(disposable.exists())
-            cleanup_disposable(root, root / "link")
+            cleanup_disposable(root, link)
             self.assertTrue(external_file.exists())
             with self.assertRaises(ValueError):
                 cleanup_disposable(root, external)
@@ -69,7 +73,7 @@ class B2RecoveryContractTests(unittest.TestCase):
             exited = subprocess.run([sys.executable, str(script), "exit"], cwd=tmp, check=False)
             self.assertEqual(exited.returncode, 42)
             killed = subprocess.run([sys.executable, str(script), "signal"], cwd=tmp, check=False)
-            self.assertEqual(killed.returncode, -signal.SIGTERM)
+            self.assertEqual(killed.returncode, signal.SIGTERM if os.name == "nt" else -signal.SIGTERM)
 
     def test_failure_matrix_is_machine_readable(self):
         matrix = {

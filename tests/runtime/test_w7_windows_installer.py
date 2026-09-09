@@ -183,4 +183,7 @@ class WindowsInstallerTests(unittest.TestCase):
         plan=subprocess.run([sys.executable, "scripts/build_windows_installer.py", "--plan", "--profile", "GUI_ONLY"], cwd=REPO, capture_output=True, text=True, check=False)
         self.assertEqual(plan.returncode, 0); self.assertIn('"status": "PLAN_ONLY"', plan.stdout)
         actual=subprocess.run([sys.executable, "scripts/build_windows_installer.py"], cwd=REPO, capture_output=True, text=True, check=False)
-        self.assertEqual(actual.returncode, 2); self.assertIn("WINDOWS_INSTALLER_BUILD_HOST_REQUIRED", actual.stderr)
+        if sys.platform.startswith("win"):
+            self.assertEqual(actual.returncode, 2); self.assertIn("INSTALLER_INPUT_MISSING", actual.stderr)
+        else:
+            self.assertEqual(actual.returncode, 2); self.assertIn("WINDOWS_INSTALLER_BUILD_HOST_REQUIRED", actual.stderr)

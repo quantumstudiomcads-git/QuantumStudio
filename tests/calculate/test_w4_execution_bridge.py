@@ -16,6 +16,7 @@ from backend.runtime import (
 )
 from runtime_agent.agent import execute_request
 from runtime_agent.protocol import AgentStatus, ProtocolError, RuntimePath, RuntimeProcessRequest, RuntimeProcessResult
+from tests.helpers.fake_executable import runtime_path, write_fake_executable
 
 WINDOWS = detect_platform(system="Windows", machine="AMD64", python_bits=64)
 LINUX = detect_platform(system="Linux", machine="x86_64", python_bits=64)
@@ -59,14 +60,12 @@ def runtime_request(root, *, exit_code=0):
     working_root = Path(root) / "workflows"
     cwd = working_root / "job space"
     executable_root.mkdir(); cwd.mkdir(parents=True)
-    fake = executable_root / "fake-engine"
-    fake.write_text("#!%s\nimport json, os, sys\nprint(json.dumps({'argv':sys.argv[1:], 'cwd':os.getcwd(), 'env':os.environ.get('QS_TEST_VALUE'), 'stdin':sys.stdin.read()}))\nprint('deterministic stderr', file=sys.stderr)\nsys.exit(int(os.environ.get('QS_EXIT_CODE', '0')))\n" % sys.executable)
-    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    fake = write_fake_executable(executable_root / "fake-engine", "import json, os, sys\nprint(json.dumps({'argv':sys.argv[1:], 'cwd':os.getcwd(), 'env':os.environ.get('QS_TEST_VALUE'), 'stdin':sys.stdin.buffer.read().decode('utf-8')}))\nprint('deterministic stderr', file=sys.stderr)\nsys.exit(int(os.environ.get('QS_EXIT_CODE', '0')))\n")
     stdin, stdout, stderr = cwd / "input.in", cwd / "output.out", cwd / "output.err"
-    stdin.write_text("input with Unicode Ω\n")
-    request = RuntimeProcessRequest("task ü", RuntimePath(str(fake)), ("space value", "Ω", "", "--flag=value"),
-                                    RuntimePath(str(cwd)), {"QS_TEST_VALUE": "hello world", "QS_EXIT_CODE": str(exit_code)},
-                                    RuntimePath(str(stdin)), RuntimePath(str(stdout)), RuntimePath(str(stderr)))
+    stdin.write_bytes(b"input with Unicode \xce\xa9\n")
+    request = RuntimeProcessRequest("task ü", RuntimePath(runtime_path(fake)), ("space value", "Ω", "", "--flag=value"),
+                                    RuntimePath(runtime_path(cwd)), {"QS_TEST_VALUE": "hello world", "QS_EXIT_CODE": str(exit_code)},
+                                    RuntimePath(runtime_path(stdin)), RuntimePath(runtime_path(stdout)), RuntimePath(runtime_path(stderr)))
     return request, executable_root, working_root, stdout, stderr
 
 
@@ -88,31 +87,35 @@ class RuntimeProtocolAndAgentTests(unittest.TestCase):
         for exit_code in (0, 1, 42):
             with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory(prefix="runtime Ω ") as root:
                 request, executable_root, working_root, stdout, stderr = runtime_request(root, exit_code=exit_code)
-                result = execute_request(request, trusted_executable_roots=(str(executable_root),), trusted_working_roots=(str(working_root),))
+                result = execute_request(request, trusted_executable_roots=(runtime_path(executable_root),), trusted_working_roots=(runtime_path(working_root),))
                 self.assertEqual(result.status, AgentStatus.PROCESS_EXITED)
                 self.assertEqual(result.return_code, exit_code)
                 self.assertTrue(result.started and result.finished)
                 self.assertEqual(result.runtime_pid, result.runtime_process_group)
                 observed = json.loads(stdout.read_text())
-                self.assertEqual(observed["argv"], ["space value", "Ω", "", "--flag=value"])
-                self.assertEqual(observed["cwd"], str(request.cwd))
+                self.assertEqual(observed["argv"], ["space value", "\u03a9", "", "--flag=value"])
+                # RuntimePath is the POSIX wire representation.  On native
+                # Windows the agent launches the fixture through a host-side
+                # wrapper, so the child reports the resolved host path.
+                self.assertEqual(Path(observed["cwd"]).resolve(), Path(str(request.cwd)).resolve())
                 self.assertEqual(observed["env"], "hello world")
-                self.assertEqual(observed["stdin"], "input with Unicode Ω\n")
+                self.assertEqual(observed["stdin"].encode("utf-8"), b"input with Unicode \xce\xa9\n")
                 self.assertEqual(stderr.read_text(), "deterministic stderr\n")
 
     def test_agent_rejects_untrusted_executable_cwd_and_missing_stdin(self):
         with tempfile.TemporaryDirectory() as root:
             request, executable_root, working_root, _, _ = runtime_request(root)
             rejected = RuntimeProcessRequest(request.task_id, RuntimePath("/bin/echo"), (), request.cwd, {})
-            self.assertEqual(execute_request(rejected, trusted_executable_roots=(str(executable_root),), trusted_working_roots=(str(working_root),)).status, AgentStatus.EXECUTABLE_REJECTED)
+            self.assertEqual(execute_request(rejected, trusted_executable_roots=(runtime_path(executable_root),), trusted_working_roots=(runtime_path(working_root),)).status, AgentStatus.EXECUTABLE_REJECTED)
             rejected_cwd = RuntimeProcessRequest(request.task_id, request.executable, (), RuntimePath("/etc"), {})
-            self.assertEqual(execute_request(rejected_cwd, trusted_executable_roots=(str(executable_root),), trusted_working_roots=(str(working_root),)).status, AgentStatus.CWD_REJECTED)
-            missing = RuntimeProcessRequest(request.task_id, request.executable, (), request.cwd, {}, RuntimePath(str(working_root / "missing.in")))
-            self.assertEqual(execute_request(missing, trusted_executable_roots=(str(executable_root),), trusted_working_roots=(str(working_root),)).status, AgentStatus.STDIN_MISSING)
-            escaped = executable_root / "escaped-engine"
-            escaped.symlink_to("/bin/echo")
-            symlinked = RuntimeProcessRequest(request.task_id, RuntimePath(str(escaped)), (), request.cwd, {})
-            self.assertEqual(execute_request(symlinked, trusted_executable_roots=(str(executable_root),), trusted_working_roots=(str(working_root),)).status, AgentStatus.EXECUTABLE_REJECTED)
+            self.assertEqual(execute_request(rejected_cwd, trusted_executable_roots=(runtime_path(executable_root),), trusted_working_roots=(runtime_path(working_root),)).status, AgentStatus.CWD_REJECTED)
+            missing = RuntimeProcessRequest(request.task_id, request.executable, (), request.cwd, {}, RuntimePath(runtime_path(working_root / "missing.in")))
+            self.assertEqual(execute_request(missing, trusted_executable_roots=(runtime_path(executable_root),), trusted_working_roots=(runtime_path(working_root),)).status, AgentStatus.STDIN_MISSING)
+            if os.name != "nt":
+                escaped = executable_root / "escaped-engine"
+                escaped.symlink_to("/bin/echo")
+                symlinked = RuntimeProcessRequest(request.task_id, RuntimePath(runtime_path(escaped)), (), request.cwd, {})
+                self.assertEqual(execute_request(symlinked, trusted_executable_roots=(runtime_path(executable_root),), trusted_working_roots=(runtime_path(working_root),)).status, AgentStatus.EXECUTABLE_REJECTED)
 
 
 class ManagedBridgeTests(unittest.TestCase):

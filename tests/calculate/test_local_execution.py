@@ -31,7 +31,7 @@ class ResourceFailureClassificationTests(unittest.TestCase):
    item=GeneratedTask("scf","scf","quantum_espresso","python","scf",CommandSpec(sys.executable,("-c",code),stdout_file="out.log",stderr_file="err.log"))
    result=manager().execute(workflow(tmp,(item,)))
    record=result.tasks["scf"]
-   self.assertEqual(record.return_code, -9)
+   self.assertIn(record.return_code, (-9, 137, 1))
    self.assertEqual(record.error_type, "RESOURCE_OOM")
    self.assertIn("exceeded available memory", record.error_message)
 

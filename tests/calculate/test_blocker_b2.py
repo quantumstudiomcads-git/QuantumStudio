@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from backend.pseudopotentials import DownloadableProvider, ProvisionError, PseudoProvisioner
 from frontend.calculate import CalculateWorkspace
 from frontend.core import Atom, Project, Structure
+from tests.helpers.fake_executable import write_fake_executable
 
 
 def _archive(members, directory=True):
@@ -144,9 +145,7 @@ class BlockerB2Tests(unittest.TestCase):
             hashlib.md5(payload).hexdigest(), ("pbe",), 1024 * 1024,
         )
         with tempfile.TemporaryDirectory() as root:
-            fake = Path(root) / "pw.x"
-            fake.write_text("#!/bin/sh\ncat >/dev/null\necho fake-qe-ok\n", encoding="utf-8")
-            fake.chmod(0o755)
+            fake = write_fake_executable(Path(root) / "pw.x", "import sys\nsys.stdin.read()\nprint('fake-qe-ok')\n")
             workspace = _workspace(root)
             workspace._pseudo_provisioner = PseudoProvisioner(Path(root) / "cache", (provider,), lambda *_: payload)
             workspace.local_tool_configuration.tool_paths = {"pw.x": str(fake)}

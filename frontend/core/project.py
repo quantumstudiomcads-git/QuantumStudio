@@ -299,7 +299,9 @@ class Project:
     def register_execution_root(self, request_id, workflow_root):
         """Persist only a pointer to a C7 workflow root for Analyze discovery."""
         roots = self.results.setdefault("execution_roots", {})
-        roots[str(request_id)] = str(Path(workflow_root).resolve())
+        # A workflow root is an opaque host-side pointer.  Resolving it while
+        # persisting rewrites a POSIX path when a project is opened on Windows.
+        roots[str(request_id)] = str(workflow_root)
         self.modified = True
 
     def execution_roots(self):

@@ -1,6 +1,5 @@
 import json
 import os
-import stat
 import sys
 import tempfile
 import unittest
@@ -10,12 +9,11 @@ from unittest.mock import patch
 from backend.core.execution_contract import CommandSpec
 from backend.execution import GeneratedTask, GeneratedWorkflow, LocalExecutionManager, LocalToolConfiguration, available_logical_cpus
 from backend.execution.errors import ExecutionPreflightError
+from tests.helpers.fake_executable import write_fake_executable
 
 
 def executable(path, body):
-    path.write_text("#!/usr/bin/env python3\n" + body)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR)
-    return str(path)
+    return str(write_fake_executable(path, body))
 
 
 def flow(root, task):
@@ -26,8 +24,8 @@ def flow(root, task):
 
 class LocalResourceTests(unittest.TestCase):
     def test_cpu_detection_affinity_fallback_and_minimum(self):
-        with patch("backend.execution.tools.os.sched_getaffinity",return_value={1,2,3}): self.assertEqual(available_logical_cpus(),3)
-        with patch("backend.execution.tools.os.sched_getaffinity",side_effect=OSError()), patch("backend.execution.tools.os.cpu_count",return_value=None): self.assertEqual(available_logical_cpus(),1)
+        with patch("backend.execution.tools.os.sched_getaffinity",return_value={1,2,3}, create=True): self.assertEqual(available_logical_cpus(),3)
+        with patch("backend.execution.tools.os.sched_getaffinity",side_effect=OSError(), create=True), patch("backend.execution.tools.os.cpu_count",return_value=None): self.assertEqual(available_logical_cpus(),1)
 
     def test_single_direct_and_multi_rank_mpi_argv_with_openmp(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -100,9 +100,13 @@ class PreparedCalculationRequest:
 class CalculationService:
     """Project-to-compiler service; it never accesses Builder widgets or mutates Project."""
 
-    def __init__(self, calculations):
+    def __init__(self, calculations, *, licensing_service=None):
         self._calculations = tuple(calculations)
         self._calculation_map = {calculation.id: calculation for calculation in self._calculations}
+        # Optional injection keeps this Qt-free service usable by isolated
+        # scientific tests while the application composition root always gives
+        # production workflows an entitlement boundary.
+        self._licensing_service = licensing_service
 
     def get_calculation_map(self):
         return dict(self._calculation_map)
@@ -133,6 +137,16 @@ class CalculationService:
             )
             raise RuntimeError(f"Only implemented calculations can be compiled: {labels}.")
         return tuple(descriptors[item] for item in selected)
+
+    def _authorize_selected_calculations(self, selected_calculations, *, allow_validation_product=False):
+        descriptors = self.validate_selected_calculations(
+            selected_calculations,
+            allow_validation_product=allow_validation_product,
+        )
+        if self._licensing_service is not None:
+            from backend.licensing.enforcement import CalculationAuthorizationBoundary
+            CalculationAuthorizationBoundary(self._licensing_service).authorize(descriptors)
+        return descriptors
 
     def resolve_calculation_order(self, selected_ids):
         resolved, visited, visiting = [], set(), set()
@@ -237,7 +251,7 @@ class CalculationService:
     def create_request(self, project, selected_calculations, parameters=None, execution_target="local", name=None) -> PreparedCalculationRequest:
         """Capture an independent native Structure snapshot and serializable backend payload."""
         selected = [str(item) for item in selected_calculations]
-        self.validate_selected_calculations(selected)
+        self._authorize_selected_calculations(selected)
         structure, summary = self.validate_structure(project, selected)
         snapshot = structure.copy()
         request_parameters = normalize_qe_parameters(parameters or {})
@@ -258,7 +272,7 @@ class CalculationService:
         if not isinstance(request, CalculationRequest):
             raise TypeError("Expected a CalculationRequest.")
         allow_validation_product = str(request.metadata.get("purpose", "")).upper() == "E5C_FINAL_PRODUCT"
-        self.validate_selected_calculations(request.selected_calculations, allow_validation_product=allow_validation_product)
+        self._authorize_selected_calculations(request.selected_calculations, allow_validation_product=allow_validation_product)
         snapshot = Structure.from_dict(request.structure)
         summary = self.summarize_native_structure(snapshot)
         self._validate_summary_for_selection(summary, request.selected_calculations)
@@ -291,6 +305,10 @@ class CalculationService:
     def compile_request(self, prepared_request: PreparedCalculationRequest):
         if not isinstance(prepared_request, PreparedCalculationRequest):
             raise TypeError("Expected a PreparedCalculationRequest.")
+        # This is the non-visual product boundary immediately before the
+        # scientific compiler.  It protects direct service callers as well as
+        # GUI routes; the compiler itself remains licence-free and scientific.
+        self._authorize_selected_calculations(prepared_request.backend_request.selected_calculations)
         # This package import registers the existing backend calculation catalog; no engine is executed.
         import backend.calculations  # noqa: F401
         return RequestCompiler(prepared_request.backend_request).compile()

@@ -24,8 +24,8 @@ from frontend.core.project import Project
 from frontend.builder import Builder
 from frontend.calculate import CalculateWorkspace
 from frontend.analyze import AnalyzeWorkspace
-from frontend.device_builder import DeviceBuilderWorkspace
 from frontend.app.help_actions import install_help_menu
+from frontend.app.licensing_access import DeviceBuilderAccessController
 
 
 class VerticalButton(QPushButton):
@@ -87,11 +87,12 @@ class WorkspacePlaceholder(QWidget):
 
 class ProjectWindow(QMainWindow):
 
-    def __init__(self, project):
+    def __init__(self, project, *, licensing_service=None):
 
         super().__init__()
 
         self.project = project
+        self.licensing_service = licensing_service
 
         self._allow_close = False
 
@@ -102,7 +103,7 @@ class ProjectWindow(QMainWindow):
         self._build_ui()
         self.setMinimumSize(900, 560)
         self._build_menu()
-        install_help_menu(self)
+        install_help_menu(self, licensing_service=self.licensing_service)
         self._apply_style()
 
     # ============================================================
@@ -274,16 +275,13 @@ class ProjectWindow(QMainWindow):
 
         self._build_builder_toolbar()
 
-        self.device_builder = DeviceBuilderWorkspace(
-            self.project
-        )
-        self.device_builder.history_changed.connect(
-            self._update_active_history_actions
-        )
+        self.device_builder = DeviceBuilderAccessController(
+            self.licensing_service
+        ).create_workspace(self.project)
+        if hasattr(self.device_builder, "history_changed"):
+            self.device_builder.history_changed.connect(self._update_active_history_actions)
 
-        self.calculator = CalculateWorkspace(
-            self.project
-        )
+        self.calculator = CalculateWorkspace(self.project, licensing_service=self.licensing_service)
 
         self.analyzer = AnalyzeWorkspace(self.project)
 
@@ -395,14 +393,14 @@ class ProjectWindow(QMainWindow):
 
     def _undo_active_workspace(self, *_):
         if self.workspace.currentIndex() == 1:
-            return self.device_builder.undo()
+            return self.device_builder.undo() if hasattr(self.device_builder, "undo") else False
         if self.workspace.currentIndex() == 0:
             return self.builder._qs_undo()
         return False
 
     def _redo_active_workspace(self, *_):
         if self.workspace.currentIndex() == 1:
-            return self.device_builder.redo()
+            return self.device_builder.redo() if hasattr(self.device_builder, "redo") else False
         if self.workspace.currentIndex() == 0:
             return self.builder._qs_redo()
         return False
@@ -412,8 +410,8 @@ class ProjectWindow(QMainWindow):
             return
         index = self.workspace.currentIndex()
         if index == 1:
-            self.undo_action.setEnabled(self.device_builder.can_undo())
-            self.redo_action.setEnabled(self.device_builder.can_redo())
+            self.undo_action.setEnabled(hasattr(self.device_builder, "can_undo") and self.device_builder.can_undo())
+            self.redo_action.setEnabled(hasattr(self.device_builder, "can_redo") and self.device_builder.can_redo())
         elif index == 0:
             self.builder._update_history_actions()
         else:
@@ -891,9 +889,7 @@ class ProjectWindow(QMainWindow):
 
         project.save()
 
-        new_window = ProjectWindow(
-            project
-        )
+        new_window = ProjectWindow(project, licensing_service=self.licensing_service)
 
         new_window.showMaximized()
 
@@ -932,9 +928,7 @@ class ProjectWindow(QMainWindow):
 
             return
 
-        new_window = ProjectWindow(
-            project
-        )
+        new_window = ProjectWindow(project, licensing_service=self.licensing_service)
 
         new_window.showMaximized()
 

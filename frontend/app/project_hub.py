@@ -223,11 +223,10 @@ class NewProjectDialog(QDialog):
 
 class ProjectHub(QMainWindow):
 
-    def __init__(
-        self,
-    ):
+    def __init__(self, licensing_service=None):
 
         super().__init__()
+        self.licensing_service = licensing_service
 
         self.setWindowTitle(
             "Quantum Studio"
@@ -243,7 +242,7 @@ class ProjectHub(QMainWindow):
         self._load_recent_projects()
 
         self._apply_style()
-        install_help_menu(self)
+        install_help_menu(self, licensing_service=self.licensing_service)
 
     # ============================================================
     # UI
@@ -677,9 +676,7 @@ class ProjectHub(QMainWindow):
             ProjectWindow
         )
 
-        self.workspace = ProjectWindow(
-            project
-        )
+        self.workspace = ProjectWindow(project, licensing_service=self.licensing_service)
 
         self.workspace.showMaximized()
 

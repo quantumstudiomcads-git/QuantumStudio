@@ -8,13 +8,16 @@ from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QLabel, QV
 from backend.runtime import BUILD_CHANNEL, PRODUCT_NAME, VERSION, export_diagnostics
 
 
-def install_help_menu(window) -> object:
+def install_help_menu(window, *, licensing_service=None) -> object:
     menu = window.menuBar().addMenu("Help")
     about = menu.addAction(f"About {PRODUCT_NAME}")
     about.triggered.connect(lambda: show_about(window))
     diagnostics = menu.addAction("Export Diagnostics…")
     diagnostics.setToolTip("Export privacy-safe application diagnostics")
     diagnostics.triggered.connect(lambda: export_diagnostics_from_ui(window))
+    licence_status = menu.addAction("License Status")
+    licence_status.setToolTip("Show safe local licence and entitlement status")
+    licence_status.triggered.connect(lambda: show_license_status(window, licensing_service))
     return menu
 
 
@@ -39,8 +42,23 @@ def export_diagnostics_from_ui(parent) -> None:
     if not destination:
         return
     try:
-        output = export_diagnostics(Path(destination))
+        service = getattr(parent, "licensing_service", None)
+        summary = service.diagnostics_summary() if service is not None else None
+        output = export_diagnostics(Path(destination), licensing_state=summary)
     except (OSError, ValueError) as error:
         QMessageBox.warning(parent, "Diagnostics Export Failed", f"Quantum Studio could not export diagnostics. No project data was modified.\n\n{error}")
         return
     parent.statusBar().showMessage(f"Diagnostics exported to {output}", 5000)
+
+
+def show_license_status(parent, licensing_service=None) -> None:
+    """Show a concise status without displaying a raw lease or account token."""
+    if licensing_service is None:
+        text = "No licence service is configured for this window. Product data remains available."
+    else:
+        state = licensing_service.diagnostics_summary()
+        status = str(state.get("status", "auth_required")).replace("_", " ").title()
+        plan = state.get("plan_id") or "None"
+        expiry = state.get("expires_at") or "Not available"
+        text = f"Status: {status}\nPlan: {plan}\nExpiry: {expiry}\n\nExisting projects and results remain available when an entitlement expires."
+    QMessageBox.information(parent, "Quantum Studio License Status", text)

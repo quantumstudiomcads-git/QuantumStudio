@@ -13,6 +13,7 @@ from frontend.analyze import AnalyzeWorkspace
 from frontend.builder import Builder
 from frontend.calculate import CalculateWorkspace
 from frontend.core.project import Project
+from backend.licensing import LicensingService
 
 
 def main():
@@ -40,7 +41,9 @@ def main():
     from frontend.app.theme import application_stylesheet
     app.setStyleSheet(application_stylesheet())
 
-    hub = ProjectHub()
+    # Production startup receives a fail-closed service.  It never creates a
+    # developer entitlement, even on the development build channel.
+    hub = ProjectHub(licensing_service=LicensingService.production())
 
     hub.show()
 

@@ -70,13 +70,14 @@ class CalculateWorkspace(QWidget):
         self,
         project,
         parent=None,
+        licensing_service=None,
     ):
 
         super().__init__(parent)
 
         self.project = project
         self.calculation_service = CalculationService(
-            CALCULATIONS
+            CALCULATIONS, licensing_service=licensing_service,
         )
         # The service owns the catalog/registry boundary; Qt sees descriptors,
         # never backend registry internals.

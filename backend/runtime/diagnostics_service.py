@@ -14,9 +14,9 @@ from .paths import runtime_paths
 DIAGNOSTICS_SCHEMA_VERSION = "1"
 
 
-def collect_diagnostics(*, environ=None, home=None, platform_name=None) -> dict:
+def collect_diagnostics(*, environ=None, home=None, platform_name=None, licensing_state=None) -> dict:
     paths = runtime_paths(environ=environ, home=home, platform_name=platform_name)
-    return {
+    manifest = {
         "schema_version": DIAGNOSTICS_SCHEMA_VERSION,
         "product": {"name": PRODUCT_NAME, "version": VERSION, "build_channel": BUILD_CHANNEL, "identity": build_identity()},
         "platform": {"system": platform.system(), "release": platform.release(), "machine": platform.machine(), "python": sys.version.split()[0]},
@@ -24,6 +24,17 @@ def collect_diagnostics(*, environ=None, home=None, platform_name=None) -> dict:
         "paths": {"config": str(paths.config), "data": str(paths.data), "cache": str(paths.cache), "logs": str(paths.logs), "workflows": str(paths.workflows), "pseudos": str(paths.pseudos)},
         "runtime": {"status": "not_probed", "engine_pack_status": "not_probed", "wsl_status": "not_probed"},
     }
+    # The licensing service supplies a pre-redacted summary.  Raw leases,
+    # signatures, device keys, account tokens, billing details, and project
+    # data are never diagnostics fields.
+    if licensing_state is not None:
+        allowed = {"status", "plan_id", "expires_at", "device_registered", "clock_validation_required", "seat_status", "last_refresh_status", "error_reason"}
+        manifest["licensing"] = {
+            key: licensing_state[key]
+            for key in allowed
+            if key in licensing_state
+        }
+    return manifest
 
 
 def _qt_identity() -> dict[str, str]:
@@ -34,13 +45,13 @@ def _qt_identity() -> dict[str, str]:
         return {"pyside6": "unavailable"}
 
 
-def export_diagnostics(destination, *, environ=None, home=None, platform_name=None) -> Path:
+def export_diagnostics(destination, *, environ=None, home=None, platform_name=None, licensing_state=None) -> Path:
     """Write a metadata-only ZIP; project and scientific files are never collected."""
     target = Path(destination)
     if target.suffix.lower() != ".zip":
         target = target.with_suffix(".zip")
     target.parent.mkdir(parents=True, exist_ok=True)
-    manifest = collect_diagnostics(environ=environ, home=home, platform_name=platform_name)
+    manifest = collect_diagnostics(environ=environ, home=home, platform_name=platform_name, licensing_state=licensing_state)
     manifest["exported_at"] = datetime.now(timezone.utc).isoformat()
     encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
     temporary = target.with_name(f".{target.name}.tmp")

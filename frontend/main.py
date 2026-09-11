@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 from pathlib import Path as _Path
 
 from PySide6.QtCore import QTimer
@@ -34,6 +35,25 @@ def main():
     hub = ProjectHub()
 
     hub.show()
+
+    if os.environ.get("QUANTUM_STUDIO_PACKAGED_CATALOGUE_SMOKE") == "1":
+        def packaged_catalogue_smoke() -> None:
+            calculate = CalculateWorkspace(Project("Packaged Catalogue Smoke"))
+            from frontend.calculations.catalog import public_catalogue_snapshot
+            payload = {
+                "identity": build_identity(),
+                "product_footer": hub.product_identity_label.text(),
+                "catalogue": public_catalogue_snapshot(),
+                "workspace_ids": tuple(descriptor.id for descriptor in calculate.catalog_descriptors),
+                "workspace_categories": tuple(
+                    calculate.category_combo.itemText(index)
+                    for index in range(1, calculate.category_combo.count())
+                ),
+            }
+            calculate.close()
+            print("PACKAGED_CATALOGUE: " + json.dumps(payload, sort_keys=True), flush=True)
+            app.quit()
+        QTimer.singleShot(0, packaged_catalogue_smoke)
 
     if os.environ.get("QUANTUM_STUDIO_PACKAGED_SMOKE") == "1":
         def packaged_smoke() -> None:

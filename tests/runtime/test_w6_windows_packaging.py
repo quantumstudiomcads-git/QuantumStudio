@@ -111,7 +111,45 @@ class WindowsPackagingTests(unittest.TestCase):
 
     def test_catalogue_identity_is_preserved(self): self.assertEqual(len(CALCULATIONS),147)
 
+    def test_public_catalogue_snapshot_and_calculate_widget_cover_each_public_family(self):
+        from collections import Counter
+        from frontend.calculations.catalog import public_catalogue_snapshot
+        from frontend.calculate import CalculateWorkspace
+        from frontend.core.project import Project
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication([])
+        snapshot = public_catalogue_snapshot()
+        self.assertEqual(len(snapshot), 147)
+        self.assertEqual(len({item["id"] for item in snapshot}), 147)
+        workspace = CalculateWorkspace(Project("Catalogue parity"))
+        try:
+            visible = {workspace.calculation_list.item(row).data(Qt.ItemDataRole.UserRole) for row in range(workspace.calculation_list.count())}
+            self.assertEqual(visible, {item["id"] for item in snapshot})
+            expected = {"bands", "dielectric", "phonons", "seebeck", "transmission", "md_nvt", "wannierization", "xrd", "free_energy", "scf"}
+            self.assertTrue(expected <= visible)
+            category_counts = Counter(item["category"] for item in snapshot)
+            self.assertEqual(set(category_counts), {workspace.category_combo.itemText(index) for index in range(1, workspace.category_combo.count())})
+            for category, expected_count in category_counts.items():
+                workspace.category_combo.setCurrentText(category)
+                app.processEvents()
+                self.assertEqual(workspace.calculation_list.count(), expected_count)
+        finally:
+            workspace.close(); app.processEvents()
+
 class ApplicationSmokeTests(unittest.TestCase):
+    def test_project_hub_footer_uses_canonical_product_identity(self):
+        from PySide6.QtWidgets import QApplication
+        from backend.runtime import PRODUCT_NAME, VERSION
+        from frontend.app.project_hub import ProjectHub
+        app = QApplication.instance() or QApplication([])
+        hub = ProjectHub()
+        try:
+            self.assertEqual(hub.product_identity_label.text(), f"{PRODUCT_NAME} · v{VERSION}")
+            self.assertNotIn("v0.1", hub.product_identity_label.text())
+        finally:
+            hub.close(); app.processEvents()
+
     def test_offscreen_workspaces_and_qs_roundtrip_need_no_runtime_or_engine(self):
         from unittest.mock import patch
         from PySide6.QtWidgets import QApplication

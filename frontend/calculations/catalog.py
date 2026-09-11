@@ -1496,6 +1496,20 @@ def all_calculations() -> list[CalculationInfo]:
     return list(CALCULATIONS)
 
 
+def public_catalogue_snapshot() -> tuple[dict[str, str], ...]:
+    """Return the deterministic public Calculate contract for parity diagnostics."""
+    return tuple(
+        {
+            "id": calculation.id,
+            "name": calculation.name,
+            "category": calculation.category,
+            "engine": calculation.engine,
+            "status": calculation.status,
+        }
+        for calculation in CALCULATIONS
+    )
+
+
 def categories() -> list[str]:
 
     return sorted(

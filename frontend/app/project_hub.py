@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from frontend.core.project import Project
+from backend.runtime import PRODUCT_NAME, VERSION
 
 from frontend.app.recent_projects import (
     add_recent_project,
@@ -431,20 +432,20 @@ class ProjectHub(QMainWindow):
         # Footer
         # --------------------------------------------------------
 
-        footer = QLabel(
-            "Quantum Studio · v0.1"
+        self.product_identity_label = QLabel(
+            f"{PRODUCT_NAME} · v{VERSION}"
         )
 
-        footer.setObjectName(
+        self.product_identity_label.setObjectName(
             "footer"
         )
 
-        footer.setAlignment(
+        self.product_identity_label.setAlignment(
             Qt.AlignmentFlag.AlignRight
         )
 
         layout.addWidget(
-            footer
+            self.product_identity_label
         )
 
     # ============================================================

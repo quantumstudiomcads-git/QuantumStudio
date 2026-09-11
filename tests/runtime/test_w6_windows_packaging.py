@@ -27,6 +27,7 @@ class WindowsPackagingTests(unittest.TestCase):
             plan=self.plan(Path(tmp)); argv=plan.nuitka_argv
             self.assertEqual(argv[:4], ("python.exe", "-m", "nuitka", "--standalone")); self.assertIn("--enable-plugin=pyside6",argv)
             self.assertIn("--msvc=latest", argv)
+            self.assertIn("--jobs=4", argv)
             self.assertIn("--windows-console-mode=disable",argv); self.assertIn("--product-name=Quantum Studio",argv)
             self.assertIn("--include-module=scipy._external.array_api_compat.numpy.fft", argv)
             self.assertIn("--output-filename=QuantumStudio.exe",argv); self.assertTrue(any(item.startswith("--include-data-dir=") for item in argv))

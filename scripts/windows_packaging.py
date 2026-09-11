@@ -56,7 +56,7 @@ def build_plan(*, repo: str | Path, output: str | Path, channel: str, version: s
     if not entry.is_file(): raise WindowsBuildError("Canonical frontend entry point is missing.")
     if not icon.is_file(): raise WindowsBuildError("Canonical Quantum Studio artwork is missing.")
     ico = output / "build-assets" / "QuantumStudio.ico"
-    argv = (python_executable, "-m", "nuitka", "--standalone", "--enable-plugin=pyside6", "--msvc=latest", "--windows-console-mode=disable",
+    argv = (python_executable, "-m", "nuitka", "--standalone", "--enable-plugin=pyside6", "--msvc=latest", "--jobs=4", "--windows-console-mode=disable",
             f"--output-dir={output}", f"--output-filename={EXECUTABLE_NAME}", f"--product-name={PRODUCT_NAME}",
             f"--file-description={PRODUCT_NAME}", f"--product-version={version}", f"--file-version={version}",
             f"--windows-icon-from-ico={ico}",

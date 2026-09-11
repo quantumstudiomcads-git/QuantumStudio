@@ -75,6 +75,7 @@ def main(argv=None) -> int:
             print(json.dumps({"status": "PLAN_ONLY", "host_windows": is_windows, "argv": list(plan.nuitka_argv),
                               "output": str(plan.output), "entry": str(plan.entry)}, indent=2)); return 0
         if not is_windows: raise WindowsBuildError("WINDOWS_BUILD_HOST_REQUIRED: use --dry-run on non-Windows hosts.")
+        if not commit: raise WindowsBuildError("GIT_COMMIT_UNAVAILABLE: a real Windows build requires an exact source revision.")
         if dirty and args.channel not in {"development", "dev"}: raise WindowsBuildError("Refusing a dirty beta/release Windows build.")
         if args.clean: safe_clean_output(plan)
         if plan.output.exists() and any(plan.output.iterdir()): raise WindowsBuildError("Build output already exists; use --clean only for a recognized prior Quantum Studio build.")

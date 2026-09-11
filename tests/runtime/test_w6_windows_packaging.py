@@ -65,6 +65,15 @@ class WindowsPackagingTests(unittest.TestCase):
             self.assertEqual(output.getvalue(), "")
             self.assertEqual(list(Path(tmp).rglob("QuantumStudio.exe")), [])
 
+    def test_real_windows_build_requires_an_exact_git_commit(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(build_windows.sys, "platform", "win32"), patch.object(build_windows, "git_value", return_value=""):
+            output, errors = io.StringIO(), io.StringIO()
+            with redirect_stdout(output), redirect_stderr(errors):
+                result = build_windows.main(["--output", str(Path(tmp) / "dist")])
+            self.assertEqual(result, 2)
+            self.assertIn("GIT_COMMIT_UNAVAILABLE", errors.getvalue())
+            self.assertEqual(list(Path(tmp).rglob("QuantumStudio.exe")), [])
+
     def test_windows_paths_resources_and_recent_projects_do_not_write_install_root(self):
         with tempfile.TemporaryDirectory(prefix="bundle Ω ") as tmp:
             root=Path(tmp); bundle=root/"read only bundle"; (bundle/"assets").mkdir(parents=True); asset=bundle/"assets"/"logo.svg"; asset.write_text("x"); bundle.chmod(stat.S_IREAD|stat.S_IEXEC)

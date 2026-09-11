@@ -2,11 +2,12 @@
 
 from .identity import BUILD_CHANNEL, BUILD_COMMIT, BUILD_TIMESTAMP, PRODUCT_NAME, VERSION, build_identity
 from .paths import RuntimePaths, runtime_paths
+from .diagnostics_service import collect_diagnostics, export_diagnostics
 from .engine_pack import EnginePackError, EnginePackManifest, EnginePackValidation, sha256_file, validate_engine_pack
 
 __all__ = [
     "PRODUCT_NAME", "VERSION", "BUILD_CHANNEL", "BUILD_COMMIT", "BUILD_TIMESTAMP", "build_identity",
-    "RuntimePaths", "runtime_paths", "EnginePackError", "EnginePackManifest",
+    "RuntimePaths", "runtime_paths", "collect_diagnostics", "export_diagnostics", "EnginePackError", "EnginePackManifest",
     "EnginePackValidation", "sha256_file", "validate_engine_pack",
 ]
 

@@ -6,6 +6,10 @@ from pathlib import Path
 from frontend.core.structure import Structure
 
 
+class ProjectLoadError(ValueError):
+    """A user-actionable refusal to load an invalid or unsupported .qs file."""
+
+
 class Project:
 
     FORMAT = "qstudio"
@@ -78,33 +82,29 @@ class Project:
         file_path=None,
     ):
 
-        if file_path is not None:
-
-            self.file_path = Path(
-                file_path
-            )
-
-        if self.file_path is None:
+        target = Path(file_path) if file_path is not None else self.file_path
+        if target is None:
 
             raise ValueError(
                 "No project file path specified."
             )
 
-        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
 
-        fd, temporary = tempfile.mkstemp(prefix=f".{self.file_path.name}.", suffix=".tmp", dir=str(self.file_path.parent))
+        fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as file:
                 json.dump(self.to_dict(), file, indent=4)
                 file.flush()
                 os.fsync(file.fileno())
-            os.replace(temporary, self.file_path)
+            os.replace(temporary, target)
         except Exception:
             try:
                 os.unlink(temporary)
             except FileNotFoundError:
                 pass
             raise
+        self.file_path = target
         self.modified = False
 
     # ============================================================
@@ -119,23 +119,34 @@ class Project:
 
         path = Path(file_path)
 
-        with path.open(
-            "r",
-            encoding="utf-8",
-        ) as file:
+        try:
+            with path.open("r", encoding="utf-8") as file:
+                data = json.load(file)
+        except FileNotFoundError as error:
+            raise ProjectLoadError(f"The project file does not exist: {path}") from error
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ProjectLoadError(f"The project file is corrupt or unreadable: {path}") from error
 
-            data = json.load(file)
+        if not isinstance(data, dict):
+            raise ProjectLoadError("The project file is invalid: its top-level data must be an object.")
 
         if data.get("format") != cls.FORMAT:
+            raise ProjectLoadError("This file is not a Quantum Studio project.")
 
-            raise ValueError(
-                "Not a Quantum Studio project."
-            )
+        version = data.get("version", "0.1")
+        try:
+            version_number = tuple(int(part) for part in str(version).split(".")[:2])
+        except (TypeError, ValueError) as error:
+            raise ProjectLoadError("The project file declares an invalid schema version.") from error
+        if len(version_number) != 2 or version_number > tuple(int(part) for part in cls.VERSION.split(".")):
+            raise ProjectLoadError(f"This project uses unsupported future schema version {version!r}.")
 
         project_data = data.get(
             "project",
             {},
         )
+        if not isinstance(project_data, dict):
+            raise ProjectLoadError("The project file is invalid: project metadata is not an object.")
 
         project = cls(
             project_data.get(
@@ -149,6 +160,7 @@ class Project:
             "structure",
             {},
         )
+        cls._validate_structure_payload(project.structure)
 
         project.calculator = data.get(
             "calculator",
@@ -212,6 +224,29 @@ class Project:
         project.modified = False
 
         return project
+
+    @staticmethod
+    def _validate_structure_payload(payload):
+        if payload in (None, {}):
+            return
+        if not isinstance(payload, dict):
+            raise ProjectLoadError("The project file is invalid: structure data is not an object.")
+        atoms = payload.get("atoms", [])
+        if not isinstance(atoms, list):
+            raise ProjectLoadError("The project file is invalid: structure atoms are not a list.")
+        for index, atom in enumerate(atoms, start=1):
+            if not isinstance(atom, dict) or not all(key in atom for key in ("element", "x", "y", "z")):
+                raise ProjectLoadError(f"The project file is invalid: atom {index} is malformed.")
+            try:
+                float(atom["x"]); float(atom["y"]); float(atom["z"])
+            except (TypeError, ValueError) as error:
+                raise ProjectLoadError(f"The project file is invalid: atom {index} has bad coordinates.") from error
+        cell = payload.get("cell")
+        if cell not in (None, []) and (not isinstance(cell, list) or len(cell) != 3 or any(not isinstance(row, list) or len(row) != 3 for row in cell)):
+            raise ProjectLoadError("The project file is invalid: the cell must be a 3x3 array.")
+        periodic = payload.get("periodic", [True, True, True])
+        if not isinstance(periodic, list) or len(periodic) != 3:
+            raise ProjectLoadError("The project file is invalid: periodicity must have three components.")
 
     # ============================================================
     # Structure model

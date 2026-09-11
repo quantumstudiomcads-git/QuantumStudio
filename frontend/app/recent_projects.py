@@ -28,11 +28,19 @@ def load_recent_projects(*, environ=None, home=None, platform_name=None):
 def save_recent_projects(paths, *, environ=None, home=None, platform_name=None):
     target=recent_file(environ=environ,home=home,platform_name=platform_name); _ensure_directory(target); unique=[]
     for item in paths:
-        candidate=Path(item).expanduser()
+        try:
+            candidate=Path(item).expanduser()
+        except (TypeError, ValueError):
+            continue
         if candidate.exists() and candidate.suffix==".qs":
             value=str(candidate.resolve())
             if value not in unique: unique.append(value)
-    temporary=target.with_name(target.name+".tmp"); temporary.write_text(json.dumps(unique[:MAX_RECENT_PROJECTS],indent=4)+"\n",encoding="utf-8"); os.replace(temporary,target)
+    temporary=target.with_name(f".{target.name}.tmp")
+    try:
+        temporary.write_text(json.dumps(unique[:MAX_RECENT_PROJECTS],indent=4)+"\n",encoding="utf-8")
+        os.replace(temporary,target)
+    finally:
+        if temporary.exists(): temporary.unlink()
 
 def add_recent_project(path):
     path=Path(path).expanduser().resolve()

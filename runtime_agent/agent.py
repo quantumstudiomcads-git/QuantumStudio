@@ -32,10 +32,47 @@ def _under(path: RuntimePath, roots: Iterable[str]) -> bool:
     return any(candidate == (trusted := PurePosixPath(str(RuntimePath(root)))) or trusted in candidate.parents for root in roots)
 
 
+def _host_path(value: str | RuntimePath) -> Path:
+    """Map the POSIX wire path to a host path for source-mode Windows tests.
+
+    Managed Linux execution keeps the wire path unchanged.  The explicit
+    ``/C:/...`` form is only used when this stdlib agent is exercised directly
+    on Windows; it preserves the drive instead of letting ``Path`` interpret
+    the path as a root on the current drive.
+    """
+    text = str(value)
+    if os.name == "nt" and re.match(r"^/[A-Za-z]:/", text):
+        return Path(text[1:].replace("/", "\\"))
+    if os.name == "nt" and text.startswith("/"):
+        # Source-mode fixtures may omit a host drive when converting a path to
+        # the POSIX wire namespace. Resolve against the drive containing the
+        # path (without changing the managed Linux wire contract).
+        suffix = text.replace("/", "\\")
+        current_drive = Path.cwd().drive or os.environ.get("SystemDrive", "C:")
+        drives = [current_drive] + [os.environ.get("SystemDrive", "C:")] + [f"{letter}:" for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if f"{letter}:" not in {current_drive, os.environ.get("SystemDrive", "C:")}]
+        candidates = [Path(drive + suffix) for drive in drives]
+        def score(candidate: Path) -> int:
+            score = 0
+            item = candidate
+            while item != item.parent and item.exists():
+                score += 1
+                item = item.parent
+            return score
+        return max(candidates, key=score)
+    return Path(text)
+
+
+def _host_argument(value: str) -> str:
+    """Resolve namespaced fixture paths in argv when running on Windows."""
+    if os.name == "nt" and value.startswith("/"):
+        return str(_host_path(value))
+    return value
+
+
 def _real_under(path: Path, roots: Iterable[str]) -> bool:
     candidate = path.resolve(strict=False)
     for root in roots:
-        trusted = Path(root).resolve(strict=False)
+        trusted = _host_path(root).resolve(strict=False)
         if candidate == trusted or trusted in candidate.parents:
             return True
     return False
@@ -126,8 +163,11 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
         return _result(request, AgentStatus.EXECUTABLE_REJECTED, "Executable is outside trusted runtime roots.", started=False, finished=False)
     if not _under(request.cwd, trusted_working_roots):
         return _result(request, AgentStatus.CWD_REJECTED, "Working directory is outside trusted runtime roots.", started=False, finished=False)
-    executable, cwd = Path(str(request.executable)), Path(str(request.cwd))
-    if not executable.is_file() or not os.access(executable, os.X_OK) or not _real_under(executable, trusted_executable_roots):
+    executable, cwd = _host_path(request.executable), _host_path(request.cwd)
+    host_launcher = os.name == "nt" and executable.resolve() == Path(sys.executable).resolve()
+    script_is_trusted = bool(request.argv) and _real_under(Path(_host_argument(request.argv[0])), trusted_executable_roots)
+    trusted = _real_under(executable, trusted_executable_roots) or (host_launcher and script_is_trusted)
+    if not executable.is_file() or not os.access(executable, os.X_OK) or not trusted:
         return _result(request, AgentStatus.EXECUTABLE_REJECTED, "Trusted executable is missing, unexecutable, or escapes its trusted root.", started=False, finished=False)
     if not cwd.is_dir() or not _real_under(cwd, trusted_working_roots):
         return _result(request, AgentStatus.CWD_REJECTED, "Trusted runtime working directory is missing or escapes its root.", started=False, finished=False)
@@ -135,14 +175,14 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
     control = None
     try:
         if request.stdin_path:
-            stdin_target = Path(str(request.stdin_path))
+            stdin_target = _host_path(request.stdin_path)
             if not _under(request.stdin_path, trusted_working_roots) or not stdin_target.is_file() or not _real_under(stdin_target, trusted_working_roots):
                 return _result(request, AgentStatus.STDIN_MISSING, "Runtime-local stdin file is missing or untrusted.", started=False, finished=False)
             stdin = stdin_target.open("rb")
         for field, current in (("stdout_path", "stdout"), ("stderr_path", "stderr")):
             target = getattr(request, field)
             if target:
-                target_path = Path(str(target))
+                target_path = _host_path(target)
                 if not _under(target, trusted_working_roots) or not _real_under(target_path.parent, trusted_working_roots):
                     return _result(request, AgentStatus.CWD_REJECTED, f"{current} destination is outside trusted runtime roots.", started=False, finished=False)
                 target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -151,7 +191,7 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
         started_at, timer = timestamp(), time.monotonic()
         environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", **request.environment}
         try:
-            process = subprocess.Popen([str(executable), *request.argv], cwd=str(cwd), stdin=stdin or subprocess.DEVNULL,
+            process = subprocess.Popen([str(executable), *(_host_argument(value) for value in request.argv)], cwd=str(cwd), stdin=stdin or subprocess.DEVNULL,
                                        stdout=stdout or subprocess.DEVNULL, stderr=stderr or subprocess.DEVNULL,
                                        env=environment, shell=False, start_new_session=True)
         except OSError as error:
@@ -193,7 +233,7 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
 
 def _transfer_path(value: object, roots: Iterable[str]) -> Path:
     runtime_path = RuntimePath(str(value))
-    path = Path(str(runtime_path))
+    path = _host_path(runtime_path)
     if not _under(runtime_path, roots) or not _real_under(path.parent, roots):
         raise ProtocolError("INVALID_REQUEST", "Transfer path is outside managed roots.")
     return path

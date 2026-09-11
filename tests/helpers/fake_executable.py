@@ -30,4 +30,6 @@ def write_python_fixture(path: str | os.PathLike[str], body: str) -> Path:
 def runtime_path(path: str | os.PathLike[str]) -> str:
     """Represent an E:-drive fixture path in the runtime's POSIX namespace."""
     resolved = Path(path).resolve()
+    if os.name == "nt":
+        return "/" + resolved.as_posix()
     return "/" + resolved.relative_to(Path(resolved.anchor)).as_posix()

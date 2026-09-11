@@ -97,7 +97,7 @@ class RuntimeProtocolAndAgentTests(unittest.TestCase):
                 # RuntimePath is the POSIX wire representation.  On native
                 # Windows the agent launches the fixture through a host-side
                 # wrapper, so the child reports the resolved host path.
-                self.assertEqual(Path(observed["cwd"]).resolve(), Path(str(request.cwd)).resolve())
+                self.assertEqual(Path(observed["cwd"]).resolve(), Path(root, "workflows", "job space").resolve())
                 self.assertEqual(observed["env"], "hello world")
                 self.assertEqual(observed["stdin"].encode("utf-8"), b"input with Unicode \xce\xa9\n")
                 self.assertEqual(stderr.read_text(), "deterministic stderr\n")

@@ -44,6 +44,17 @@ Automated offscreen Qt tests cover widget construction, canonical labels, menus,
 
 Diagnostics reuses the B1 backend and exports only an explicit manifest. It excludes project files, atomic coordinates, scientific inputs/outputs, pseudopotential contents, licence material, tokens, and private keys. Help/About/Diagnostics require no network and no runtime/Engine Pack installation.
 
+## Packaged validation
+
+The required next-generation standalone bundle was built as r21 from source
+commit `f530ed8` with `dirty=false`, Python 3.13.15, PySide6 6.11.2, Nuitka
+4.1.1, MSVC v143, and Windows SDK 10.0.26100.0. The bundle contains 369 files
+and is 485,791,401 bytes; `QuantumStudio.exe` is 293,005,824 bytes with SHA-256
+`D868A51F0512AEDBBDF13FBC00621BBEF5E24809874F1949964300BCF3332F3F`. It
+launched responsively from the standalone directory with no developer
+environment. CUA/physical visual inspection was unavailable in this run, so
+the DPI and visual checklist remains an explicit human confirmation item.
+
 ## Deferred work
 
 - Physical DPI/multi-monitor/read-only visual matrix.

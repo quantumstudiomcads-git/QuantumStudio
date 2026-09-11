@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QActionGroup, QColor, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QColor, QKeySequence, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -25,6 +25,7 @@ from frontend.builder import Builder
 from frontend.calculate import CalculateWorkspace
 from frontend.analyze import AnalyzeWorkspace
 from frontend.device_builder import DeviceBuilderWorkspace
+from frontend.app.help_actions import install_help_menu
 
 
 class VerticalButton(QPushButton):
@@ -101,6 +102,7 @@ class ProjectWindow(QMainWindow):
         self._build_ui()
         self.setMinimumSize(900, 560)
         self._build_menu()
+        install_help_menu(self)
         self._apply_style()
 
     # ============================================================

@@ -5,7 +5,7 @@ from pathlib import Path as _Path
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
-from backend.runtime import BUILD_CHANNEL, PRODUCT_NAME, VERSION, build_identity
+from backend.runtime import BUILD_CHANNEL, PRODUCT_NAME, VERSION, build_identity, configure_logging
 from backend.runtime.resources import initialize_application_data
 
 from frontend.app.project_hub import ProjectHub
@@ -17,7 +17,13 @@ from frontend.core.project import Project
 
 def main():
 
-    initialize_application_data()
+    logger = configure_logging()
+    try:
+        initialize_application_data()
+    except OSError:
+        # Basic GUI use must survive missing/unwritable optional user-data
+        # roots; individual save/export actions report their own failures.
+        logger.exception("Application data initialization failed; continuing in degraded mode")
     app = QApplication(
         sys.argv
     )
@@ -31,6 +37,8 @@ def main():
 
     display_identity = PRODUCT_NAME if BUILD_CHANNEL == "development" else f"{PRODUCT_NAME} {VERSION} {BUILD_CHANNEL}"
     app.setApplicationDisplayName(display_identity)
+    from frontend.app.theme import application_stylesheet
+    app.setStyleSheet(application_stylesheet())
 
     hub = ProjectHub()
 

@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from frontend.core.project import Project
 from backend.runtime import PRODUCT_NAME, VERSION
+from frontend.app.help_actions import install_help_menu
 
 from frontend.app.recent_projects import (
     add_recent_project,
@@ -242,6 +243,7 @@ class ProjectHub(QMainWindow):
         self._load_recent_projects()
 
         self._apply_style()
+        install_help_menu(self)
 
     # ============================================================
     # UI

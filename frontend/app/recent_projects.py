@@ -14,7 +14,11 @@ def recent_file(*, environ=None, home=None, platform_name=None) -> Path:
 def _ensure_directory(path: Path) -> None: path.parent.mkdir(parents=True, exist_ok=True)
 
 def load_recent_projects(*, environ=None, home=None, platform_name=None):
-    path=recent_file(environ=environ,home=home,platform_name=platform_name); _ensure_directory(path)
+    path=recent_file(environ=environ,home=home,platform_name=platform_name)
+    try:
+        _ensure_directory(path)
+    except OSError:
+        return []
     try: data=json.loads(path.read_text(encoding="utf-8")) if path.is_file() else []
     except (OSError,json.JSONDecodeError): return []
     unique=[]

@@ -12,6 +12,6 @@ def resolve(value):
 def hybrid_capability(functional, calculation_ids):
  f=resolve(functional)
  if not f.hybrid:return "SUPPORTED"
- if set(calculation_ids)&{"phonons","phonon_dos","electron_phonon"}: return "UNSUPPORTED_BY_QE_PHONON"
+ if set(calculation_ids)&{"phonons","phonon_dos","phonon_band_structure","electron_phonon"}: return "UNSUPPORTED_BY_QE_PHONON"
  if set(calculation_ids)&{"wannierization","dos","pdos","boltztrap_bands","electrical_conductivity","seebeck","thermal_conductivity_electronic","carrier_concentration"}: return "NOT_YET_IMPLEMENTED"
  return "SUPPORTED"

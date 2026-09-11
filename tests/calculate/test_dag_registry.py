@@ -60,8 +60,8 @@ def temporary_registry(*definitions):
 class CatalogRegistryReconciliationTests(unittest.TestCase):
     def test_active_catalog_has_exact_implemented_mapping_and_explicit_nonimplemented_entries(self):
         report = CalculationService(CALCULATIONS).get_catalog_reconciliation_report()
-        self.assertEqual(report.frontend_count, 147)
-        self.assertEqual(report.backend_count, 44)
+        self.assertEqual(report.frontend_count, 148)
+        self.assertEqual(report.backend_count, 45)
         self.assertEqual(report.invalid_mappings, ())
         self.assertTrue(set(report.implemented_ids) <= {item.id for item in active_registry.all()})
         self.assertEqual(len(report.planned_ids), 101)
@@ -126,6 +126,19 @@ class DependencyDagTests(unittest.TestCase):
             plan.task_for_calculation("qe_matdyn_dos").depends_on_task_ids,
             (plan.task_for_calculation("qe_q2r").id,),
         )
+
+    def test_phonon_band_structure_is_distinct_from_phonon_dos(self):
+        plan = CalculationCompiler(request(["phonon_band_structure"], {"phonon_path": [
+            {"label": "G", "coordinates": [0, 0, 0], "points": 4},
+            {"label": "X", "coordinates": [0.5, 0, 0], "points": 4},
+        ]})).compile()
+        self.assertEqual(plan.resolved_calculations, ["scf", "qe_ph", "qe_q2r", "qe_matdyn_dispersion"])
+        self.assertEqual(plan.task_for_calculation("qe_matdyn_dispersion").metadata["purpose"], "phonon_dispersion")
+        self.assertFalse(any(task.calculation_id == "qe_matdyn_dos" for task in plan.tasks))
+
+    def test_phonon_band_structure_requires_explicit_path(self):
+        with self.assertRaisesRegex(Exception, "explicit phonon_path"):
+            CalculationCompiler(request(["phonon_band_structure"], {"phonon_path": None})).compile()
 
     def test_cycle_and_missing_dependency_are_rejected_with_clear_errors(self):
         cycle_registry = temporary_registry(

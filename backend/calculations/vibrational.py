@@ -14,7 +14,13 @@ registry.register(CalculationDefinition(
     id="phonon_dos", name="Phonon Density of States", category="Vibrational Properties",
     description="Vibrational density of states.", requires=("phonons",),
     workflow="vibrational.phonon_dos", engine="quantum_espresso", tags=("vibrational", "phonons", "dos"),
-    parameters=("accuracy", "qmesh", "tr2_ph", "phonon_path", "dos_mesh"),
+    parameters=("accuracy", "qmesh", "tr2_ph", "dos_mesh"),
+))
+registry.register(CalculationDefinition(
+    id="phonon_band_structure", name="Phonon Band Structure", category="Vibrational Properties",
+    description="Phonon dispersion interpolated along an explicit reciprocal-space q path.", requires=("phonons",),
+    workflow="vibrational.phonon_band_structure", engine="quantum_espresso", tags=("vibrational", "phonons", "dispersion"),
+    parameters=("accuracy", "qmesh", "tr2_ph", "phonon_path", "path_points_per_segment"),
 ))
 
 registry.register(CalculationDefinition(

@@ -38,7 +38,7 @@ def validate_task_artifacts(tasks):
 def validate_calculation_architecture(catalog=None):
  from frontend.calculations.catalog import CALCULATIONS
  entries=tuple(CALCULATIONS if catalog is None else catalog); ids=[item.id for item in entries]; errors=[]
- if len(ids)!=147: errors.append(f"Expected 147 public calculations, found {len(ids)}")
+ if len(ids)!=148: errors.append(f"Expected 148 public calculations, found {len(ids)}")
  if len(ids)!=len(set(ids)): errors.append("Duplicate public calculation IDs")
  if set(ids)!=set(SEMANTICS): errors.append("Catalog IDs and semantic map IDs differ")
  for item in entries:

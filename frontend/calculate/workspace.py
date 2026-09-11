@@ -1227,10 +1227,7 @@ class CalculateWorkspace(QWidget):
                 recommendation = recommended_band_path(self.project.get_structure().to_dict())
                 parameters["kpath"] = normalize_band_path(materialize_path(recommendation.segments, (True,) * len(recommendation.segments), 40))
             parameters["postprocessing"] = True
-        elif "phonon_dos" in self.selected_ids:
-            # The harmonic DOS workflow also records a real matdyn path result.
-            # Reuse the canonical reciprocal-space recommendation; this is an engine
-            # input default, not an Analyze-layer interpolation.
+        elif "phonon_band_structure" in self.selected_ids:
             existing_path = parameters.get("phonon_path")
             if existing_path:
                 parameters["phonon_path"] = normalize_band_path(existing_path)
@@ -1239,6 +1236,8 @@ class CalculateWorkspace(QWidget):
                 if recommendation.segments:
                     parameters["phonon_path"] = normalize_band_path(materialize_path(recommendation.segments, (True,) * len(recommendation.segments), 24))
                     parameters["phonon_path_convention"] = "Quantum Studio " + recommendation.bravais_label + " recommendation"
+            parameters["postprocessing"] = True
+        elif "phonon_dos" in self.selected_ids:
             parameters["postprocessing"] = True
         elif set(self.selected_ids) & {"dos", "pdos", "charge_density", "spin_density", "electron_localization", "electrostatic_potential", "work_function"}:
             # These public intents expand into private QE terminal tasks only
@@ -1365,7 +1364,7 @@ class CalculateWorkspace(QWidget):
         CalculateWorkspace._fit_configuration_dialog(dialog, 720, 620)
         if dialog.exec()==QDialog.DialogCode.Accepted:
             values=values_from_fields(); values.update(scientific_state)
-            if set(self.selected_ids) & {"bands", "dos", "pdos", "charge_density", "spin_density", "electron_localization", "electrostatic_potential", "work_function", "phonon_dos"}:
+            if set(self.selected_ids) & {"bands", "dos", "pdos", "charge_density", "spin_density", "electron_localization", "electrostatic_potential", "work_function", "phonon_dos", "phonon_band_structure"}:
                 values["postprocessing"] = True
             values["accuracy"]=PRESETS[preset.currentData()] if preset.currentData()!="CUSTOM" else "standard"; values["accuracy_preset"]=preset.currentData(); self.parameters_input.setText(json.dumps(values,sort_keys=True))
             request = self.project.get_calculation(self._selected_configured_request_id())

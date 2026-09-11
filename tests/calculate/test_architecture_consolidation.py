@@ -13,8 +13,8 @@ from tests.calculate.test_boltztrap2_workflow import P as BTP2_PARAMS, S as BTP2
 from tests.calculate.test_negf_workflow import settings, transport
 from backend.compiler.negf import compile_transport_workflow
 class ArchitectureConsolidationTests(unittest.TestCase):
- def test_all_147_semantics_kinds_cardinality_and_acyclic_dependencies(self):
-  report=validate_calculation_architecture(); self.assertEqual(report.public_count,147); self.assertEqual(report.semantic_count,147); self.assertEqual(report.errors,()); self.assertEqual(SEMANTICS["scf"].kind,CalculationKind.PRIMITIVE); self.assertEqual(SEMANTICS["bands"].kind,CalculationKind.WORKFLOW); self.assertEqual(SEMANTICS["band_gap"].kind,CalculationKind.DERIVED); self.assertEqual(SEMANTICS["formation_energy"].kind,CalculationKind.MULTI_SYSTEM); self.assertEqual(SEMANTICS["parameter_sweep"].kind,CalculationKind.META); self.assertEqual(SEMANTICS["transmission"].input_cardinality,InputCardinality.DEVICE_TRANSPORT)
+ def test_all_148_semantics_kinds_cardinality_and_acyclic_dependencies(self):
+  report=validate_calculation_architecture(); self.assertEqual(report.public_count,148); self.assertEqual(report.semantic_count,148); self.assertEqual(report.errors,()); self.assertEqual(SEMANTICS["scf"].kind,CalculationKind.PRIMITIVE); self.assertEqual(SEMANTICS["bands"].kind,CalculationKind.WORKFLOW); self.assertEqual(SEMANTICS["band_gap"].kind,CalculationKind.DERIVED); self.assertEqual(SEMANTICS["formation_energy"].kind,CalculationKind.MULTI_SYSTEM); self.assertEqual(SEMANTICS["parameter_sweep"].kind,CalculationKind.META); self.assertEqual(SEMANTICS["transmission"].input_cardinality,InputCardinality.DEVICE_TRANSPORT)
  def test_engine_registry_and_structured_command_contract(self):
   self.assertEqual(set(ENGINES),{"quantum_espresso","wannier90","epw","boltztrap2","negf"}); self.assertEqual(CommandSpec("pw.x",stdin_file="scf.in",stdout_file="scf.out").execution_mode,ExecutionMode.SUBPROCESS); self.assertEqual(CommandSpec("wannier90",("-pp","seed"),execution_mode=ExecutionMode.SUBPROCESS).arguments,("-pp","seed"));
   with self.assertRaises(ValueError): CommandSpec("pw.x",("<","scf.in"))

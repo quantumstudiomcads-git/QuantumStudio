@@ -40,7 +40,7 @@ class CalculationCompiler:
             raise ValueError("Current hybrid NSCF-dependent workflow is not yet implemented in Quantum Studio.")
         if "raman" in self.request.selected_calculations:
             self._validate_raman_contract(parameters)
-        if set(self.request.selected_calculations) & {"phonons", "phonon_dos"}:
+        if set(self.request.selected_calculations) & {"phonons", "phonon_dos", "phonon_band_structure"}:
             self._validate_hubbard_phonon_contract(parameters)
         tasks = self._public_tasks(graph, parameters)
         if "raman" in self.request.selected_calculations:
@@ -60,7 +60,7 @@ class CalculationCompiler:
         if set(self.request.selected_calculations) & {"born_charges", "lo_to_splitting", "infrared", "dielectric_phonon"}:
             from backend.compiler.polar import expand_polar
             tasks = expand_polar(self.request, tasks, parameters)
-        if (set(self.request.selected_calculations) & {"bands","dos","pdos","charge_density","spin_density","electron_localization","electrostatic_potential","work_function","fermi_surface","hubbard_u","band_gap","effective_mass","bader_charge","charge_transfer","mulliken_population","magnetic_moment","band_decomposed_charge","orbital_texture","hybrid_electronic","phonon_dos"}) and (self.request.parameters.get("postprocessing") or "phonon_dos" in self.request.selected_calculations):
+        if (set(self.request.selected_calculations) & {"bands","dos","pdos","charge_density","spin_density","electron_localization","electrostatic_potential","work_function","fermi_surface","hubbard_u","band_gap","effective_mass","bader_charge","charge_transfer","mulliken_population","magnetic_moment","band_decomposed_charge","orbital_texture","hybrid_electronic","phonon_dos","phonon_band_structure"}) and (self.request.parameters.get("postprocessing") or bool(set(self.request.selected_calculations) & {"phonon_dos", "phonon_band_structure"})):
             from backend.compiler.postprocessing import expand
             tasks = expand(self.request, tasks, parameters)
         if "phonons" in self.request.selected_calculations:

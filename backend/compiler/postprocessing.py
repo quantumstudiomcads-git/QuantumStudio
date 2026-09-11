@@ -39,7 +39,7 @@ def _expand_phonon_path(path, points_per_segment=24):
 def expand(request, tasks, parameters):
     selected=set(request.selected_calculations); by={task.calculation_id:task for task in tasks}; scf=by.get("scf")
     if not scf: return tasks
-    result=[task for task in tasks if task.calculation_id not in {"bands","dos","pdos","charge_density","spin_density","electron_localization","electrostatic_potential","work_function","fermi_surface","hubbard_u","band_gap","effective_mass","bader_charge","charge_transfer","mulliken_population","magnetic_moment","orbital_texture","band_decomposed_charge","hybrid_electronic","phonon_dos"}]
+    result=[task for task in tasks if task.calculation_id not in {"bands","dos","pdos","charge_density","spin_density","electron_localization","electrostatic_potential","work_function","fermi_surface","hubbard_u","band_gap","effective_mass","bader_charge","charge_transfer","mulliken_population","magnetic_moment","orbital_texture","band_decomposed_charge","hybrid_electronic","phonon_dos","phonon_band_structure"}]
     def add(name, semantic, tool, deps, params, inputs, outputs, metadata=None):
         signature=_sig({"semantic":semantic,"calculation_id":name,"purpose":(metadata or {}).get("purpose"),"structure":request.structure,"pseudopotentials":_pseudo_identity(request.parameters.get("pseudopotentials",{})),"parameters":params,"dependency_signatures":[dep.parameter_signature for dep in deps]}); task=PlannedTask(id=f"{request.id}:{semantic}:{signature}",calculation_id=name,semantic_task_type=semantic,engine_id="quantum_espresso",tool_id=tool,parameter_signature=signature,depends_on_task_ids=tuple(dep.id for dep in deps),parameters=params,structure_reference="request_snapshot",artifact_inputs=tuple(inputs),artifact_outputs=tuple(outputs),metadata=metadata or {}); result.append(task); return task
     if set(selected) & {"bands", "band_gap", "effective_mass", "hybrid_electronic"}:
@@ -96,13 +96,15 @@ def expand(request, tasks, parameters):
             if kind=="spin" and str(values.get("spin_treatment", "")).upper() not in {"COLLINEAR_SPIN", "COLLINEAR"}: raise InvalidQEParameterError("Spin density requires collinear spin treatment.")
             analysis={key:values.pop(key) for key in ("surface_normal","macro_window_A") if key in values}
             add("qe_pp","qe_pp","pp.x",[scf],{**values,"plot_kind":kind},["qe_save"],[output],{"purpose":public,"field":{"kind":kind,"artifact":kind+".cube","periodic":list(request.structure.get("periodic",[True,True,True])),"atoms":list(request.structure.get("atoms",[]))},"analysis":analysis})
-    if "phonon_dos" in selected:
+    phonon_derived = selected & {"phonon_dos", "phonon_band_structure"}
+    if phonon_derived:
+        public_intent = "phonon_band_structure" if "phonon_band_structure" in phonon_derived else "phonon_dos"
         ph=by.get("phonons")
-        if ph is None: raise InvalidQEParameterError("phonon_dos requires phonons.")
+        if ph is None: raise InvalidQEParameterError(f"{public_intent} requires phonons.")
         result=[task for task in result if task is not ph]
-        qmesh=parameters.get("phonon_dos",{}).get("qmesh") or parameters.get("qmesh") or parameters.get("phonons",{}).get("qmesh") or [2,2,2]
-        phonon_config = parameters.get("phonon_dos", {}) if isinstance(parameters.get("phonon_dos", {}), dict) else {}
-        if not isinstance(qmesh,(list,tuple)) or len(qmesh)!=3 or any(int(x)<1 for x in qmesh): raise InvalidQEParameterError("phonon_dos qmesh must contain three positive integers.")
+        qmesh=parameters.get(public_intent,{}).get("qmesh") or parameters.get("qmesh") or parameters.get("phonons",{}).get("qmesh") or [2,2,2]
+        phonon_config = parameters.get(public_intent, {}) if isinstance(parameters.get(public_intent, {}), dict) else {}
+        if not isinstance(qmesh,(list,tuple)) or len(qmesh)!=3 or any(int(x)<1 for x in qmesh): raise InvalidQEParameterError(f"{public_intent} qmesh must contain three positive integers.")
         ph_values=dict(parameters["phonons"]); ph_values.pop("q_point",None); ph_values["qmesh"]=[int(x) for x in qmesh]
         if phonon_config.get("tr2_ph") is not None:
             ph_values["tr2_ph"] = float(phonon_config["tr2_ph"])
@@ -112,8 +114,10 @@ def expand(request, tasks, parameters):
         ph=add("qe_ph","qe_ph","ph.x",[scf],ph_values,["qe_save"],["QE_DYNAMICAL_MATRIX_SET"],{"purpose":"harmonic_qmesh","qmesh":list(qmesh),"expected_q_count":int(qmesh[0])*int(qmesh[1])*int(qmesh[2])})
         q2r=add("qe_q2r","qe_q2r","q2r.x",[ph],{"fildyn":"dynamical-matrix","flfrc":"force_constants","zasr":"crystal"},["QE_DYNAMICAL_MATRIX_SET"],["FORCE_CONSTANTS"],{"purpose":"harmonic_ifc","qmesh":list(qmesh),"asr":"crystal"})
         dispersion_path=phonon_config.get("phonon_path") or parameters.get("phonon_path")
+        if public_intent == "phonon_band_structure" and not dispersion_path:
+            raise InvalidQEParameterError("Phonon band structure requires an explicit phonon_path.")
         path_points=int(phonon_config.get("path_points_per_segment", parameters.get("path_points_per_segment", 24)))
-        if dispersion_path:
+        if public_intent == "phonon_band_structure":
             original_path = dispersion_path
             dispersion_path=_expand_phonon_path(dispersion_path, path_points)
             vertex_indices=[]; cursor=0
@@ -121,6 +125,7 @@ def expand(request, tasks, parameters):
                 vertex_indices.append(cursor); cursor += max(2, int(vertex.get("points", path_points))) - 1
             vertex_indices.append(len(dispersion_path) - 1)
             add("qe_matdyn_dispersion","qe_matdyn","matdyn.x",[q2r],{"mode":"dispersion","flfrc":"force_constants","flfrq":"phonon_dispersion.freq","asr":"crystal","q_path":dispersion_path},["FORCE_CONSTANTS"],["PHONON_DISPERSION_RAW_DATA"],{"purpose":"phonon_dispersion","asr":"crystal","q_coordinate":"crystal_fractional","qmesh":list(qmesh),"expected_mode_count":3 * len(request.structure.get("atoms",())),"cell_A":request.structure.get("cell"),"high_symmetry_labels":[point.get("label","") for point in original_path],"high_symmetry_indices":vertex_indices,"path_points_per_segment":path_points,"path_convention":parameters.get("phonon_path_convention", "Quantum Studio canonical path recommendation")})
-        dos_values={"mode":"dos","flfrc":"force_constants","fldos":"phonon_dos.dat","asr":"crystal","mesh":list(phonon_config.get("dos_mesh") or parameters.get("dos_mesh") or [12,12,12])}
-        add("qe_matdyn_dos","qe_matdyn","matdyn.x",[q2r],dos_values,["FORCE_CONSTANTS"],["PHONON_DOS_RAW_DATA"],{"purpose":"phonon_dos","asr":"crystal","normalization":"3N modes per primitive cell","frequency_unit":"cm^-1","qmesh":list(qmesh),"expected_mode_count":3 * len(request.structure.get("atoms",()))})
+        if public_intent == "phonon_dos":
+            dos_values={"mode":"dos","flfrc":"force_constants","fldos":"phonon_dos.dat","asr":"crystal","mesh":list(phonon_config.get("dos_mesh") or parameters.get("dos_mesh") or [12,12,12])}
+            add("qe_matdyn_dos","qe_matdyn","matdyn.x",[q2r],dos_values,["FORCE_CONSTANTS"],["PHONON_DOS_RAW_DATA"],{"purpose":"phonon_dos","asr":"crystal","normalization":"3N modes per primitive cell","frequency_unit":"cm^-1","qmesh":list(qmesh),"expected_mode_count":3 * len(request.structure.get("atoms",()))})
     return result

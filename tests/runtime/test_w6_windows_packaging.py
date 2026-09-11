@@ -109,7 +109,7 @@ class WindowsPackagingTests(unittest.TestCase):
             with self.assertRaises(WindowsBuildError): safe_clean_output(plan)
             write_json(plan.output/PACKAGE_MARKER,{"product":"Quantum Studio"}); safe_clean_output(plan); self.assertFalse(plan.output.exists())
 
-    def test_catalogue_identity_is_preserved(self): self.assertEqual(len(CALCULATIONS),147)
+    def test_catalogue_identity_is_preserved(self): self.assertEqual(len(CALCULATIONS),148)
 
     def test_public_catalogue_snapshot_and_calculate_widget_cover_each_public_family(self):
         from collections import Counter
@@ -120,8 +120,8 @@ class WindowsPackagingTests(unittest.TestCase):
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance() or QApplication([])
         snapshot = public_catalogue_snapshot()
-        self.assertEqual(len(snapshot), 147)
-        self.assertEqual(len({item["id"] for item in snapshot}), 147)
+        self.assertEqual(len(snapshot), 148)
+        self.assertEqual(len({item["id"] for item in snapshot}), 148)
         workspace = CalculateWorkspace(Project("Catalogue parity"))
         try:
             visible = {workspace.calculation_list.item(row).data(Qt.ItemDataRole.UserRole) for row in range(workspace.calculation_list.count())}
@@ -164,7 +164,7 @@ class ApplicationSmokeTests(unittest.TestCase):
             project_path = Path(tmp) / "project Ω.qs"; project.save(project_path)
             self.assertEqual(Project.load(project_path).name, project.name)
             hub, builder, calculate, analyze = ProjectHub(), Builder(project), CalculateWorkspace(project), AnalyzeWorkspace(project)
-            self.assertEqual(len(calculate.catalog_descriptors), 147)
+            self.assertEqual(len(calculate.catalog_descriptors), 148)
             for widget in (hub, builder, calculate, analyze): widget.close()
             app.processEvents()
 

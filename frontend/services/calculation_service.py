@@ -67,7 +67,7 @@ def normalize_qe_parameters(parameters):
     return values
 
 
-_PERIODIC_WORKFLOWS = frozenset({"bands", "dos", "pdos", "nscf", "phonons", "phonon_dos", "boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration", "born_charges", "lo_to_splitting", "infrared", "dielectric_phonon"})
+_PERIODIC_WORKFLOWS = frozenset({"bands", "dos", "pdos", "nscf", "phonons", "phonon_dos", "phonon_band_structure", "boltztrap_bands", "electrical_conductivity", "seebeck", "thermal_conductivity_electronic", "power_factor", "carrier_concentration", "born_charges", "lo_to_splitting", "infrared", "dielectric_phonon"})
 
 
 @dataclass(frozen=True)

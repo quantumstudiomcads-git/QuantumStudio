@@ -436,6 +436,16 @@ register(
 )
 
 register(
+    "phonon_band_structure",
+    "Phonon Band Structure",
+    "Vibrational Properties",
+    "Quantum ESPRESSO",
+    "Calculate phonon dispersion along an explicit reciprocal-space path.",
+    ["phonons", "bands", "dispersion"],
+    "ready",
+)
+
+register(
     "phonon_modes",
     "Phonon Eigenmodes",
     "Vibrational Properties",

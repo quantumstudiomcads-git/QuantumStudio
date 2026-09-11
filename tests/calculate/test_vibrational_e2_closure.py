@@ -43,7 +43,8 @@ class VibrationalE2ClosureTests(unittest.TestCase):
         request=CalculationRequest(structure={"cell":[[0,2.715,2.715],[2.715,0,2.715],[2.715,2.715,0]],"periodic":[True,True,True],"atoms":[{"element":"Si","x":0,"y":0,"z":0},{"element":"Si","x":1.3575,"y":1.3575,"z":1.3575}]},selected_calculations=["phonon_dos"],parameters={"accuracy":"standard","qmesh":[2,2,2],"tr2_ph":"1e-12","dos_mesh":[16,16,16],"postprocessing":True,"phonon_path":[{"label":"Γ","coordinates":[0,0,0],"points":24},{"label":"X","coordinates":[0,.5,0],"points":24}]})
         plan=CalculationCompiler(request).compile(); task=next(item for item in plan.tasks if item.semantic_task_type=="qe_ph")
         self.assertEqual(task.parameters["qmesh"],[2,2,2]); self.assertEqual(float(task.parameters["tr2_ph"]),1e-12)
-        self.assertTrue(any(item.semantic_task_type=="qe_matdyn" and item.metadata.get("purpose")=="phonon_dispersion" for item in plan.tasks))
+        self.assertTrue(any(item.semantic_task_type=="qe_matdyn" and item.metadata.get("purpose")=="phonon_dos" for item in plan.tasks))
+        self.assertFalse(any(item.metadata.get("purpose")=="phonon_dispersion" for item in plan.tasks))
     def test_dos_mesh_uses_the_shared_typed_grid_control(self):
         app=QApplication.instance() or QApplication([])
         control=make_control("dos_mesh",[16,16,16])
@@ -128,7 +129,7 @@ class VibrationalE2UTests(unittest.TestCase):
         for u in (0,2.27):
             plan=CalculationCompiler(self._request(u)).compile()
             self.assertEqual(sum(t.calculation_id == "scf" for t in plan.tasks), 1)
-            self.assertEqual([t.calculation_id for t in plan.tasks], ["scf","qe_ph","qe_q2r","qe_matdyn_dispersion","qe_matdyn_dos"])
+            self.assertEqual([t.calculation_id for t in plan.tasks], ["scf","qe_ph","qe_q2r","qe_matdyn_dos"])
             q2r=plan.task_for_calculation("qe_q2r")
             self.assertEqual(q2r.parameters["zasr"], "crystal")
             self.assertEqual(q2r.depends_on_task_ids, (plan.task_for_calculation("qe_ph").id,))

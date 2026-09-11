@@ -16,6 +16,10 @@ Machine-readable snapshots were generated at:
 
 The reproducible generator is `scripts/b3_catalogue_audit.py`.
 
+The post-change snapshot is also emitted as
+`E:\QuantumStudio-W8\reports\B3_catalogue_after.json` and records 148 public
+entries. The backend snapshot records 45 executable definitions.
+
 ## B. Architecture
 
 - Public catalogue: `frontend/calculations/catalog.py`
@@ -180,3 +184,16 @@ distinct vibrational intents. No website repository was modified in B3.
   dispersion side effect corrected
 - Catalogue scientific semantics: unchanged except for public exposure and
   routing separation of already implemented workflow branches
+
+## L. Packaged validation
+
+Standalone generation r22 was built from `8ce1cb6614f5ee20132255b69970b8225021d96d`
+with `dirty=false`, Python 3.13.15, PySide6 6.11.2, Nuitka 4.1.1, MSVC v143,
+and Windows SDK 10.0.26100.0. The bundle audit reported 369 files and
+485,798,569 bytes. `QuantumStudio.exe` is 293,005,824 bytes with SHA-256
+`96B003D967BE47AE5B87A7A6B5AEF69407FB2352DE44A598190A7B2EB536A118`.
+
+The packaged catalogue smoke confirmed 148 entries and the new
+`phonon_band_structure` ID. Normal startup, the full packaged smoke, and a
+clean launch from a path containing spaces and Unicode all completed without
+runtime installation or network access.

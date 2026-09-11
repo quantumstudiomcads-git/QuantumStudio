@@ -4,7 +4,7 @@ W6 defines a native Windows **Nuitka standalone** bundle. It is not an installer
 
 ## Build machine
 
-The initial target is Windows 11 x64. Build with the repository-supported Python 3.13 and PySide6 6.11.2 runtime requirements plus the build-only `requirements-build-windows.txt` dependency. The project currently records Nuitka 4.1.1 in its PySide deployment configuration. A real build requires Visual Studio 2022 Build Tools with the MSVC v143 x64/x86 tools and a Windows SDK; the build plan explicitly requests Nuitka's `--msvc=latest` backend and does not fall back to Zig or MinGW. It also caps Nuitka at four C compiler jobs so generated scientific extension modules compile reliably on Windows build hosts. End users do not install Python, Nuitka, or compiler tooling.
+The initial target is Windows 11 x64. Build with the repository-supported Python 3.13 and PySide6 6.11.2 runtime requirements plus the build-only `requirements-build-windows.txt` dependency. The project currently records Nuitka 4.1.1 in its PySide deployment configuration. A real build requires Visual Studio 2022 Build Tools with the MSVC v143 x64/x86 tools and a Windows SDK; the build plan explicitly requests Nuitka's `--msvc=latest` backend and does not fall back to Zig or MinGW. It also caps Nuitka at four C compiler jobs and uses MSVC's supported `_CL_` appended `/Od` option: this avoids optimizer heap exhaustion in generated scientific extension modules without changing application or scientific behavior. End users do not install Python, Nuitka, or compiler tooling.
 
 From a clean checkout on Windows:
 

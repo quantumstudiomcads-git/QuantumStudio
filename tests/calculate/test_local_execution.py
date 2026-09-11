@@ -64,6 +64,14 @@ class LocalExecutionTests(unittest.TestCase):
    root=Path(tmp); item=GeneratedTask("io","io","test_engine","python","io",CommandSpec(sys.executable,("-c","import sys; print(sys.stdin.read()); print('err',file=sys.stderr)"),stdin_file="in.txt",stdout_file="out.log",stderr_file="err.log")); flow=workflow(root,(item,)); (root/"io"/"in.txt").write_text("input"); result=manager().execute(flow); self.assertIn("input",(root/"io"/"out.log").read_text()); self.assertIn("err",(root/"io"/"err.log").read_text())
   with tempfile.TemporaryDirectory() as tmp:
    item=task("slow",code="import time; time.sleep(2)",timeout_seconds=.1); result=manager().execute(workflow(tmp,(item,))); self.assertEqual(result.tasks["slow"].state,TaskState.FAILED); self.assertIn("timeout",result.tasks["slow"].error_message)
+   if sys.platform == "win32":
+    stderr_path=Path(result.tasks["slow"].stderr_path); deadline=time.monotonic()+3
+    while True:
+     try: stderr_path.unlink(); break
+     except FileNotFoundError: break
+     except PermissionError:
+      if time.monotonic() >= deadline: raise AssertionError(f"Timed-out task still holds {stderr_path}")
+      time.sleep(.03)
   with tempfile.TemporaryDirectory() as tmp:
    started=threading.Event(); item=task("cancel",code="import time; time.sleep(5)"); runner=manager(lambda event: started.set() if event["state"]=="RUNNING" else None); box={}; thread=threading.Thread(target=lambda:box.setdefault("result",runner.execute(workflow(tmp,(item,))))); thread.start(); self.assertTrue(started.wait(2)); runner.cancel(); thread.join(4); self.assertFalse(thread.is_alive()); self.assertEqual(box["result"].tasks["cancel"].state,TaskState.CANCELLED)
    if sys.platform == "win32":

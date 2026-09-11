@@ -15,6 +15,9 @@ PACKAGE_MARKER = "quantumstudio-build.json"
 INSTALLER_INPUT = "quantumstudio-installer-input.json"
 FORBIDDEN_PARTS = {"tests", ".git", ".venv", "venv", "build", "__pycache__"}
 FORBIDDEN_NAMES = {"pw.x", "ph.x", "q2r.x", "matdyn.x", "dynmat.x", "bands.x", "dos.x", "projwfc.x", "pp.x", "epsilon.x", "pw2wannier90.x", "epw.x", "wannier90.x", "bader"}
+# MSVC appends _CL_ after its normal command line.  This overrides Nuitka's
+# default /Ox for generated scientific modules that exhaust MSVC's optimizer.
+MSVC_APPEND_OPTIONS = "/Od"
 
 class WindowsBuildError(RuntimeError): pass
 

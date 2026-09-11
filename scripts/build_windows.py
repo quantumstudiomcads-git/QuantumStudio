@@ -14,10 +14,10 @@ _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path: sys.path.insert(0, str(_REPO))
 
 try:
-    from .windows_packaging import (EXECUTABLE_NAME, PACKAGE_MARKER, WindowsBuildError, audit_package_contents,
+    from .windows_packaging import (EXECUTABLE_NAME, MSVC_APPEND_OPTIONS, PACKAGE_MARKER, WindowsBuildError, audit_package_contents,
                                     build_plan, installer_input_manifest, normalize_architecture, safe_clean_output, write_json)
 except ImportError:  # direct script execution
-    from windows_packaging import (EXECUTABLE_NAME, PACKAGE_MARKER, WindowsBuildError, audit_package_contents,
+    from windows_packaging import (EXECUTABLE_NAME, MSVC_APPEND_OPTIONS, PACKAGE_MARKER, WindowsBuildError, audit_package_contents,
                                    build_plan, installer_input_manifest, normalize_architecture, safe_clean_output, write_json)
 from backend.runtime.identity import VERSION
 
@@ -30,6 +30,14 @@ def git_value(repo: Path, *arguments: str) -> str:
 def dependency_version(name: str) -> str:
     try: return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError: return ""
+
+
+def windows_build_environment(*, channel: str, commit: str, timestamp: str, inherited: dict[str, str] | None = None) -> dict[str, str]:
+    """Return the controlled child environment for the MSVC standalone build."""
+    environment = (os.environ if inherited is None else inherited).copy()
+    environment.update({"QUANTUM_STUDIO_BUILD_CHANNEL": channel, "QUANTUM_STUDIO_BUILD_COMMIT": commit,
+                        "QUANTUM_STUDIO_BUILD_TIMESTAMP": timestamp, "_CL_": MSVC_APPEND_OPTIONS})
+    return environment
 
 
 def generate_icon(svg: Path, ico: Path) -> None:
@@ -73,7 +81,8 @@ def main(argv=None) -> int:
         if not dependency_version("Nuitka"): raise WindowsBuildError("NUITKA_MISSING: install build-only Nuitka in the Windows build environment.")
         if not dependency_version("PySide6"): raise WindowsBuildError("PYSIDE6_MISSING: install runtime dependencies in the Windows build environment.")
         generate_icon(plan.icon_svg, plan.icon_ico)
-        environment = os.environ.copy(); environment.update({"QUANTUM_STUDIO_BUILD_CHANNEL": args.channel, "QUANTUM_STUDIO_BUILD_COMMIT": commit + ("-DIRTY_BUILD" if dirty else ""), "QUANTUM_STUDIO_BUILD_TIMESTAMP": datetime.now(timezone.utc).isoformat()})
+        environment = windows_build_environment(channel=args.channel, commit=commit + ("-DIRTY_BUILD" if dirty else ""),
+                                                timestamp=datetime.now(timezone.utc).isoformat())
         completed = subprocess.run(list(plan.nuitka_argv), cwd=repo, env=environment, shell=False, check=False)
         if completed.returncode != 0: raise WindowsBuildError(f"NUITKA_FAILED: exited with {completed.returncode}.")
         bundle = plan.output / "main.dist"

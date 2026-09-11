@@ -33,6 +33,13 @@ class WindowsPackagingTests(unittest.TestCase):
             self.assertIn("--output-filename=QuantumStudio.exe",argv); self.assertTrue(any(item.startswith("--include-data-dir=") for item in argv))
             self.assertNotIn("cmd.exe",str(argv)); self.assertNotIn("PowerShell",str(argv))
 
+    def test_windows_msvc_environment_appends_verified_low_optimization_option(self):
+        environment = build_windows.windows_build_environment(channel="beta", commit="abc123", timestamp="2026-09-11T00:00:00Z", inherited={"KEEP": "value", "_CL_": "/Zi"})
+        self.assertEqual(environment["_CL_"], "/Od")
+        self.assertEqual(environment["QUANTUM_STUDIO_BUILD_CHANNEL"], "beta")
+        self.assertEqual(environment["QUANTUM_STUDIO_BUILD_COMMIT"], "abc123")
+        self.assertEqual(environment["KEEP"], "value")
+
     def test_non_windows_build_is_plan_only_not_fake_success(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(build_windows.sys, "platform", "linux"), patch.object(build_windows, "git_value", return_value=""):
             planned_stdout, planned_stderr = io.StringIO(), io.StringIO()

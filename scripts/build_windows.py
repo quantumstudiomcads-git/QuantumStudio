@@ -23,7 +23,7 @@ from backend.runtime.identity import VERSION
 
 
 def git_value(repo: Path, *arguments: str) -> str:
-    try: return subprocess.run(["git", *arguments], cwd=repo, capture_output=True, text=True, timeout=5, check=False, shell=False).stdout.strip()
+    try: return subprocess.run(["git", "-c", f"safe.directory={repo.resolve()}", *arguments], cwd=repo, capture_output=True, text=True, timeout=5, check=False, shell=False).stdout.strip()
     except (OSError, subprocess.SubprocessError): return ""
 
 

@@ -74,6 +74,14 @@ class WindowsPackagingTests(unittest.TestCase):
             self.assertIn("GIT_COMMIT_UNAVAILABLE", errors.getvalue())
             self.assertEqual(list(Path(tmp).rglob("QuantumStudio.exe")), [])
 
+    def test_git_provenance_scopes_safe_directory_to_the_selected_checkout(self):
+        class Result: stdout = "abc123\n"
+        with patch.object(build_windows.subprocess, "run", return_value=Result()) as run:
+            self.assertEqual(build_windows.git_value(REPO, "rev-parse", "HEAD"), "abc123")
+        command = run.call_args.args[0]
+        self.assertEqual(command[:3], ["git", "-c", f"safe.directory={REPO.resolve()}"])
+        self.assertEqual(command[3:], ["rev-parse", "HEAD"])
+
     def test_windows_paths_resources_and_recent_projects_do_not_write_install_root(self):
         with tempfile.TemporaryDirectory(prefix="bundle Ω ") as tmp:
             root=Path(tmp); bundle=root/"read only bundle"; (bundle/"assets").mkdir(parents=True); asset=bundle/"assets"/"logo.svg"; asset.write_text("x"); bundle.chmod(stat.S_IREAD|stat.S_IEXEC)

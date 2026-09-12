@@ -74,6 +74,31 @@ class WindowsPackagingTests(unittest.TestCase):
             self.assertIn("GIT_COMMIT_UNAVAILABLE", errors.getvalue())
             self.assertEqual(list(Path(tmp).rglob("QuantumStudio.exe")), [])
 
+    def test_incomplete_standalone_output_is_never_reported_as_built(self):
+        class Result: returncode = 0
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "dist"
+
+            def fake_nuitka(command, **_kwargs):
+                output_dir = next(Path(item.split("=", 1)[1]) for item in command if item.startswith("--output-dir="))
+                bundle = output_dir / "main.dist"
+                bundle.mkdir(parents=True)
+                (bundle / "QuantumStudio.exe").write_bytes(b"linked-only")
+                return Result()
+
+            with patch.object(build_windows.sys, "platform", "win32"), \
+                 patch.object(build_windows, "git_value", side_effect=lambda _repo, *arguments: "abc123" if arguments == ("rev-parse", "HEAD") else ""), \
+                 patch.object(build_windows, "dependency_version", return_value="test"), \
+                 patch.object(build_windows, "generate_icon"), \
+                 patch.object(build_windows.subprocess, "run", side_effect=fake_nuitka):
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    result = build_windows.main(["--output", str(output)])
+            self.assertEqual(result, 2)
+            self.assertIn("PACKAGE_AUDIT_FAILED: PACKAGE_INCOMPLETE", stderr.getvalue())
+            self.assertFalse((output / "main.dist" / PACKAGE_MARKER).exists())
+
     def test_git_provenance_scopes_safe_directory_to_the_selected_checkout(self):
         class Result: stdout = "abc123\n"
         with patch.object(build_windows.subprocess, "run", return_value=Result()) as run:
@@ -100,6 +125,10 @@ class WindowsPackagingTests(unittest.TestCase):
             self.assertEqual(manifest["entry_executable"],"QuantumStudio.exe"); self.assertFalse(manifest["dirty"])
             inputs=installer_input_manifest(plan,manifest); self.assertEqual(inputs["runtime_image"]["status"],"PENDING_W7"); self.assertEqual(inputs["engine_pack"]["status"],"PENDING_LEGAL_AND_W7")
             package=root/"QuantumStudio.dist"; package.mkdir(); (package/"QuantumStudio.exe").write_bytes(b"native")
+            incomplete = audit_package_contents(package)
+            self.assertFalse(incomplete["valid"]); self.assertEqual(incomplete["reason"], "PACKAGE_INCOMPLETE")
+            for relative in ("assets/quantum-studio-v0.1.svg", "PySide6/qt-plugins/platforms/qwindows.dll", "cryptography/hazmat/bindings/_rust.pyd"):
+                target = package / relative; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(b"runtime")
             self.assertTrue(audit_package_contents(package)["valid"])
             (package/"pw.x").write_bytes(b"forbidden"); audit=audit_package_contents(package); self.assertFalse(audit["valid"]); self.assertIn("pw.x",audit["forbidden"])
 

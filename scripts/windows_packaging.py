@@ -15,6 +15,14 @@ PACKAGE_MARKER = "quantumstudio-build.json"
 INSTALLER_INPUT = "quantumstudio-installer-input.json"
 FORBIDDEN_PARTS = {"tests", ".git", ".venv", "venv", "build", "__pycache__"}
 FORBIDDEN_NAMES = {"pw.x", "ph.x", "q2r.x", "matdyn.x", "dynmat.x", "bands.x", "dos.x", "projwfc.x", "pp.x", "epsilon.x", "pw2wannier90.x", "epw.x", "wannier90.x", "bader"}
+# These are the minimum application-level runtime artifacts.  An executable
+# alone is a linked intermediate, not a usable Nuitka standalone product.
+REQUIRED_STANDALONE_FILES = (
+    EXECUTABLE_NAME,
+    "assets/quantum-studio-v0.1.svg",
+    "PySide6/qt-plugins/platforms/qwindows.dll",
+    "cryptography/hazmat/bindings/_rust.pyd",
+)
 # MSVC appends _CL_ after its normal command line.  This overrides Nuitka's
 # default /Ox for generated scientific modules that exhaust MSVC's optimizer.
 MSVC_APPEND_OPTIONS = "/Od"
@@ -97,11 +105,22 @@ def installer_input_manifest(plan: WindowsBuildPlan, build_manifest: dict) -> di
 
 def audit_package_contents(root: str | Path, *, max_file_size: int = 2 * 1024 * 1024 * 1024) -> dict:
     root = Path(root).resolve(); forbidden: list[str] = []; large: list[str] = []; files = 0; total = 0
-    if not root.is_dir(): return {"valid": False, "reason": "PACKAGE_MISSING", "forbidden": (), "file_count": 0, "total_bytes": 0, "large_files": ()}
+    if not root.is_dir():
+        return {"valid": False, "reason": "PACKAGE_MISSING", "forbidden": (), "missing_required": REQUIRED_STANDALONE_FILES,
+                "file_count": 0, "total_bytes": 0, "large_files": ()}
     for item in root.rglob("*"):
         relative = item.relative_to(root)
         if any(part in FORBIDDEN_PARTS for part in relative.parts) or item.name in FORBIDDEN_NAMES or item.suffix.lower() in {".vhdx"} or "rootfs" in item.name.lower(): forbidden.append(relative.as_posix())
         if item.is_file():
             files += 1; size = item.stat().st_size; total += size
             if size > max_file_size: large.append(relative.as_posix())
-    return {"valid": not forbidden and not large, "reason": "" if not forbidden and not large else "FORBIDDEN_PACKAGE_CONTENT", "forbidden": tuple(sorted(forbidden)), "file_count": files, "total_bytes": total, "large_files": tuple(sorted(large))}
+    missing_required = tuple(path for path in REQUIRED_STANDALONE_FILES if not (root / path).is_file())
+    if missing_required:
+        reason = "PACKAGE_INCOMPLETE"
+    elif forbidden or large:
+        reason = "FORBIDDEN_PACKAGE_CONTENT"
+    else:
+        reason = ""
+    return {"valid": not missing_required and not forbidden and not large, "reason": reason,
+            "forbidden": tuple(sorted(forbidden)), "missing_required": missing_required,
+            "file_count": files, "total_bytes": total, "large_files": tuple(sorted(large))}

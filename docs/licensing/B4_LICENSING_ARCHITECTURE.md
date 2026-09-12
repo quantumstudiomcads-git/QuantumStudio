@@ -53,3 +53,17 @@ Production startup is intentionally fail-closed: no valid lease means no paid
 execution. Test/development grants require explicit dependency injection; there
 is no environment-variable, build-channel, or static-key unlock. Future beta
 access is a short-lived signed entitlement, not an unlocked executable.
+
+## Windows standalone packaging recovery gate
+
+The Windows first-party package audit rejects a linked executable unless the
+standalone tree also contains the canonical assets, Qt Windows platform plugin,
+and the installed PyCA cryptography Rust extension
+`cryptography/hazmat/bindings/_rust.pyd`. Build and installer manifests are
+written only after this audit succeeds.
+
+B4 packaging recovery uses separate diagnostics with ephemeral Ed25519 keys
+and the production Windows DPAPI store. They are not product entry points and
+contain no signing authority or reusable entitlement. A complete fresh
+standalone build and packaged-validation record remain required before this
+architecture is declared packaged and accepted.

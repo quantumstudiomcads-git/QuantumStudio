@@ -90,10 +90,12 @@ def main(argv=None) -> int:
         if not bundle.is_dir():
             candidates = tuple(plan.output.glob("*.dist")); bundle = candidates[0] if len(candidates) == 1 else bundle
         if not bundle.is_dir(): raise WindowsBuildError("STANDALONE_OUTPUT_MISSING: Nuitka produced no standalone bundle.")
+        audit = audit_package_contents(bundle)
+        if not audit["valid"]:
+            details = tuple(audit.get("missing_required", ())) + tuple(audit["forbidden"]) + tuple(audit["large_files"])
+            raise WindowsBuildError("PACKAGE_AUDIT_FAILED: " + audit["reason"] + (": " + ", ".join(details) if details else ""))
         manifest = plan.manifest(python_version=platform.python_version(), pyside6_version=dependency_version("PySide6"), nuitka_version=dependency_version("Nuitka"), timestamp=environment["QUANTUM_STUDIO_BUILD_TIMESTAMP"])
         write_json(bundle / PACKAGE_MARKER, manifest); write_json(bundle / "quantumstudio-installer-input.json", installer_input_manifest(plan, manifest))
-        audit = audit_package_contents(bundle)
-        if not audit["valid"]: raise WindowsBuildError("PACKAGE_AUDIT_FAILED: " + ", ".join(audit["forbidden"]))
         print(json.dumps({"status": "BUILT", "bundle": str(bundle), "manifest": manifest, "audit": audit}, indent=2)); return 0
     except WindowsBuildError as error:
         print(f"WINDOWS_BUILD_ERROR: {error}", file=sys.stderr); return 2

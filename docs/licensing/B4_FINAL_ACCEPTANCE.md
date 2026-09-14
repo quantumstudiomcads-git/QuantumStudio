@@ -2,16 +2,20 @@
 
 ## Result and provenance
 
-Automated B4 gates pass for the accepted r28 candidate. The only unresolved
-gate is one normal-user Windows DPAPI run; therefore the current result is
-**B4 HUMAN CONFIRMATION REQUIRED**.
+The previous r28 acceptance state is superseded for B4 closure because the
+user's normal Windows account reported a real DPAPI failure in the original
+harness. Independent PowerShell/.NET tests show that account's CurrentUser
+DPAPI is healthy. The v3 raw/production comparison is now required before a
+production fix can be identified; the current result is **B4 BLOCKED**.
 
 r28 is `E:\QuantumStudio-W8\build\QuantumStudio-0.2.0-development-real-r28\main.dist`,
 built from clean source commit `42bd7e1ebc7e01e3149b830da67de0fc1638214d` on
 `beta-hardening-v0.2`. The package measures 371 files and 502,217,385 bytes;
 `QuantumStudio.exe` is 300,140,544 bytes with SHA-256
 `1122712B403A6BC885EAC4CA402BEBB384F4A2F6F6D75D1A28CF8092516E1749`.
-Documentation-only changes after that commit do not require r29.
+Documentation-only changes after that commit do not require r29. If the
+production binding is repaired, r28 becomes superseded and a new package is
+required.
 
 ## Automated validation
 
@@ -78,17 +82,17 @@ local log directory in this run; the source redaction contract passed.
 
 ## DPAPI diagnostic
 
-The validation-only source is outside the repository at
-`E:\QuantumStudio-W8\validation\b4-dpapi-interactive\B4_DPAPI_Diagnostic.py`.
+The fresh v3 validation source is outside the repository at
+`E:\QuantumStudio-W8\validation\b4-dpapi-binding\v3\B4_DPAPI_Validation.py`.
 The packaged executable is:
 
-`E:\QuantumStudio-W8\validation\b4-dpapi-interactive\package\B4_DPAPI_Diagnostic.dist\B4_DPAPI_Diagnostic.exe`
+`E:\QuantumStudio-W8\validation\b4-dpapi-binding\v3\package\B4_DPAPI_Validation.dist\B4_DPAPI_Validation.exe`
 
 It uses the production `WindowsDPAPIKeyStore` and `DeviceIdentityService`,
 prints only safe status lines, compares public identity hashes, and checks
-that the protected blob does not contain the plaintext private key. The Codex
-execution context returned `HUMAN INTERACTIVE VALIDATION REQUIRED`; no fake
-pass is claimed.
+that the protected blob does not contain the plaintext private key. In the
+Codex context it reports `RAW_CTYPES_DPAPI_FAILED:CryptProtectData:2`; no
+production change or fake pass is claimed.
 
 ## Deferred work
 

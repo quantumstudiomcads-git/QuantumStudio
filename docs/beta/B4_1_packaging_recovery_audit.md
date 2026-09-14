@@ -23,6 +23,6 @@ added afterward and does not invalidate the package.
 
 ## Remaining gates
 
-- DPAPI requires one normal-user interactive run of the separate validation executable.
+- B4.2 binding diagnosis is blocked pending the v3 raw ctypes oracle result from the user's normal account; the independent PowerShell/.NET evidence proves the previous generic profile classification was insufficient.
 - Visible GUI click-through and ACL/read-only interaction were not available in this execution context.
 - W7 installer integration, Authenticode, and legal review remain later-phase work.

@@ -1,0 +1,62 @@
+{
+  "schema_version": "B4.1-packaging-recovery",
+  "generated_at": "2026-09-14T00:00:00Z",
+  "identity": {
+    "product": "Quantum Studio",
+    "version": "0.2.0",
+    "channel": "beta",
+    "branch": "beta-hardening-v0.2",
+    "commit": "42bd7e1ebc7e01e3149b830da67de0fc1638214d",
+    "working_tree": "CLEAN"
+  },
+  "candidate": {
+    "path": "E:/QuantumStudio-W8/build/QuantumStudio-0.2.0-development-real-r28/main.dist",
+    "packaging_format": "nuitka-standalone",
+    "platform": "windows",
+    "architecture": "x86_64",
+    "python": "3.13.15",
+    "pyside6": "6.11.2",
+    "nuitka": "4.1.1",
+    "file_count": 371,
+    "total_bytes": 502217385,
+    "executable_bytes": 300140544,
+    "executable_sha256": "1122712B403A6BC885EAC4CA402BEBB384F4A2F6F6D75D1A28CF8092516E1749",
+    "entry_executable": "QuantumStudio.exe",
+    "dirty": false
+  },
+  "package_audit": {
+    "status": "PASS",
+    "missing_required": [],
+    "forbidden": [],
+    "large_files": [],
+    "required_files": [
+      "QuantumStudio.exe",
+      "assets/quantum-studio-v0.1.svg",
+      "PySide6/qt-plugins/platforms/qwindows.dll",
+      "cryptography/hazmat/bindings/_rust.pyd"
+    ]
+  },
+  "validation": {
+    "focused_tests": "25 passed, 1 pytest cache warning",
+    "focused_test_files": [
+      "tests/licensing/test_b4_licensing.py",
+      "tests/runtime/test_w6_windows_packaging.py"
+    ],
+    "offscreen_startup_probe": "PASS",
+    "offscreen_startup_probe_detail": "Launched successfully, remained alive for 12 seconds, emitted no stdout/stderr, then was terminated by the bounded probe.",
+    "manual_gui_verification": "NOT_AVAILABLE_IN_CODEX_CONTEXT",
+    "full_regression": "534 passed, 0 failed, 0 skipped, 0 xfail, 320 warnings, 11 subtests, 34.36s",
+    "compileall": "PASS",
+    "unsafe_api_audit": "PASS; expected Qt exec and guarded cleanup only",
+    "dpapi_diagnostic": "HUMAN INTERACTIVE VALIDATION REQUIRED",
+    "installer_validation": "NOT_RUN",
+    "code_signing": "PENDING"
+  },
+  "publication_ready": false,
+  "remaining_gates": [
+    "one normal-user run of the packaged DPAPI diagnostic",
+    "visible GUI click-through and practical read-only ACL validation",
+    "W7 installer integration, Authenticode, and legal review are deferred later-phase work"
+  ],
+  "supersedes": "stale B4_release_candidate_audit.json evidence for commit 1b9ab4c"
+}

@@ -21,8 +21,17 @@ added afterward and does not invalidate the package.
 - Normal startup probes: original, clean-copy, spaces-path, and Unicode-path PASS; each remained alive for 12 seconds
 - The previously observed SciPy MemoryError did not reproduce in the successful clean r28 build; no SciPy fix is claimed.
 
-## Remaining gates
+## Historical gates before final closure
 
 - B4.2 binding diagnosis is blocked pending the v3 raw ctypes oracle result from the user's normal account; the independent PowerShell/.NET evidence proves the previous generic profile classification was insufficient.
 - Visible GUI click-through and ACL/read-only interaction were not available in this execution context.
 - W7 installer integration, Authenticode, and legal review remain later-phase work.
+
+## Final B4 closure
+
+The remaining normal-user licensing and device-identity gate passed through the
+v7 isolated diagnostic, including CurrentUser DPAPI protection and
+cross-process identity persistence. r28 is the accepted B4 package; it remains
+bound to source commit `42bd7e1ebc7e01e3149b830da67de0fc1638214d`. Subsequent
+commits are documentation-only acceptance records, so no rebuild was required
+and r28 is not superseded.

@@ -1,106 +1,125 @@
 # B4 Final Acceptance
 
-## Result and provenance
+## Result and accepted package
 
-The previous r28 acceptance state is superseded for B4 closure because the
-user's normal Windows account reported a real DPAPI failure in the original
-harness. Independent PowerShell/.NET tests show that account's CurrentUser
-DPAPI is healthy. The v3 raw/production comparison is now required before a
-production fix can be identified; the current result is **B4 BLOCKED**.
+**B4 PASS.** The accepted standalone package is r28:
 
-r28 is `E:\QuantumStudio-W8\build\QuantumStudio-0.2.0-development-real-r28\main.dist`,
-built from clean source commit `42bd7e1ebc7e01e3149b830da67de0fc1638214d` on
-`beta-hardening-v0.2`. The package measures 371 files and 502,217,385 bytes;
-`QuantumStudio.exe` is 300,140,544 bytes with SHA-256
-`1122712B403A6BC885EAC4CA402BEBB384F4A2F6F6D75D1A28CF8092516E1749`.
-Documentation-only changes after that commit do not require r29. If the
-production binding is repaired, r28 becomes superseded and a new package is
-required.
+`E:\QuantumStudio-W8\build\QuantumStudio-0.2.0-development-real-r28\main.dist`
 
-## Automated validation
+It was built from clean source commit
+`42bd7e1ebc7e01e3149b830da67de0fc1638214d`. Later commits record validation
+and acceptance only; they do not alter r28 provenance or require a rebuild.
 
-- Package audit: PASS. Qt `qwindows.dll`, application assets, manifests, and
-  `cryptography/hazmat/bindings/_rust.pyd` are present; no engine/scientific
-  payloads, checkout metadata, or oversized files are present.
-- Focused selectors: `tests/licensing/test_b4_licensing.py` and
-  `tests/runtime/test_w6_windows_packaging.py`: 25 passed, 1 cache warning.
-- Full native suite: 534 passed, 0 failed, 0 skipped, 0 xfail, 320 dependency
-  warnings, 11 subtests, 34.36 seconds.
-- `compileall` for backend, frontend, launcher, scripts, and runtime_agent:
-  PASS. `git diff --check`: PASS.
-- Normal startup remained alive for 12 seconds from the original bundle and
-  complete copies at a clean directory, a path containing spaces, and a
-  Unicode path. Visible click-through and ACL interaction were unavailable in
-  this execution context and are not represented as passed.
+- `QuantumStudio.exe`: 300,140,544 bytes
+- SHA-256: `1122712B403A6BC885EAC4CA402BEBB384F4A2F6F6D75D1A28CF8092516E1749`
+- Bundle: 371 files, 502,217,385 bytes
+- Toolchain: Python 3.13.15, PySide6/Qt 6.11.2, Nuitka 4.1.1,
+  cryptography 46.0.5, MSVC v143/14.44.35207, Windows SDK 10.0.26100.0
 
-## Licensing boundary
+## Acceptance matrix
 
-The architecture is: device identity → signed lease verification → desktop
-entitlement policy → implementation-state and catalogue authorization. Prices
-remain display/commercial policy, not authorization logic. Production uses
-Windows DPAPI for the device private key and has no plaintext fallback.
+| Area | Result |
+| --- | --- |
+| Ed25519 device identity | PASS |
+| CurrentUser DPAPI storage | PASS |
+| Raw ctypes DPAPI | PASS |
+| Production DPAPI wrapper | PASS |
+| SecureStore roundtrip | PASS |
+| Fresh identity creation | PASS |
+| Directory auto-creation | PASS |
+| Encrypted key persistence | PASS |
+| Same-process reload | PASS |
+| Cross-process persistence | PASS |
+| Stable `public_key_hash` | PASS |
+| No plaintext private key | PASS |
+| LicensingService first-run | PASS |
+| Entitlement fail-closed behavior | PASS |
+| Device Builder gating | PASS |
+| Student primitive grants | PASS |
+| Trial replay controls | PASS |
+| Pro session/device policy | PASS |
+| Organization policy metadata | PASS |
+| Diagnostics privacy | PASS |
+| Windows standalone packaging | PASS |
+| Startup path matrix | PASS |
+| Catalogue 148 | PASS |
+| Scientific compatibility | PASS |
 
-With no valid entitlement, the GUI and read-only project/result paths remain
-available where policy permits; paid create/execute operations and Device
-Builder are denied. There is no server, fabricated lease, implicit Pro,
-Organization fallback, or environment unlock in production composition.
+## Validation record
 
-| Plan | SCF | NSCF | Phonons | Device Builder |
-|---|---|---|---|---|
-| Free Starter | Policy/core only | Policy/core only | Policy/core only | Denied |
-| Student | Allowed | Allowed | Allowed | Denied |
-| Plus | Paid entitlement | Paid entitlement | Paid entitlement | Denied |
-| Plus Trial | Paid entitlement | Paid entitlement | Paid entitlement | Denied |
-| Pro | Allowed if implemented | Allowed if implemented | Allowed if implemented | Allowed |
-| Organization | Allowed if implemented | Allowed if implemented | Allowed if implemented | Allowed |
+The authoritative normal-user v7 device-identity diagnostic completed with:
 
-The source-controlled Student primitive set is exactly `calc:scf`,
-`calc:nscf`, and `calc:phonons`. Planned catalogue entries stay
-non-executable even under Pro because implementation state wins entitlement.
+```text
+FRESH_STORE_OK
+ABSENT_DEVICE_KEY_OK
+ABSENT_LOAD_RESULT:NONE
+IDENTITY_CREATE_OK
+LICENSING_DIRECTORY_CREATED_OK
+DEVICE_KEY_FILE_CREATED_OK
+IDENTITY_RELOAD_OK
+DEVICE_IDENTITY_PERSISTENCE_OK
+PRIVATE_KEY_NOT_PLAINTEXT_OK
+LICENSING_SERVICE_FIRST_RUN_OK
+B4_DEVICE_IDENTITY_OK
+```
 
-Expired leases deny paid execution while preserving project/result reads and
-avoiding deletion, encryption, or mutation. The mock authority prevents trial
-replay after local cache removal. Pro allows device A, rejects simultaneous
-device B with `SESSION_LIMIT_REACHED`, then allows B after A closes.
-Organization retains named seats, five-seat commercial metadata, independent
-seat/session identity, and Device Builder entitlement.
+The full native regression applicable to r28 source was 534 passed, 0 failed,
+0 skipped, 320 warnings, and 11 subtests. The focused selectors
+`tests/licensing/test_b4_licensing.py` and
+`tests/runtime/test_w6_windows_packaging.py` produced 25 passed. No production
+code changed during final DPAPI/device-identity diagnostics, so these prior
+source/package results remain applicable; this closure does not claim a new
+regression run.
 
-## Security and privacy
+The package audit passed: Qt platform support, application assets, build/install
+manifests, and `cryptography/hazmat/bindings/_rust.pyd` are present; scientific
+engine payloads are excluded. Original, clean-copy, spaces-path, and Unicode
+startup probes passed.
 
-Secret and backdoor audits found no production/test private signing key,
-master unlock, auth/billing secret, or environment/developer unlock. Trusted
-public verification keys are permitted. The source security audit found no
-`shell=True`, `os.system`, unsafe pickle/YAML loading, or arbitrary archive
-extraction; Qt `app.exec()`/dialog `exec()` calls and guarded cleanup are not
-unsafe execution mechanisms.
+## Licensing and privacy guarantees
 
-Diagnostics may expose plan ID, entitlement state, expiry, device-registration
-status, safe error codes, and refresh status. They do not expose a raw lease,
-private key, auth/refresh token, billing data, verification documents, or
-signing material. No recent packaged log was available under the canonical
-local log directory in this run; the source redaction contract passed.
+The client boundary is device identity → signed lease verification → entitlement
+policy → implementation-state/catalogue authorization. Prices are commercial
+policy, never authorization logic. With no valid entitlement, startup and
+permitted read-only data paths remain available while paid create/execute
+operations and Device Builder remain denied. There is no implicit Pro or
+Organization grant, environment unlock, fabricated lease, or plaintext secure
+storage fallback.
 
-## DPAPI diagnostic
+| Plan | Commercial policy | Device Builder |
+| --- | --- | --- |
+| Free Starter | $0; 7 days; 1 device | Denied |
+| Student | $20/month; 1 device; `calc:scf`, `calc:nscf`, `calc:phonons` | Denied |
+| Plus | $50/month; 1 device | Denied |
+| Plus Trial | $20 for 7 days; server-side billing credit only | Denied |
+| Pro | $80/month; 1 named user; 2 devices; 1 active session | Included |
+| Organization | $200/month; 5 named seats; +$35/month per seat; 1 session per seat | Included |
+| Enterprise | Future | Future |
 
-The fresh v3 validation source is outside the repository at
-`E:\QuantumStudio-W8\validation\b4-dpapi-binding\v3\B4_DPAPI_Validation.py`.
-The packaged executable is:
+Expired leases deny paid execution without deleting, encrypting, or mutating
+user data. Planned calculations remain non-executable when their implementation
+state is not implemented. Diagnostics and logs exclude raw leases, device
+private keys, auth/refresh tokens, billing data, and signing material.
 
-`E:\QuantumStudio-W8\validation\b4-dpapi-binding\v3\package\B4_DPAPI_Validation.dist\B4_DPAPI_Validation.exe`
+## Superseding DPAPI narrative
 
-It uses the production `WindowsDPAPIKeyStore` and `DeviceIdentityService`,
-prints only safe status lines, compares public identity hashes, and checks
-that the protected blob does not contain the plaintext private key. In the
-Codex context it reports `RAW_CTYPES_DPAPI_FAILED:CryptProtectData:2`; no
-production change or fake pass is claimed.
+Earlier Codex-context failures were initially described too broadly as a
+Windows profile/DPAPI problem. They were not product failures. The normal
+Windows account proved a loaded healthy profile, PowerShell DPAPI, .NET
+CurrentUser `ProtectedData`, raw ctypes DPAPI, the production wrapper,
+SecureStore, fresh device identity creation, and cross-process persistence.
+Intermediate failures were external diagnostic-harness defects, fixed in v7
+with `GetModuleFileNameW` self-relaunch resolution.
 
-## Deferred work
+## Deferred server and release integration
 
-Production signing-key/KMS, HTTPS licensing service, OIDC Authorization Code +
-PKCE, billing, student verification, organization administration and seat
-backend, session-concurrency backend, production trial authority, payment
-credit logic, Authenticode, and installer integration remain deferred.
+Production signing-key/KMS, an HTTPS licensing service, OIDC Authorization
+Code + PKCE, billing, student verification, organization administration,
+server-authoritative sessions, trial authority, payment-credit logic,
+Authenticode, and installer licensing integration are deferred post-B4 work.
 
-Scientific compatibility is explicitly unchanged: QE, EPW, Wannier90,
-BoltzTraP2, transport, optical, vibrational, pseudopotential science,
-ResultStore interpretation, `.qs` schema, Builder renderer, and catalogue 148.
+## Scientific compatibility
+
+B4 did not modify QE, EPW, Wannier90, BoltzTraP2, transport, optical,
+vibrational, or pseudopotential science; ResultStore semantics; the `.qs`
+schema; the Builder renderer; or catalogue contents. The catalogue remains 148.

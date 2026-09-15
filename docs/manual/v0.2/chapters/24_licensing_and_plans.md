@@ -33,5 +33,4 @@ student verification portal, organization administration dashboard, production
 licence server, server-authoritative session service, or trial authority. Those
 are future integrations.
 
-> **Screenshot planned for B5.3:** License Status in a safe local state, with
-> no token, lease, account, or billing information visible.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.

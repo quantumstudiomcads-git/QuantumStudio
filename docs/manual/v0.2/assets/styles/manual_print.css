@@ -1,0 +1,43 @@
+@page {
+  size: A4;
+  margin: 18mm 16mm 18mm 16mm;
+}
+
+:root {
+  --ink: #17212b;
+  --muted: #526170;
+  --accent: #007da8;
+  --accent-soft: #e7f5fa;
+  --line: #c8d2da;
+  --code: #f2f5f7;
+  --warning: #fff6d8;
+}
+
+body {
+  color: var(--ink);
+  font-family: "Segoe UI", Arial, sans-serif;
+  font-size: 10.25pt;
+  line-height: 1.48;
+}
+
+h1, h2, h3, h4 { color: #123044; line-height: 1.2; }
+h1 { font-size: 25pt; border-bottom: 2px solid var(--accent); padding-bottom: 4pt; }
+h2 { font-size: 17pt; margin-top: 22pt; border-bottom: 1px solid var(--line); padding-bottom: 3pt; }
+h3 { font-size: 13pt; margin-top: 16pt; }
+a { color: #006f98; text-decoration: none; }
+p, li { orphans: 3; widows: 3; }
+code, pre { font-family: Consolas, "Courier New", monospace; }
+code { background: var(--code); padding: 1px 3px; }
+pre { background: var(--code); border-left: 3px solid var(--accent); padding: 8pt; white-space: pre-wrap; }
+table { border-collapse: collapse; width: 100%; font-size: 8.7pt; margin: 9pt 0; }
+th { background: #eaf4f8; color: #123044; }
+th, td { border: 1px solid var(--line); padding: 4pt 5pt; text-align: left; vertical-align: top; }
+blockquote, .callout { background: var(--accent-soft); border-left: 3px solid var(--accent); margin: 9pt 0; padding: 7pt 10pt; color: #213b4a; }
+.pending { background: var(--warning); border-left-color: #b67c00; }
+.cover { page-break-after: always; padding-top: 55mm; }
+.cover h1 { font-size: 34pt; border: 0; }
+.cover .subtitle { font-size: 18pt; color: var(--accent); }
+.toc { page-break-after: always; }
+.chapter { break-before: page; }
+.calc-family { break-before: page; }
+img { max-width: 100%; height: auto; }

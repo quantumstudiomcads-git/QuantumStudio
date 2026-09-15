@@ -28,5 +28,4 @@ parameters, pseudopotentials, engine/workflow, convergence evidence, parser
 status, and Result status. Use provenance when comparing two Results or when
 exporting data for external analysis.
 
-> **Screenshot planned for B5.3:** Results dialog with parsed status,
-> provenance, and current parse/re-parse controls.
+> **Screenshot pending:** No non-private, genuinely parsed r28 result was available in the B5.3 environment; no result was fabricated.

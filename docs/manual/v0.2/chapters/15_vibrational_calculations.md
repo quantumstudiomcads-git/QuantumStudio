@@ -26,9 +26,7 @@ interpretations.
 - Select **phonon_band_structure** for a dispersion along an explicit
   reciprocal-space path.
 
-> **Screenshot planned for B5.3:** Separate Calculate selections for phonons,
-> phonon_dos, and phonon_band_structure, including the path control for the
-> latter.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.
 
 The broader family also includes Raman, infrared, Born effective charges,
 LO-TO splitting, dielectric phonon response, electron-phonon coupling, and

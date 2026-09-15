@@ -10,13 +10,13 @@ The heterostructure workflow constructs a matched multi-layer structure from com
 4. Review matching candidates, deformation/strain treatment, layer gap, vacuum, and periodic-boundary settings.
 5. Choose a ranked candidate and inspect cell, atom count, z-coordinate separation, and residual mismatch before accepting it.
 
-> **Screenshot planned for B5.3:** Two compatible layers with matching, strain, layer-gap, vacuum, and candidate-ranking controls.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.
 
 ## Matching concepts
 
 For layer lattice matrices A1 and A2, a commensurate construction seeks integer transforms M1 and M2 such that transformed in-plane cells are close after requested relative rotation R(theta):
 
-    A1 M1 ≈ R(theta) A2 M2
+    M_A A ≈ M_B B_theta,   where B_theta = B R(theta)^T
 
 Residual mismatch is handled according to the selected deformation mode. Strain is a physical modelling choice, not merely a cosmetic alignment option. Review its magnitude and which layer is deformed.
 

@@ -14,6 +14,6 @@ Current measurement concepts include distance, angle, and dihedral measurement w
 
 Distances use the structure length convention; angles and dihedrals are angular values. Inspect periodic/supercell context before interpreting a boundary-spanning measurement.
 
-> **Screenshot planned for B5.3:** Atom-picking state, a measurement result, and the selection-clear control on a simple structure.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.
 
 > **Limitation:** Measurement is inspection. It does not alter atom positions or replace a geometry-optimization workflow.

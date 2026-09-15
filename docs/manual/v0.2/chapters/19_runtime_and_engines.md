@@ -16,8 +16,7 @@ strings for normal engine execution.
 Use Calculate local-tool controls to choose an installation folder or rescan
 when the relevant workflow supports it.
 
-> **Screenshot planned for B5.3:** Local Tools view with detected/missing
-> Quantum ESPRESSO status and current rescan/choose controls.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.
 
 **QuantumStudioRuntime** is future installer/runtime architecture, not a
 currently installed user product. A native Quantum Studio DFT engine is also

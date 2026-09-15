@@ -17,11 +17,9 @@ The comparison workflow provides controls such as **Add Result**, **Remove**,
 move/rename actions, comparison details, and available electronic-analysis
 views. Compare only Results that the workspace identifies as compatible.
 
-> **Screenshot planned for B5.3:** Analyze result browser with plot, table,
-> provenance, Data, Style, Details, and Export areas.
+> **Screenshot pending:** No non-private, genuinely parsed r28 result was available in the B5.3 environment; no result was fabricated.
 
-> **Screenshot planned for B5.3:** Compatible-result comparison with reference
-> selection and export controls.
+> **Screenshot pending:** No non-private, genuinely parsed r28 result was available in the B5.3 environment; no result was fabricated.
 
 Result status remains visible context: comparison or plotting does not convert
 PARTIAL, NOT_CONVERGED, UNVERIFIED, PARSE_FAILED, or STALE data into VALID data.

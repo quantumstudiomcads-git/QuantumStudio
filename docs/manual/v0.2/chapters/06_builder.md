@@ -6,7 +6,7 @@
 
 Builder combines viewing, construction, and measurement tools. The current renderer is QPainter-based. The workspace provides structure selection, structure-history undo/redo, Build, View, and Measure areas, plus reciprocal-space/Brillouin-zone display tools where available.
 
-> **Screenshot planned for B5.3:** Builder overview with viewport, Builder controls, and a small periodic example structure.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.
 
 ## Viewing a structure
 

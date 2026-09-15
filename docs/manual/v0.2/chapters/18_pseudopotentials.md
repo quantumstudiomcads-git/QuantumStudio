@@ -23,5 +23,4 @@ input generation rather than silently substituting a file.
 > configured and network access is available. It is not a promise that every
 > pseudopotential or arbitrary URL can be downloaded automatically.
 
-> **Screenshot planned for B5.3:** XC and Pseudopotentials dialog with Import
-> UPF, provider status, species assignment, and recommended cutoffs.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.

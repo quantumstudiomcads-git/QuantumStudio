@@ -11,7 +11,7 @@ post-processing. Exact availability is listed in the
 
 The Kohn-Sham problem is commonly written as:
 
-    [-1/2 ∇² + V_eff[n] of r] ψ_i(r) = ε_i ψ_i(r)
+    [-½ ∇² + V_eff[n](r)] ψ_i(r) = ε_i ψ_i(r)
 
 with electron density:
 
@@ -28,17 +28,16 @@ smearing, spin treatment, SOC, and Hubbard-related controls where supported.
 
 An NSCF calculation evaluates states using an established potential rather than
 updating the density self-consistently. Band structure follows eigenvalues
-epsilon_n(k) along a selected path. A conceptual density of states is:
+ε_n(k) along a selected path. A conceptual density of states is:
 
-    D(E) = Σ_n,k δ(E - ε_nk).
+    D(E) = Σ_(n,k) δ(E - ε_(n,k)).
 
 PDOS resolves density of states by chosen atomic/orbital projection. Use the
 dedicated page for each public intent rather than assuming a generic DOS
 workflow covers projected results, charge density, spin density, or Fermi
 surface analysis.
 
-> **Screenshot planned for B5.3:** An implemented SCF configuration and a band
-> path configuration with only current visible controls.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.
 
 ## Practical checks
 

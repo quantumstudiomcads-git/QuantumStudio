@@ -17,8 +17,7 @@ format is supported without a visible dialog option. Paths with spaces and
 Unicode are supported by the validated standalone startup matrix, but a target
 directory can still be unwritable.
 
-> **Screenshot planned for B5.3:** Current data/figure export dialog using a
-> non-sensitive destination and visible format controls.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.
 
 See [Diagnostics](26_diagnostics.md) for the intentionally limited support
 archive.

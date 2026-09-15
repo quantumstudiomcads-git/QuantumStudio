@@ -2,7 +2,7 @@
 
 Structure operations are Builder actions on the canonical Project structure. They differ from calculations: a calculation takes a structure snapshot, whereas a confirmed Builder edit changes the Project structure and is recorded in Builder structure history.
 
-> **Screenshot planned for B5.3:** Focused captures for Supercell, Slab, and Nanotube controls, including inputs, validation, and resulting preview.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.
 
 ## Import and export
 

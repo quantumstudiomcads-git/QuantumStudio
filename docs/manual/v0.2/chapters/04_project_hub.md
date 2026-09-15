@@ -6,7 +6,7 @@ Project Hub is the start/open window for Quantum Studio projects. Its visible ac
 
 Choose **New Project**, enter a Project name and location, and confirm. Quantum Studio creates a file named project-name.qs.
 
-> **Screenshot planned for B5.3:** New Project dialog with Project name, Location, Browse, and the .qs outcome visible.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.
 
 ## Open a project
 

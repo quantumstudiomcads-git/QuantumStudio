@@ -12,6 +12,6 @@ The licensing bootstrap is fail-closed. A new, expired, invalid, or unavailable 
 4. Use **Calculate** after reviewing implementation state, prerequisites, engine requirements, and entitlement.
 5. Open **Analyze** after a calculation has produced a parsed Result.
 
-> **Screenshot planned for B5.3:** Project Hub on first launch, showing New Project, Open Project, Recent Projects, Clear, and the version footer.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.
 
 For local entitlement information, use **Help → License Status**. Quantum Studio 0.2.0 does not document a server sign-in, billing, or organization-admin workflow because those services are not current client functionality.

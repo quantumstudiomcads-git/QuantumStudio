@@ -24,8 +24,7 @@ translation and rotation, placement/alignment, surface alignment, repeat,
 device-cell fitting, overlap checks, interface matching, preview, and
 independent undo/redo history.
 
-> **Screenshot planned for B5.3:** Controlled Pro or Organization demonstration
-> state showing regions, properties, placement, interface controls, and preview.
+> **Screenshot pending:** No legitimate Pro or Organization entitlement was available for B5.3, and no entitlement was fabricated.
 
 The assembled preview is derived Device state, not the canonical Project
 structure. Device history is session-only. Current Device Builder availability

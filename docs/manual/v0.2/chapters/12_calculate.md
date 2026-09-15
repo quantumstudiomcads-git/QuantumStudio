@@ -4,8 +4,7 @@
 catalogue, typed configuration, validation, compilation, local-tool discovery,
 execution controls, and stored execution/result access.
 
-> **Screenshot planned for B5.3:** Calculate overview with category filter,
-> calculation list/count, configured requests, and action bar.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.
 
 ## The calculation pipeline
 

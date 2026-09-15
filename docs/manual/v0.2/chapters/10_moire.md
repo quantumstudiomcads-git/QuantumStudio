@@ -9,9 +9,14 @@ A moiré structure is a twist-preserving matched layered construction. In Quantu
 3. Review matching candidates, rotation handling, strain/deformation choice, gap, vacuum, and periodic-boundary settings.
 4. Accept a candidate only after reviewing residual mismatch and cell size.
 
-For small relative twist theta, a simple equal-lattice heuristic has a moiré length scale that grows approximately as L_M proportional to a divided by 2 sin(theta/2). This is an interpretation aid, not a promise that every requested angle is commensurate inside current search limits.
+For small relative twist theta, a simple equal-lattice heuristic has a moiré length scale
 
-> **Screenshot planned for B5.3:** A small bilayer with twist input, matching result, and a clearly visible cell-size warning.
+    L_M ≈ a / (2 sin(theta / 2)).
+
+This is an interpretation aid, not a promise that every requested angle is
+commensurate inside current search limits.
+
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.
 
 ## Practical limits
 

@@ -20,8 +20,7 @@ information, selected safe runtime status, and safe licensing status fields.
 They intentionally exclude project/scientific files, raw signed leases, private
 device keys, authentication tokens, billing data, and signing material.
 
-> **Screenshot planned for B5.3:** Help menu and diagnostics export dialog with
-> privacy wording and a non-sensitive destination.
+> **Screenshot pending:** A native r28 window-capture surface was unavailable during B5.3; no substitute image was used.
 
 > **Warning:** A diagnostics archive is not a reproducibility archive. Export
 > the relevant supported result data separately when that is required.

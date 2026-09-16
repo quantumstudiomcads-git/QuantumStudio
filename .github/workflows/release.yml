@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -r requirements-build-windows.txt -r requirements-runtime.txt
+      - run: python scripts/build_windows.py --channel beta --output dist/windows
+      - run: python scripts/build_windows_installer.py --app-bundle dist/windows/main.dist --output dist/windows-installer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: dist/windows-installer/*.exe
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: sudo apt-get update && sudo apt-get install -y appimagetool
+      - run: python -m pip install Nuitka -r requirements-runtime.txt
+      - run: python scripts/build_linux_appimage.py --channel beta --output dist/linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          path: dist/linux/*.AppImage
+
+  assemble:
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install cryptography==46.0.5
+      - uses: actions/download-artifact@v4
+        with:
+          path: incoming
+      - name: Validate tag matches canonical application version
+        run: |
+          python -c "import os; from backend.release import APP_VERSION; expected='v'+APP_VERSION; actual=os.environ['GITHUB_REF_NAME']; assert actual == expected, f'tag {actual} must equal {expected}'"
+      - name: Generate signed release manifest after both platform builds
+        env:
+          QUANTUM_STUDIO_UPDATE_SIGNING_KEY: ${{ secrets.QUANTUM_STUDIO_UPDATE_SIGNING_KEY }}
+          QUANTUM_STUDIO_UPDATE_SIGNING_KID: ${{ secrets.QUANTUM_STUDIO_UPDATE_SIGNING_KID }}
+        run: |
+          test -n "$QUANTUM_STUDIO_UPDATE_SIGNING_KEY"
+          test -n "$QUANTUM_STUDIO_UPDATE_SIGNING_KID"
+          WINDOWS_ARTIFACT=$(find incoming/windows-release -name '*.exe' -print -quit)
+          LINUX_ARTIFACT=$(find incoming/linux-release -name '*.AppImage' -print -quit)
+          python scripts/build_release.py --version "${GITHUB_REF_NAME#v}" --channel beta --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}" --windows-artifact "$WINDOWS_ARTIFACT" --linux-artifact "$LINUX_ARTIFACT" --output "dist/releases/${GITHUB_REF_NAME#v}"
+      - name: Publish artifacts first, signed manifest last
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            dist/releases/*/QuantumStudio-Windows-x86_64-*.exe
+            dist/releases/*/QuantumStudio-Linux-x86_64-*.AppImage
+            dist/releases/*/SHA256SUMS
+            dist/releases/*/release-notes.md
+            dist/releases/*/build-provenance.json
+      - name: Upload authoritative manifest only after assets
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            dist/releases/*/release-manifest.json
+            dist/releases/*/release-manifest.sig

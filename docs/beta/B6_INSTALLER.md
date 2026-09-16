@@ -18,6 +18,18 @@ identity/leases, and `QuantumStudioRuntime`.  Full runtime removal is an
 explicit confirmation-only orchestrator action; it is never the normal
 uninstall path.
 
+The stable Inno Setup AppId is `{{C90FC580-47D1-4A00-9C12-8A4502DEB601}`. It
+must remain unchanged across normal upgrades. ProgramData holds only the
+installer continuation journal and runtime state under
+`%PROGRAMDATA%\QuantumStudio\installer`; device identity and per-user licence
+state remain in the existing user-scoped application paths.
+
+As of B6.3 validation, the source has been reviewed but this host has no
+discoverable `ISCC.exe`. Installer compilation and controlled fresh/upgrade/
+reinstall/uninstall execution are consequently pending the approved Inno Setup
+6 toolchain. This is a build-environment gate, not a reason to replace the
+existing installer architecture.
+
 `QuantumStudioRuntime` is exactly the private WSL2 identity managed by the
 existing W3 provisioner.  It uses the managed LocalAppData runtime root and a
 fixed, structured `wsl.exe --import QuantumStudioRuntime ... --version 2`

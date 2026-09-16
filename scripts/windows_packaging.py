@@ -71,7 +71,7 @@ def build_plan(*, repo: str | Path, output: str | Path, channel: str, version: s
             f"--output-dir={output}", f"--output-filename={EXECUTABLE_NAME}", f"--product-name={PRODUCT_NAME}",
             f"--file-description={PRODUCT_NAME}", f"--product-version={version}", f"--file-version={version}",
             f"--windows-icon-from-ico={ico}",
-            f"--include-data-dir={repo / 'assets'}=assets", "--include-package=backend.runtime", "--include-package=backend.execution",
+            f"--include-data-dir={repo / 'assets'}=assets", "--include-package=backend.runtime", "--include-package=backend.update", "--include-package=backend.execution",
             "--include-package=runtime_agent",
             "--include-module=scipy._external.array_api_compat.numpy.fft",
             "--nofollow-import-to=tests", "--nofollow-import-to=pytest", str(entry))

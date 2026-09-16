@@ -46,6 +46,10 @@ def main():
     hub = ProjectHub(licensing_service=LicensingService.production())
 
     hub.show()
+    # Network failures and absent pre-release endpoint configuration never
+    # affect startup.  The checker owns its own worker thread.
+    from frontend.app.update_actions import schedule_startup_update_check
+    schedule_startup_update_check(hub)
 
     if os.environ.get("QUANTUM_STUDIO_PACKAGED_CATALOGUE_SMOKE") == "1":
         def packaged_catalogue_smoke() -> None:

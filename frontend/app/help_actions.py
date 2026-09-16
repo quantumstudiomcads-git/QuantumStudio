@@ -6,12 +6,16 @@ from pathlib import Path
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QLabel, QVBoxLayout, QMessageBox
 
 from backend.runtime import BUILD_CHANNEL, PRODUCT_NAME, VERSION, export_diagnostics
+from .update_actions import check_for_updates_from_ui
 
 
 def install_help_menu(window, *, licensing_service=None) -> object:
     menu = window.menuBar().addMenu("Help")
     about = menu.addAction(f"About {PRODUCT_NAME}")
     about.triggered.connect(lambda: show_about(window))
+    updates = menu.addAction("Check for Updates")
+    updates.setToolTip("Check the selected Quantum Studio release channel")
+    updates.triggered.connect(lambda: check_for_updates_from_ui(window))
     diagnostics = menu.addAction("Export Diagnostics…")
     diagnostics.setToolTip("Export privacy-safe application diagnostics")
     diagnostics.triggered.connect(lambda: export_diagnostics_from_ui(window))

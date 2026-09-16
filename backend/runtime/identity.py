@@ -5,10 +5,11 @@ import os
 import platform
 import subprocess
 from datetime import datetime, timezone
+from backend.release import APP_VERSION, DEFAULT_RELEASE_CHANNEL, PRODUCT_NAME as RELEASE_PRODUCT_NAME
 
-PRODUCT_NAME = "Quantum Studio"
-VERSION = "0.2.0"
-BUILD_CHANNEL = os.environ.get("QUANTUM_STUDIO_BUILD_CHANNEL", "development")
+PRODUCT_NAME = RELEASE_PRODUCT_NAME
+VERSION = APP_VERSION
+BUILD_CHANNEL = os.environ.get("QUANTUM_STUDIO_BUILD_CHANNEL", DEFAULT_RELEASE_CHANNEL)
 BUILD_COMMIT = os.environ.get("QUANTUM_STUDIO_BUILD_COMMIT", "")
 BUILD_TIMESTAMP = os.environ.get("QUANTUM_STUDIO_BUILD_TIMESTAMP", "")
 

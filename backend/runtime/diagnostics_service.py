@@ -34,6 +34,12 @@ def collect_diagnostics(*, environ=None, home=None, platform_name=None, licensin
             for key in allowed
             if key in licensing_state
         }
+    try:
+        state = json.loads((paths.config / "update-state.json").read_text(encoding="utf-8"))
+        allowed = {"channel", "last_checked", "state", "version", "result", "artifact_hash"}
+        manifest["updates"] = {key: state[key] for key in allowed if key in state}
+    except (OSError, ValueError, json.JSONDecodeError):
+        manifest["updates"] = {"state": "not_checked"}
     return manifest
 
 

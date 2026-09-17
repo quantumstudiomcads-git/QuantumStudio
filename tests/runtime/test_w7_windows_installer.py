@@ -17,6 +17,7 @@ from scripts.windows_installer.state import InstallerPhase, InstallerState, Inst
 from scripts.windows_installer.system import FEATURES, is_windows_11, prerequisite_argv
 from scripts.windows_installer.payload_audit import audit_installer_payload
 from scripts.windows_installer.runtime_adapter import ManagedRuntimeInstallerAdapter
+from scripts.build_windows_installer import installer_script
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -54,6 +55,22 @@ class FakeInstallerBackend:
 
 
 class WindowsInstallerTests(unittest.TestCase):
+    def test_generated_inno_script_has_stable_identity_and_pe_version_metadata(self):
+        script = installer_script(
+            app_bundle=Path("C:/validated/main.dist"),
+            output=Path("C:/installer-output"),
+            version="0.2.0",
+        )
+
+        for directive in (
+            "AppId={{C90FC580-47D1-4A00-9C12-8A4502DEB601}",
+            "VersionInfoVersion=0.2.0",
+            "VersionInfoProductVersion=0.2.0",
+            "VersionInfoProductName=Quantum Studio",
+            "VersionInfoDescription=Quantum Studio Installer",
+        ):
+            self.assertIn(directive, script)
+
     def make_payload(self, root: Path, *, full=True):
         bundle=root / "Bundle Ω"; bundle.mkdir()
         (bundle / "QuantumStudio.exe").write_bytes(b"native bundle")

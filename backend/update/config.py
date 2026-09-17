@@ -61,6 +61,13 @@ def configured_update_client(*, paths=None, environ=None) -> UpdateClient | None
     platform = platform_record()
     if platform == "unsupported":
         return None
-    return UpdateClient(HttpsUpdateSource(endpoint), UpdateVerifier(keys), current_version=APP_VERSION,
+    try:
+        source = HttpsUpdateSource(endpoint)
+    except ValueError:
+        # A malformed locally configured endpoint is not trusted update input.
+        # Treat it as the same safe no-update state as absent key material so
+        # the optional startup check can never prevent the GUI from opening.
+        return None
+    return UpdateClient(source, UpdateVerifier(keys), current_version=APP_VERSION,
                         platform=platform, channel=selected_channel(paths=selected_paths),
                         runtime_schema_version=RUNTIME_SCHEMA_VERSION, paths=selected_paths)

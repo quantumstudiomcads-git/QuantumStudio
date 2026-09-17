@@ -9,8 +9,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from backend.release import ReleaseVersion, ReleaseVersionError
 from backend.runtime.paths import RuntimePaths
 from backend.update.client import UpdateClient
+from backend.update.config import configured_update_client
 from backend.update.models import UpdateErrorCode, UpdateState
-from backend.update.signing import UpdateSigner, UpdateVerifier
+from backend.update.signing import UpdateSigner, UpdateVerifier, b64url_encode
 from backend.update.transport import FileUpdateSource, HttpsUpdateSource
 
 
@@ -85,6 +86,13 @@ class B6UpdateTests(unittest.TestCase):
 
     def test_https_source_rejects_non_https_production_endpoint(self):
         with self.assertRaises(ValueError): HttpsUpdateSource("http://localhost/releases")
+
+    def test_invalid_configured_endpoint_fails_closed_without_startup_exception(self):
+        client = configured_update_client(environ={
+            "QUANTUM_STUDIO_UPDATE_ENDPOINT": "http://invalid.example.test/updates",
+            "QUANTUM_STUDIO_UPDATE_PUBLIC_KEYS": json.dumps({"test-2026": b64url_encode(self.signer.public_key_bytes())}),
+        })
+        self.assertIsNone(client)
 
     def test_engine_update_can_be_selected_without_desktop_replacement(self):
         with tempfile.TemporaryDirectory() as tmp:

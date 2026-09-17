@@ -1,0 +1,165 @@
+name: Linux AppImage Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Committed branch, tag, or SHA to build for non-public staging
+        required: true
+        default: beta-hardening-v0.2
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-appimage-staging-${{ inputs.source_ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-audit:
+    name: Build and audit Linux x86_64 AppImage
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the selected committed source revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install declared Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appimagetool file
+          python -m pip install --upgrade pip
+          python -m pip install Nuitka -r requirements-runtime.txt -r requirements-test.txt
+
+      - name: Record selected source and toolchain
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          git status --short
+          printf 'source_ref=%s\n' "$SOURCE_REF"
+          python --version
+          python -c "from backend.release import APP_VERSION; print(f'app_version={APP_VERSION}')"
+          python -c "import platform; print(f'platform={platform.platform()}'); print(f'architecture={platform.machine()}')"
+          appimagetool --version
+          python -m nuitka --version
+
+      - name: Run Linux, release, updater, and application tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m pytest -q
+          python scripts/build_linux_appimage.py --dry-run
+
+      - name: Build staging AppImage on Linux x86_64
+        run: python scripts/build_linux_appimage.py --channel beta --output dist/linux-staging
+
+      - name: Audit extracted AppImage payload and generate SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging="$GITHUB_WORKSPACE/dist/linux-staging"
+          mapfile -t artifacts < <(find "$staging" -maxdepth 1 -type f -name 'QuantumStudio-Linux-x86_64-*.AppImage' -print)
+          test "${#artifacts[@]}" -eq 1
+          artifact="${artifacts[0]}"
+          test -s "$artifact"
+          test -x "$artifact"
+          file "$artifact" | tee "$staging/appimage-audit.txt"
+          file "$artifact" | grep -E 'ELF 64-bit.*x86-64'
+          (
+            cd "$staging"
+            "$artifact" --appimage-extract
+          )
+          payload="$staging/squashfs-root"
+          test -x "$payload/AppRun"
+          test -f "$payload/quantum-studio.desktop"
+          test -d "$payload/usr/bin"
+          if find "$payload" -type f \( -iname 'pw.x' -o -iname 'pw.exe' -o -iname 'ph.x' -o -iname 'wannier90*' -o -iname 'epw*' -o -iname 'boltztrap*' \) -print -quit | grep -q .; then
+            echo 'Scientific engine binary found in AppImage payload' >&2
+            exit 1
+          fi
+          if find "$payload" -type d \( -iname '*engine*pack*' -o -iname 'quantumstudioruntime' -o -iname '*runtime*image*' -o -name '.git' -o -name 'tests' -o -name '.venv' -o -name 'venv' -o -name '*.build' \) -print -quit | grep -q .; then
+            echo 'Forbidden payload directory found in AppImage' >&2
+            exit 1
+          fi
+          if find "$payload" -type f \( -name 'release-manifest.json' -o -name 'release-manifest.sig' \) -print -quit | grep -q .; then
+            echo 'Release manifest found in AppImage payload' >&2
+            exit 1
+          fi
+          if grep -RIl --include='*.pem' --include='*.key' --include='*.p8' 'BEGIN.*PRIVATE KEY' "$payload"; then
+            echo 'Private key material found in AppImage payload' >&2
+            exit 1
+          fi
+          printf 'payload_audit=PASS\nappimage=%s\n' "$(basename "$artifact")" | tee -a "$staging/appimage-audit.txt"
+          (
+            cd "$staging"
+            sha256sum "$(basename "$artifact")" > SHA256SUMS
+          )
+
+      - name: Write staging build provenance
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+          from datetime import datetime, timezone
+          import importlib.metadata
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import subprocess
+
+          from backend.release import APP_VERSION
+
+          staging = Path('dist/linux-staging')
+          artifacts = tuple(staging.glob('QuantumStudio-Linux-x86_64-*.AppImage'))
+          if len(artifacts) != 1:
+              raise SystemExit('Expected exactly one staging AppImage for provenance.')
+          def tool_version(argv: list[str]) -> str:
+              completed = subprocess.run(argv, check=False, capture_output=True, text=True)
+              return (completed.stdout or completed.stderr).strip().splitlines()[0] if (completed.stdout or completed.stderr).strip() else ''
+          def package_version(name: str) -> str:
+              try:
+                  return importlib.metadata.version(name)
+              except importlib.metadata.PackageNotFoundError:
+                  return ''
+          provenance = {
+              'schema_version': 1,
+              'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'source_ref': os.environ['SOURCE_REF'],
+              'app_version': APP_VERSION,
+              'artifact': artifacts[0].name,
+              'platform': 'linux',
+              'architecture': platform.machine(),
+              'runner': os.environ.get('RUNNER_OS', ''),
+              'python': platform.python_version(),
+              'pyside6': package_version('PySide6'),
+              'nuitka': package_version('Nuitka'),
+              'appimagetool': tool_version(['appimagetool', '--version']),
+              'timestamp': datetime.now(timezone.utc).isoformat(),
+              'staging': True,
+              'production_release': False,
+          }
+          (staging / 'build-provenance.json').write_text(json.dumps(provenance, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          PY
+
+      - name: Upload non-public staging artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quantum-studio-linux-staging-${{ github.run_id }}
+          path: |
+            dist/linux-staging/QuantumStudio-Linux-x86_64-*.AppImage
+            dist/linux-staging/SHA256SUMS
+            dist/linux-staging/build-provenance.json
+            dist/linux-staging/appimage-audit.txt
+          if-no-files-found: error
+          retention-days: 7

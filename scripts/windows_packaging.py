@@ -13,7 +13,7 @@ PRODUCT_NAME = "Quantum Studio"
 EXECUTABLE_NAME = "QuantumStudio.exe"
 PACKAGE_MARKER = "quantumstudio-build.json"
 INSTALLER_INPUT = "quantumstudio-installer-input.json"
-FORBIDDEN_PARTS = {"tests", ".git", ".venv", "venv", "build", "__pycache__"}
+FORBIDDEN_PARTS = {"tests", ".git", ".venv", "venv", "build", "__pycache__", "operator_tools", "licence_manager"}
 FORBIDDEN_NAMES = {"pw.x", "ph.x", "q2r.x", "matdyn.x", "dynmat.x", "bands.x", "dos.x", "projwfc.x", "pp.x", "epsilon.x", "pw2wannier90.x", "epw.x", "wannier90.x", "bader"}
 # These are the minimum application-level runtime artifacts.  An executable
 # alone is a linked intermediate, not a usable Nuitka standalone product.
@@ -108,6 +108,8 @@ def audit_package_contents(root: str | Path, *, max_file_size: int = 2 * 1024 * 
     if not root.is_dir():
         return {"valid": False, "reason": "PACKAGE_MISSING", "forbidden": (), "missing_required": REQUIRED_STANDALONE_FILES,
                 "file_count": 0, "total_bytes": 0, "large_files": ()}
+    from scripts.package_exclusions import customer_package_exclusion_findings
+    exclusion_findings = customer_package_exclusion_findings(root)
     for item in root.rglob("*"):
         relative = item.relative_to(root)
         if any(part in FORBIDDEN_PARTS for part in relative.parts) or item.name in FORBIDDEN_NAMES or item.suffix.lower() in {".vhdx"} or "rootfs" in item.name.lower(): forbidden.append(relative.as_posix())
@@ -115,6 +117,9 @@ def audit_package_contents(root: str | Path, *, max_file_size: int = 2 * 1024 * 
             files += 1; size = item.stat().st_size; total += size
             if size > max_file_size: large.append(relative.as_posix())
     missing_required = tuple(path for path in REQUIRED_STANDALONE_FILES if not (root / path).is_file())
+    if exclusion_findings:
+        forbidden.extend(exclusion_findings)
+    forbidden = sorted(set(forbidden))
     if missing_required:
         reason = "PACKAGE_INCOMPLETE"
     elif forbidden or large:

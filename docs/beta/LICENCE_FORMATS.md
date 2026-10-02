@@ -25,3 +25,9 @@ The existing client `DeviceLease` required fields and canonical JSON signature r
 ## Operator receipt v1
 
 Receipt fields include the opaque licence/application/device references, issue/expiry times, policy profile, explicit feature/calculation entitlement summary, canonical licence-file SHA-256, and issuance audit-event ID. The delivery unit is an opaque licence-ID directory containing `licence.json` and `receipt.json`, published by same-filesystem directory rename. Existing conflicting directories fail closed and require operator recovery; matching complete bundles are idempotent retries.
+
+## Protected local key envelopes v1
+
+The DPAPI-protected key file is an ASCII JSON envelope with exactly `format`, `version`, `purpose`, and `protected_data`. `format` is `quantum-studio-protected-key`; `version` is integer `1`. Signing-key `protected_data` uses canonical unpadded Base64URL; applicant-data-key `protected_data` uses canonical padded URL-safe Base64. The DPAPI plaintext is strict UTF-8 JSON with exactly `format`, `version`, `purpose`, `algorithm`, `key_length`, and `key`; its format is `quantum-studio-key-material`, its version is integer `1`, and `key` is canonical padded URL-safe Base64 for exactly 32 bytes.
+
+The signing purpose and algorithm are `licence-signing-ed25519` and `Ed25519`. The applicant-data purpose and algorithm are `applicant-pii-database-key` and `AES-256-GCM+HMAC-SHA256`. Each configured-path loader validates its outer purpose before DPAPI and its inner purpose after DPAPI. Cross-purpose files, unknown versions, unexpected fields, malformed encodings, and wrong key lengths fail closed. This describes a new format; no production key or production database migration has been performed. CurrentUser DPAPI does not stop arbitrary code running as the same Windows user from calling Windows DPAPI directly.

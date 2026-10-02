@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import ctypes
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -17,7 +19,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from backend.licensing.canonical import b64url_encode
+from backend.licensing.canonical import b64url_decode, b64url_encode
 from backend.licensing.models import ImplementationState
 from backend.licensing.service import LicensingService
 from backend.licensing.verifier import LeaseValidationError, LeaseVerifier, device_identity_from_private_key
@@ -42,6 +44,59 @@ from scripts.windows_installer.payload_audit import audit_installer_payload
 from scripts.build_windows_installer import validate_installer_bundle
 from frontend.calculations.catalog import CALCULATIONS
 from frontend.calculations.reconciliation import ExecutionSupport, reconcile_catalog
+
+
+def _key_material(purpose, raw):
+    algorithm = "Ed25519" if purpose == "licence-signing-ed25519" else "AES-256-GCM+HMAC-SHA256"
+    return json.dumps({"format": "quantum-studio-key-material", "version": 1, "purpose": purpose,
+        "algorithm": algorithm, "key_length": 32, "key": base64.urlsafe_b64encode(raw).decode("ascii")},
+        sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _write_protected_key_file(path, purpose, protected=b"test-dpapi-blob"):
+    encoded = (b64url_encode(protected) if purpose == "licence-signing-ed25519"
+               else base64.urlsafe_b64encode(protected).decode("ascii"))
+    path.write_text(json.dumps({"format": "quantum-studio-protected-key", "version": 1,
+        "purpose": purpose, "protected_data": encoded},
+        sort_keys=True, separators=(",", ":")), encoding="ascii")
+
+
+@contextmanager
+def _mock_dpapi(module, *, unprotected=None, protected=b"test-dpapi-blob", fail_unprotect=False, on_unprotect=None):
+    calls = []
+    buffers = []
+    protected_inputs = []
+    def loader(name, **_kwargs):
+        if name == "Kernel32":
+            api = type("Kernel32", (), {})()
+            api.LocalFree = lambda _pointer: None
+            return api
+        api = type("Crypt32", (), {})()
+        def fill(output_arg, value):
+            output = output_arg._obj
+            buffer = ctypes.create_string_buffer(value)
+            buffers.append(buffer)
+            output.cbData = len(value)
+            output.pbData = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_byte))
+        def decrypt(*args):
+            calls.append("unprotect")
+            if on_unprotect:
+                on_unprotect()
+            if fail_unprotect:
+                return 0
+            fill(args[-1], unprotected or b"")
+            return 1
+        def encrypt(*args):
+            source = args[0]._obj
+            protected_inputs.append(ctypes.string_at(source.pbData, source.cbData))
+            fill(args[-1], protected)
+            return 1
+        decrypt.argtypes = encrypt.argtypes = None
+        api.CryptUnprotectData = decrypt
+        api.CryptProtectData = encrypt
+        return api
+    with patch.object(module.ctypes, "WinDLL", side_effect=loader, create=True):
+        yield calls, protected_inputs
 
 
 class LicenceManagerTests(unittest.TestCase):
@@ -120,6 +175,94 @@ class LicenceManagerTests(unittest.TestCase):
         with patch.object(crypto.sys, "platform", "linux"):
             with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(protected_path)
         self.assertFalse(protected_path.exists())
+
+    def test_no_supported_generic_dpapi_decryption_api_exists(self):
+        import inspect
+        import operator_tools.licence_manager as package
+        import operator_tools.licence_manager.crypto as crypto
+        import operator_tools.licence_manager.signing as signing
+        self.assertFalse(hasattr(crypto, "dpapi_unprotect"))
+        self.assertFalse(hasattr(crypto, "dpapi_protect"))
+        self.assertFalse(any("unprotect" in name.casefold() or "decrypt_key" in name.casefold()
+                             for name in vars(package) if not name.startswith("_")))
+        public_crypto = {name: value for name, value in vars(crypto).items() if not name.startswith("_")}
+        self.assertFalse(any(callable(value) and name.lower() in {"unprotect", "decrypt_key", "load_private_key"}
+                             for name, value in public_crypto.items()))
+        self.assertFalse(any(name in dir(signing._LicenceSigningKeyStore(self.root / "key"))
+                             for name in ("load_private_key", "get_private_key", "decrypt_key", "private_key")))
+        self.assertNotIn("protected_blob", inspect.signature(crypto.DataProtector.from_windows_keyfile).parameters)
+        self.assertFalse(any(name in getattr(package, "__all__", ()) for name in ("dpapi_unprotect", "unprotect_dpapi")))
+
+    def test_purpose_envelopes_reject_cross_domain_before_or_after_dpapi(self):
+        import operator_tools.licence_manager.crypto as crypto
+        import operator_tools.licence_manager.signing as signing
+        pii_path = self.root / "data-key.dpapi"
+        _write_protected_key_file(pii_path, "licence-signing-ed25519")
+        with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto) as (calls, _):
+            with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(pii_path)
+            self.assertEqual(calls, [])
+        signing_path = self.root / "signing-key.dpapi"
+        _write_protected_key_file(signing_path, "applicant-pii-database-key")
+        self.import_request(); self.authorize()
+        public = Ed25519PrivateKey.generate().public_key().public_bytes_raw()
+        (self.root / "public.json").write_text(json.dumps({"schema_version": 1, "kid": "lic-purpose-test",
+            "public_key": b64url_encode(public)}), encoding="utf-8")
+        authority = ProductionAuthority(signing_path, self.root / "public.json", database=self.db)
+        with patch.object(signing.sys, "platform", "win32"), _mock_dpapi(signing) as (calls, _):
+            with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+            self.assertEqual(calls, [])
+        key = Ed25519PrivateKey.generate()
+        raw = key.private_bytes_raw()
+        _write_protected_key_file(signing_path, "licence-signing-ed25519")
+        bad_inner = _key_material("applicant-pii-database-key", raw)
+        with patch.object(signing.sys, "platform", "win32"), _mock_dpapi(signing, unprotected=bad_inner) as (calls, _):
+            with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+            self.assertEqual(calls, ["unprotect"])
+        self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
+
+    def test_purpose_envelopes_reject_unknown_malformed_and_wrong_inner_material(self):
+        import operator_tools.licence_manager.crypto as crypto
+        path = self.root / "data-key.dpapi"
+        for content in (
+            {"format": "quantum-studio-protected-key", "version": 2, "purpose": "applicant-pii-database-key", "protected_data": "eA=="},
+            {"format": "quantum-studio-protected-key", "version": 1, "purpose": "unknown", "protected_data": "eA=="},
+            {"format": "quantum-studio-protected-key", "version": 1, "purpose": "applicant-pii-database-key", "protected_data": "eA==", "extra": True},
+            {"format": "quantum-studio-protected-key", "version": 1, "purpose": "applicant-pii-database-key", "protected_data": "%%%"},
+        ):
+            path.write_text(json.dumps(content), encoding="ascii")
+            with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto) as (calls, _):
+                with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(path)
+                self.assertEqual(calls, [])
+        path.write_bytes(b"{\xff")
+        with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto) as (calls, _):
+            with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(path)
+            self.assertEqual(calls, [])
+        path.write_text('{"format":"quantum-studio-protected-key","version":1,"purpose":"licence-signing-ed25519","purpose":"applicant-pii-database-key","protected_data":"eA=="}', encoding="ascii")
+        with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto) as (calls, _):
+            with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(path)
+            self.assertEqual(calls, [])
+        for raw in (b"short", b"K" * 31):
+            path.write_text(json.dumps({"format": "quantum-studio-protected-key", "version": 1,
+                "purpose": "applicant-pii-database-key", "protected_data": base64.urlsafe_b64encode(b"mock").decode()}), encoding="ascii")
+            with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto, unprotected=_key_material("licence-signing-ed25519", raw)) as (calls, _):
+                with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(path)
+                self.assertEqual(calls, ["unprotect"])
+
+    def test_pii_key_loader_accepts_only_its_exact_versioned_material(self):
+        import operator_tools.licence_manager.crypto as crypto
+        path = self.root / "data-key.dpapi"
+        _write_protected_key_file(path, "applicant-pii-database-key")
+        raw = b"D" * 32
+        with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto, unprotected=_key_material("applicant-pii-database-key", raw)) as (calls, _):
+            protector = DataProtector.from_windows_keyfile(path)
+        self.assertEqual(calls, ["unprotect"])
+        self.assertIsInstance(protector, DataProtector)
+        self.assertNotIn(raw, repr(vars(protector)).encode())
+        encrypted = protector.encrypt(b"synthetic applicant", aad=b'{"record_id":"fixture"}')
+        self.assertEqual(protector.decrypt(encrypted, aad=b'{"record_id":"fixture"}'), b"synthetic applicant")
+        with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto, unprotected=_key_material("applicant-pii-database-key", b"K" * 31)) as (calls, _):
+            with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(path)
+            self.assertEqual(calls, ["unprotect"])
 
     def test_website_import_forces_applied_and_duplicate_is_idempotent(self):
         row = self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()
@@ -249,51 +392,51 @@ class LicenceManagerTests(unittest.TestCase):
     def test_production_status_is_structural_and_never_decrypts(self):
         import operator_tools.licence_manager.signing as signing
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        with patch.object(signing, "dpapi_unprotect", side_effect=AssertionError("status decrypted key")) as unprotect:
+        with _mock_dpapi(signing) as (calls, _):
             authority = ProductionAuthority(self.root / "key.dpapi", self.root / "public.json", database=self.db)
-            unprotect.assert_not_called()
+            self.assertEqual(calls, [])
             self.assertEqual(authority.status().state, AuthorityState.UNINITIALIZED)
             public_key = Ed25519PrivateKey.generate().public_key().public_bytes_raw()
             authority.metadata_path.write_text(json.dumps({"schema_version": 1, "kid": "lic-status", "public_key": b64url_encode(public_key)}))
             self.assertEqual(authority.status().state, AuthorityState.PROTECTED_KEY_MISSING)
-            authority.key_path.write_bytes(b"opaque protected test blob")
+            _write_protected_key_file(authority.key_path, "licence-signing-ed25519")
             first = authority.status()
             second = authority.status()
             self.assertEqual(first.state, AuthorityState.PROTECTED_KEY_PRESENT_UNVERIFIED)
             self.assertIn("validated only during an authorized issuance", first.message)
             self.assertEqual(second.state, AuthorityState.PROTECTED_KEY_PRESENT_UNVERIFIED)
-            unprotect.assert_not_called()
+            self.assertEqual(calls, [])
 
     def test_status_reports_invalid_metadata_without_decrypting(self):
         import operator_tools.licence_manager.signing as signing
         authority = ProductionAuthority(self.root / "key.dpapi", self.root / "public.json", database=self.db)
         authority.metadata_path.write_text("{broken")
-        authority.key_path.write_bytes(b"opaque protected test blob")
-        with patch.object(signing, "dpapi_unprotect", side_effect=AssertionError("invalid metadata status decrypted key")) as unprotect:
+        _write_protected_key_file(authority.key_path, "licence-signing-ed25519")
+        with _mock_dpapi(signing) as (calls, _):
             status = authority.status()
             self.assertEqual(status.state, AuthorityState.METADATA_INVALID)
             self.assertEqual(status.message, "Signing authority metadata is invalid.")
-            unprotect.assert_not_called()
+            self.assertEqual(calls, [])
 
     def test_window_startup_refresh_import_and_profile_selection_never_decrypt_signing_key(self):
         import operator_tools.licence_manager.signing as signing
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance() or QApplication([])
         authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
-        with patch.object(signing, "dpapi_unprotect", side_effect=AssertionError("UI decrypted signing key")) as unprotect:
+        with _mock_dpapi(signing) as (calls, _):
             window = LicenceManagerWindow(test_mode=False, database=self.db, authority=authority)
             self.addCleanup(window.close)
             window.refresh()
             import_applicants_json(json.dumps({"schema_version": 1, "applications": []}), self.db)
-            unprotect.assert_not_called()
+            self.assertEqual(calls, [])
             self.approve(); import_activation_json(json.dumps(self.request), self.db)
-            unprotect.assert_not_called()
+            self.assertEqual(calls, [])
             window.refresh()
             window.requests_table.selectRow(0)
             with patch("operator_tools.licence_manager.main_window.QInputDialog.getItem", return_value=("PROFESSOR_BETA", True)), \
                  patch("operator_tools.licence_manager.main_window.QMessageBox.question", side_effect=[QMessageBox.Yes, QMessageBox.No]):
                 window.issue_selected()
-            unprotect.assert_not_called()
+            self.assertEqual(calls, [])
         app.processEvents()
 
     def test_production_authority_has_only_narrow_identifier_profile_api(self):
@@ -308,35 +451,35 @@ class LicenceManagerTests(unittest.TestCase):
     def test_production_rejections_happen_before_protected_key_load(self):
         authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
         import operator_tools.licence_manager.signing as signing
-        with patch.object(signing, "dpapi_unprotect", side_effect=AssertionError("key load before authorization")) as load:
+        with _mock_dpapi(signing) as (calls, _):
             with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
-            load.assert_not_called()
+            self.assertEqual(calls, [])
             self.import_request(); self.authorize()
             with self.assertRaises(IssuanceRejected): authority.issue(str(uuid.uuid4()), self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
-            load.assert_not_called()
+            self.assertEqual(calls, [])
             self.db.connection.execute("UPDATE applicants SET status='REJECTED' WHERE application_id=?", (self.application_id,)); self.db.connection.commit()
             with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
-            load.assert_not_called()
+            self.assertEqual(calls, [])
             self.db.connection.execute("UPDATE applicants SET status='APPROVED' WHERE application_id=?", (self.application_id,)); self.db.connection.commit()
             self.db.transition(self.application_id, ApplicantStatus.REVOKED)
             with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
-            load.assert_not_called()
+            self.assertEqual(calls, [])
 
     def test_missing_confirmation_invalid_profile_and_policy_failure_do_not_load_key(self):
         import operator_tools.licence_manager.issuance as issuance
         authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
         self.import_request(); self.authorize()
         import operator_tools.licence_manager.signing as signing
-        with patch.object(signing, "dpapi_unprotect", side_effect=AssertionError("unauthorized key load")) as load:
+        with _mock_dpapi(signing) as (calls, _):
             with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA)
             with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], "NOT_A_PROFILE", confirmed=True)
             with patch.object(issuance, "derive_profile", side_effect=IssuanceRejected("fixture policy failure")):
                 with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
-            load.assert_not_called()
+            self.assertEqual(calls, [])
             stored_json = self.db.connection.execute("SELECT request_json FROM activation_requests WHERE request_id=?", (self.request["request_id"],)).fetchone()[0]
             self.db.connection.execute("UPDATE activation_requests SET request_json=?", ('{"schema_version":999}',)); self.db.connection.commit()
             with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
-            load.assert_not_called()
+            self.assertEqual(calls, [])
             self.db.connection.execute("UPDATE activation_requests SET request_json=?", (stored_json,)); self.db.connection.commit()
 
     def test_production_issue_signs_only_database_derived_lease(self):
@@ -345,12 +488,11 @@ class LicenceManagerTests(unittest.TestCase):
         self.import_request(); self.authorize()
         key = Ed25519PrivateKey.generate()
         raw = key.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
-        protected = self.root / "key.dpapi"; protected.write_bytes(b"opaque protected test blob")
+        protected = self.root / "key.dpapi"; _write_protected_key_file(protected, "licence-signing-ed25519")
         metadata = self.root / "public.json"
         metadata.write_text(json.dumps({"schema_version": 1, "kid": "lic-p1b-fixture", "public_key": b64url_encode(key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))}))
         authority = ProductionAuthority(protected, metadata, database=self.db)
-        def unprotect_after_checks(blob):
-            self.assertEqual(blob, b"opaque protected test blob")
+        def unprotect_after_checks():
             self.assertTrue(self.db.connection.in_transaction)
             self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "APPROVED")
             self.assertEqual(self.db.connection.execute("SELECT authorized_profile FROM activation_requests WHERE request_id=?", (self.request["request_id"],)).fetchone()[0], "PROFESSOR_BETA")
@@ -363,9 +505,9 @@ class LicenceManagerTests(unittest.TestCase):
             self.assertEqual(stored_request["device_public_key_hash"], self.device.public_key_hash)
             self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
             return raw
-        with patch.object(signing.sys, "platform", "win32"), patch.object(signing, "dpapi_unprotect", side_effect=unprotect_after_checks) as unprotect:
+        with patch.object(signing.sys, "platform", "win32"), _mock_dpapi(signing, unprotected=_key_material("licence-signing-ed25519", raw), on_unprotect=unprotect_after_checks) as (calls, _):
             envelope, event = authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
-        unprotect.assert_called_once()
+        self.assertEqual(calls, ["unprotect"])
         verified = LeaseVerifier({"lic-p1b-fixture": key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)}).verify(envelope, self.device)
         self.assertEqual(len(verified.lease.calculation_entitlements), 29)
         self.assertEqual(envelope["expires_at"] - envelope["issued_at"], 90 * 86400)
@@ -402,16 +544,16 @@ class LicenceManagerTests(unittest.TestCase):
         from cryptography.hazmat.primitives import serialization
         self.import_request(); self.authorize()
         private = Ed25519PrivateKey.generate()
-        protected = self.root / "key.dpapi"; protected.write_bytes(b"opaque protected test blob")
+        protected = self.root / "key.dpapi"; _write_protected_key_file(protected, "licence-signing-ed25519")
         metadata = self.root / "public.json"
         metadata.write_text(json.dumps({"schema_version": 1, "kid": "lic-fixture", "public_key": b64url_encode(b"x" * 32)}))
         authority = ProductionAuthority(protected, metadata, database=self.db)
         raw = private.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
-        with patch.object(signing.sys, "platform", "win32"), patch.object(signing, "dpapi_unprotect", return_value=raw) as unprotect:
+        with patch.object(signing.sys, "platform", "win32"), _mock_dpapi(signing, unprotected=_key_material("licence-signing-ed25519", raw)) as (calls, _):
             self.assertEqual(authority.status().state, AuthorityState.PROTECTED_KEY_PRESENT_UNVERIFIED)
-            unprotect.assert_not_called()
+            self.assertEqual(calls, [])
             with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
-            unprotect.assert_called_once()
+            self.assertEqual(calls, ["unprotect"])
         self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
         self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "APPROVED")
         self.assertEqual(authority.status().state, AuthorityState.LAST_AUTHORIZED_USE_FAILED)
@@ -419,14 +561,14 @@ class LicenceManagerTests(unittest.TestCase):
     def test_corrupt_protected_key_rolls_back_and_records_only_redacted_failure(self):
         import operator_tools.licence_manager.signing as signing
         self.import_request(); self.authorize()
-        key_path = self.root / "corrupt-key.dpapi"; key_path.write_bytes(b"opaque corrupted test blob")
+        key_path = self.root / "corrupt-key.dpapi"; _write_protected_key_file(key_path, "licence-signing-ed25519")
         metadata_path = self.root / "public.json"
         public = Ed25519PrivateKey.generate().public_key().public_bytes_raw()
         metadata_path.write_text(json.dumps({"schema_version": 1, "kid": "lic-corrupt-fixture", "public_key": b64url_encode(public)}))
         authority = ProductionAuthority(key_path, metadata_path, database=self.db)
-        with patch.object(signing.sys, "platform", "win32"), patch.object(signing, "dpapi_unprotect", side_effect=ProtectionUnavailable("protected test blob cannot be unwrapped")) as unprotect:
+        with patch.object(signing.sys, "platform", "win32"), _mock_dpapi(signing, fail_unprotect=True) as (calls, _):
             with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
-            unprotect.assert_called_once()
+            self.assertEqual(calls, ["unprotect"])
         self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
         self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "APPROVED")
         details = json.dumps([row[0] for row in self.db.connection.execute("SELECT details FROM audit_events")])
@@ -440,9 +582,13 @@ class LicenceManagerTests(unittest.TestCase):
         wrapped = b"mock-current-user-dpapi:" + hashlib.sha256(private).digest()
         key_path = self.root / "licence-signing-key.dpapi"
         store = signing._LicenceSigningKeyStore(key_path)
-        with patch.object(signing.sys, "platform", "win32"), patch.object(signing, "dpapi_protect", return_value=wrapped), patch.object(signing, "dpapi_unprotect", return_value=private):
+        with patch.object(signing.sys, "platform", "win32"), _mock_dpapi(signing, protected=wrapped) as (calls, protected_inputs):
             store._store_protected_private_key(private)
-            self.assertEqual(key_path.read_bytes(), wrapped)
+            stored = json.loads(key_path.read_text(encoding="ascii"))
+            self.assertEqual(stored["purpose"], "licence-signing-ed25519")
+            self.assertEqual(b64url_decode(stored["protected_data"]), wrapped)
+            self.assertEqual(json.loads(protected_inputs[0])["purpose"], "licence-signing-ed25519")
+            self.assertEqual(calls, [])
             self.assertFalse(any(name in dir(store) for name in ("load_private_key", "get_private_key", "decrypt_key")))
             with self.assertRaises(SigningUnavailable): store._store_protected_private_key(private)
         self.assertNotIn(private, key_path.read_bytes())

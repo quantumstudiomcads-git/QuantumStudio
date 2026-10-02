@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import hashlib
+import base64
+import ctypes
+from ctypes import wintypes
+import json
 import os
 import re
 import sys
@@ -11,12 +15,11 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from backend.licensing.canonical import b64url_decode
+from backend.licensing.canonical import b64url_decode, b64url_encode, canonical_json
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from backend.licensing.canonical import b64url_encode
 from backend.licensing.verifier import issue_lease, public_key_bytes
-from .crypto import dpapi_protect, dpapi_unprotect, ProtectionUnavailable
+from .crypto import ProtectionUnavailable
 
 
 class SigningUnavailable(RuntimeError): pass
@@ -37,10 +40,58 @@ class _LicenceSigningKeyStore:
             raise SigningUnavailable("Production licence signing storage is Windows-only.")
         if not self.path.is_file():
             raise SigningUnavailable("No protected production signing key is provisioned.")
+        plain = material = raw = None
         try:
-            raw = dpapi_unprotect(self.path.read_bytes())
-        except (OSError, ProtectionUnavailable) as error:
-            raise SigningUnavailable("The CurrentUser-protected licence key is unavailable.") from error
+            def unique_pairs(pairs):
+                value = {}
+                for name, item in pairs:
+                    if name in value:
+                        raise ValueError
+                    value[name] = item
+                return value
+            outer = json.loads(self.path.read_text(encoding="ascii"), object_pairs_hook=unique_pairs)
+            if (not isinstance(outer, dict) or set(outer) != {"format", "version", "purpose", "protected_data"}
+                    or outer["format"] != "quantum-studio-protected-key" or type(outer["version"]) is not int
+                    or outer["version"] != 1 or outer["purpose"] != "licence-signing-ed25519" or not isinstance(outer["protected_data"], str)):
+                raise ValueError
+            protected = b64url_decode(outer["protected_data"])
+            if not protected or b64url_encode(protected) != outer["protected_data"]:
+                raise ValueError
+            class Blob(ctypes.Structure):
+                _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+            source = ctypes.create_string_buffer(protected)
+            inp = Blob(len(protected), ctypes.cast(source, ctypes.POINTER(ctypes.c_byte)))
+            out = Blob()
+            dll = ctypes.WinDLL("Crypt32", use_last_error=True)
+            unprotect = dll.CryptUnprotectData
+            unprotect.argtypes = [ctypes.POINTER(Blob), ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob)]
+            if not unprotect(ctypes.byref(inp), None, None, None, None, 0, ctypes.byref(out)):
+                raise ProtectionUnavailable("CurrentUser DPAPI could not access the protected licence key.")
+            try:
+                plain = ctypes.string_at(out.pbData, out.cbData)
+            finally:
+                kernel32 = ctypes.WinDLL("Kernel32", use_last_error=True)
+                kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+                kernel32.LocalFree.restype = ctypes.c_void_p
+                kernel32.LocalFree(out.pbData)
+            material = json.loads(plain.decode("utf-8", "strict"), object_pairs_hook=unique_pairs)
+            if (not isinstance(material, dict) or set(material) != {"format", "version", "purpose", "algorithm", "key_length", "key"}
+                    or material["format"] != "quantum-studio-key-material" or type(material["version"]) is not int
+                    or material["version"] != 1 or material["purpose"] != "licence-signing-ed25519"
+                    or material["algorithm"] != "Ed25519" or type(material["key_length"]) is not int
+                    or material["key_length"] != 32 or not isinstance(material["key"], str)):
+                raise ValueError
+            raw = base64.b64decode(material["key"], altchars=b"-_", validate=True)
+            if len(raw) != 32 or base64.urlsafe_b64encode(raw).decode("ascii") != material["key"]:
+                raise ValueError
+            del material
+            del plain
+        except (OSError, ProtectionUnavailable):
+            plain = material = raw = None
+            raise SigningUnavailable("The CurrentUser-protected licence key is unavailable.") from None
+        except Exception:
+            plain = material = raw = None
+            raise SigningUnavailable("The protected licence-key envelope is invalid or unavailable.") from None
         key = None
         try:
             key = Ed25519PrivateKey.from_private_bytes(raw)
@@ -62,7 +113,32 @@ class _LicenceSigningKeyStore:
             raise ValueError("A raw 32-byte Ed25519 private key is required.")
         if self.path.exists():
             raise SigningUnavailable("Refusing to replace an existing signing key outside a rotation ceremony.")
-        encrypted = dpapi_protect(private_key)
+        material = json.dumps({"format": "quantum-studio-key-material", "version": 1,
+            "purpose": "licence-signing-ed25519", "algorithm": "Ed25519", "key_length": 32,
+            "key": base64.urlsafe_b64encode(private_key).decode("ascii")}, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        class Blob(ctypes.Structure):
+            _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+        source = ctypes.create_string_buffer(material)
+        inp = Blob(len(material), ctypes.cast(source, ctypes.POINTER(ctypes.c_byte)))
+        out = Blob()
+        dll = ctypes.WinDLL("Crypt32", use_last_error=True)
+        protect = dll.CryptProtectData
+        protect.argtypes = [ctypes.POINTER(Blob), wintypes.LPCWSTR, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob)]
+        try:
+            if not protect(ctypes.byref(inp), "Quantum Studio Licence Manager signing key", None, None, None, 0, ctypes.byref(out)):
+                raise SigningUnavailable("CurrentUser DPAPI could not protect the licence key.")
+            protected = ctypes.string_at(out.pbData, out.cbData)
+        finally:
+            ctypes.memset(source, 0, len(material))
+            private_key = material = None
+            if out.pbData:
+                kernel32 = ctypes.WinDLL("Kernel32", use_last_error=True)
+                kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+                kernel32.LocalFree.restype = ctypes.c_void_p
+                kernel32.LocalFree(out.pbData)
+        del source, inp, material
+        encrypted = canonical_json({"format": "quantum-studio-protected-key", "version": 1,
+            "purpose": "licence-signing-ed25519", "protected_data": b64url_encode(protected)})
         self.path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, name = tempfile.mkstemp(prefix="." + self.path.name + ".", suffix=".tmp", dir=self.path.parent)
         temporary = Path(name)

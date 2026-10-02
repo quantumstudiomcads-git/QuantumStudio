@@ -16,7 +16,7 @@ The existing client licence verifier authenticates canonical JSON envelopes and 
 
 ## Data and PII
 
-Production SQLite and the DPAPI-wrapped data key live beneath `%LOCALAPPDATA%\QuantumStudio\LicenceManager`. Applicant fields are serialized as one AES-256-GCM authenticated ciphertext. The email lookup index is an HMAC derived from the random data key. Audit details contain opaque IDs and controlled reason codes rather than PII. Private licence signing keys are never stored in SQLite.
+Production SQLite and the DPAPI-wrapped data key live beneath `%LOCALAPPDATA%\QuantumStudio\LicenceManager`. Applicant fields are serialized as a version-1 AES-256-GCM envelope. AAD binds the application identifier, SQLite schema version, applicant table, record ID, field, and encryption format version. The email lookup index is a keyed HMAC derived from a separately domain-separated data key. Email identity is trimmed, NFC-normalized, case-folded, and NFC-normalized again; no provider-specific rewriting is done. Duplicate normalized email identities are rejected pending a reviewed reapplication workflow. This keyed index is equality protection, not anonymization: compromise of its key enables offline guessing of likely email addresses. Audit details contain opaque IDs and controlled reason codes rather than PII. Private licence signing keys are never stored in SQLite.
 
 Windows CurrentUser DPAPI ties access to the Windows user account. It does not protect data after that account or session is compromised. A workstation backup must protect the encrypted database and DPAPI-wrapped data key together. Restoring them under a different Windows account may not be possible.
 
@@ -24,10 +24,10 @@ Unsupported operating systems fail closed for production storage and signing. Te
 
 ## Audit and revocation
 
-Audit events use canonical serialization and a SHA-256 previous-event chain. Verification detects ordinary changes to rows or ordering. A hash chain is tamper evidence; it does not prevent alteration by a fully compromised administrator who can rewrite the database and recompute the chain.
+Audit events use canonical serialization and a SHA-256 previous-event chain. Verification detects ordinary changes to rows or ordering and removed middle events. Without an external trusted checkpoint, deleting the tail, replacing the complete chain and recomputing it, or restoring an older database snapshot cannot be proven. A hash chain is tamper evidence, not append-only immutability.
 
 Revocation records the operator's local administrative decision. A delivered offline licence remains usable until its signed expiry unless a later authenticated client refresh/revocation mechanism is implemented. Current controls are 90-day expiry, device binding, controlled renewal, operator audit, and no automatic transfer.
 
 ## Customer package boundary
 
-Windows and Linux package audits reject paths containing the operator tool or manager package. These are package-content checks and focused plan tests, not proof from a completed customer build. The customer front end does not import this package. The manager is intended to remain excluded from customer Nuitka bundles, installers, AppImages, update manifests, release ZIPs, Engine Packs, and website builds.
+Windows and Linux package audits reject paths containing the operator tool or manager package. The Windows installer builder reruns the authoritative standalone package-content audit on its supplied bundle and requires consistent build and installer-input metadata before writing an Inno script. These are package-content checks and focused plan tests, not proof from a completed customer build. The customer front end does not import this package. The manager is intended to remain excluded from customer Nuitka bundles, installers, AppImages, update manifests, release ZIPs, Engine Packs, and website builds.

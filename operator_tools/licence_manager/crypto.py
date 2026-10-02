@@ -7,6 +7,9 @@ import hashlib
 import hmac
 import os
 import sys
+import json
+import base64
+import unicodedata
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -60,13 +63,45 @@ class DataProtector:
 
     def encrypt(self, value: bytes, *, aad: bytes = b"applicant-pii") -> bytes:
         nonce = os.urandom(12)
-        return nonce + AESGCM(self._enc).encrypt(nonce, value, aad)
+        context = json.loads(aad.decode("utf-8")) if aad.startswith(b"{") else {"purpose": aad.decode("utf-8", "strict")}
+        context["encryption_format_version"] = 1
+        authenticated = json.dumps(context, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ciphertext = AESGCM(self._enc).encrypt(nonce, value, authenticated)
+        envelope = {"version": 1, "nonce": base64.urlsafe_b64encode(nonce).decode("ascii"),
+                    "ciphertext": base64.urlsafe_b64encode(ciphertext).decode("ascii")}
+        return json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("ascii")
 
     def decrypt(self, value: bytes, *, aad: bytes = b"applicant-pii") -> bytes:
-        return AESGCM(self._enc).decrypt(value[:12], value[12:], aad)
+        try:
+            envelope = json.loads(value.decode("ascii"))
+            if type(envelope.get("version")) is not int or envelope["version"] != 1 or set(envelope) != {"version", "nonce", "ciphertext"}:
+                raise ValueError
+            nonce = base64.b64decode(envelope["nonce"], altchars=b"-_", validate=True)
+            ciphertext = base64.b64decode(envelope["ciphertext"], altchars=b"-_", validate=True)
+            if len(nonce) != 12 or len(ciphertext) < 16:
+                raise ValueError
+            if (base64.urlsafe_b64encode(nonce).decode("ascii") != envelope["nonce"]
+                or base64.urlsafe_b64encode(ciphertext).decode("ascii") != envelope["ciphertext"]):
+                raise ValueError
+            context = json.loads(aad.decode("utf-8")) if aad.startswith(b"{") else {"purpose": aad.decode("utf-8", "strict")}
+            context["encryption_format_version"] = 1
+            authenticated = json.dumps(context, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            return AESGCM(self._enc).decrypt(nonce, ciphertext, authenticated)
+        except Exception as error:
+            raise ProtectionUnavailable("Encrypted operator data could not be authenticated.") from error
 
     def email_index(self, normalized_email: str) -> str:
         return hmac.new(self._index, normalized_email.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def normalize_applicant_email(email: str) -> str:
+    if not isinstance(email, str):
+        raise ValueError("Applicant email is invalid.")
+    value = unicodedata.normalize("NFC", email.strip()).casefold()
+    value = unicodedata.normalize("NFC", value)
+    if not value or len(value) > 254 or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("Applicant email is invalid.")
+    return value
 
 
 def _dpapi(value: bytes, *, protect: bool) -> bytes:

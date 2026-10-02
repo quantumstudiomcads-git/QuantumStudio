@@ -10,7 +10,9 @@ from .audit import append_event
 from .models import ApplicantStatus, TRANSITIONS
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+_PII_CONTEXT = {"application": "quantum-studio-licence-manager", "schema_id": "operator.sqlite3/applicants/encrypted-pii-v1",
+                "table": "applicants", "record_id": None, "field": "encrypted_pii"}
 
 
 class Database:
@@ -22,10 +24,17 @@ class Database:
         self.connection = sqlite3.connect(self.path)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys=ON")
+        self.connection.execute("PRAGMA busy_timeout=5000")
         self.migrate()
 
     def close(self):
         self.connection.close()
+
+    def _reopen_connection(self):
+        self.connection = sqlite3.connect(self.path, timeout=5.0)
+        self.connection.row_factory = sqlite3.Row
+        self.connection.execute("PRAGMA foreign_keys=ON")
+        self.connection.execute("PRAGMA busy_timeout=5000")
 
     def migrate(self):
         db = self.connection
@@ -52,14 +61,20 @@ class Database:
             db.execute("ALTER TABLE activation_requests ADD COLUMN authorized_profile TEXT")
         if not db.execute("SELECT 1 FROM schema_migrations WHERE version=2").fetchone():
             db.execute("INSERT INTO schema_migrations VALUES(2,datetime('now'))")
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS applicants_email_index_unique ON applicants(email_index)")
+        if not db.execute("SELECT 1 FROM schema_migrations WHERE version=3").fetchone():
+            db.execute("INSERT INTO schema_migrations VALUES(3,datetime('now'))")
         db.commit()
 
     def transaction(self):
-        return _Transaction(self.connection)
+        return _Transaction(self)
 
     def import_applicant(self, application_id, pii, submission_hash, operator_id="operator"):
-        normalized = pii["email"].strip().casefold()
-        encrypted = self.protector.encrypt(json.dumps(pii, sort_keys=True, separators=(",", ":")).encode(), aad=("applicant-pii:" + application_id).encode())
+        from .crypto import normalize_applicant_email
+        normalized = normalize_applicant_email(pii["email"])
+        context = dict(_PII_CONTEXT, record_id=application_id)
+        aad = json.dumps(context, sort_keys=True, separators=(",", ":")).encode()
+        encrypted = self.protector.encrypt(json.dumps(pii, sort_keys=True, separators=(",", ":")).encode(), aad=aad)
         email_index = self.protector.email_index(normalized)
         with self.transaction() as db:
             existing = db.execute("SELECT submission_hash FROM applicants WHERE application_id=?", (application_id,)).fetchone()
@@ -68,6 +83,10 @@ class Database:
                     append_event(db, "rejected_policy_action", operator_id, [application_id], {"code": "applicant_conflict"})
                     return False
                 append_event(db, "duplicate_import", operator_id, [application_id], {"kind": "applicant"})
+                return False
+            duplicate = db.execute("SELECT application_id FROM applicants WHERE email_index=?", (email_index,)).fetchone()
+            if duplicate:
+                append_event(db, "rejected_policy_action", operator_id, [application_id], {"code": "duplicate_email_identity"})
                 return False
             db.execute("INSERT INTO applicants VALUES(?,?,?,?,?,datetime('now'))", (application_id, encrypted, email_index, submission_hash, ApplicantStatus.APPLIED.value))
             event_id = append_event(db, "applicant_import", operator_id, [application_id], {"source": "website"})
@@ -79,7 +98,9 @@ class Database:
     def applicant_pii(self, application_id):
         row = self.connection.execute("SELECT encrypted_pii FROM applicants WHERE application_id=?", (application_id,)).fetchone()
         if not row: raise KeyError(application_id)
-        return json.loads(self.protector.decrypt(row[0], aad=("applicant-pii:" + application_id).encode()))
+        context = dict(_PII_CONTEXT, record_id=application_id)
+        aad = json.dumps(context, sort_keys=True, separators=(",", ":")).encode()
+        return json.loads(self.protector.decrypt(row[0], aad=aad))
 
     def transition(self, application_id, new_state: ApplicantStatus, *, operator_id="operator", note_code="operator_action"):
         if note_code not in {"operator_action", "manual_review", "approved_by_operator", "rejected_by_operator", "renewal_review", "administrative_revocation", "licence_issued"}:
@@ -106,8 +127,36 @@ class Database:
 
 
 class _Transaction:
-    def __init__(self, db): self.db = db
-    def __enter__(self): self.db.execute("BEGIN IMMEDIATE"); return self.db
+    def __init__(self, database): self.database = database; self.db = database.connection
+    def __enter__(self):
+        if self.db.in_transaction:
+            raise sqlite3.OperationalError("Nested operator database transactions are not supported.")
+        self.db.execute("BEGIN IMMEDIATE")
+        return self.db
     def __exit__(self, typ, value, traceback):
-        self.db.rollback() if typ else self.db.commit()
+        if typ:
+            self._rollback_preserving(value)
+            return False
+        try:
+            self.db.commit()
+        except BaseException as commit_error:
+            self._rollback_preserving(commit_error)
+            raise
         return False
+
+    def _rollback_preserving(self, primary_error):
+        try:
+            if self.db.in_transaction:
+                self.db.rollback()
+        except BaseException as rollback_error:
+            # A broken connection must not be reused with an unknown transaction.
+            try:
+                self.db.close()
+            except BaseException:
+                pass
+            try:
+                self.database._reopen_connection()
+            except BaseException:
+                # Keep the original operation failure visible; subsequent DB use
+                # will fail closed if reconnection was impossible.
+                pass

@@ -21,23 +21,40 @@ from .crypto import dpapi_protect, dpapi_unprotect, ProtectionUnavailable
 
 class SigningUnavailable(RuntimeError): pass
 
+_AUTHORIZED_ISSUANCE_CAPABILITY = object()
 
-class LicenceSigningKeyStore:
-    """Explicit Windows CurrentUser DPAPI storage; no key generation or startup save."""
+
+class _LicenceSigningKeyStore:
+    """Internal protected-key signer; decrypted bytes never leave this scope."""
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
-    def load_private_key(self) -> bytes | None:
+    def _sign_authorized_lease(self, lease: dict, kid: str, expected_public_key: bytes, capability) -> dict:
+        """Unprotect and use a previously authorized internal lease only."""
+        if capability is not _AUTHORIZED_ISSUANCE_CAPABILITY or not isinstance(lease, dict):
+            raise SigningUnavailable("Protected signing is restricted to authorized issuance.")
         if not sys.platform.startswith("win"):
             raise SigningUnavailable("Production licence signing storage is Windows-only.")
         if not self.path.is_file():
-            return None
+            raise SigningUnavailable("No protected production signing key is provisioned.")
         try:
-            return dpapi_unprotect(self.path.read_bytes())
+            raw = dpapi_unprotect(self.path.read_bytes())
         except (OSError, ProtectionUnavailable) as error:
             raise SigningUnavailable("The CurrentUser-protected licence key is unavailable.") from error
+        key = None
+        try:
+            key = Ed25519PrivateKey.from_private_bytes(raw)
+            if public_key_bytes(key) != expected_public_key:
+                raise SigningUnavailable("Protected key and public metadata do not match.")
+            return issue_lease(lease, key, kid=kid)
+        except (ValueError, TypeError) as error:
+            raise SigningUnavailable("Protected signing key is invalid or inconsistent.") from error
+        finally:
+            del raw
+            if key is not None:
+                del key
 
-    def store_protected_private_key(self, private_key: bytes) -> None:
+    def _store_protected_private_key(self, private_key: bytes) -> None:
         """Store ceremony-supplied key bytes; this method is never called by startup/UI."""
         if not sys.platform.startswith("win"):
             raise SigningUnavailable("Production licence signing storage is Windows-only.")
@@ -112,11 +129,9 @@ class ProductionAuthority:
             nonlocal key_use_started
             # This closure is only passed to the private checked issuance workflow.
             key_use_started = True
-            key, kid = self._load()
-            try:
-                return issue_lease(internally_built_lease, key, kid=kid)
-            finally:
-                del key
+            kid, public_key = self._read_public_metadata()
+            return _LicenceSigningKeyStore(self.key_path)._sign_authorized_lease(
+                internally_built_lease, kid, public_key, _AUTHORIZED_ISSUANCE_CAPABILITY)
         try:
             result = _issue_from_authoritative_records(
                 self._database, application_id, activation_request_id, profile,
@@ -192,25 +207,6 @@ class ProductionAuthority:
         if len(public_key) != 32 or b64url_encode(public_key) != encoded_public_key:
             raise SigningUnavailable("Signing public-key metadata is invalid.")
         return kid, public_key
-
-    def _load(self):
-        if not sys.platform.startswith("win") or not self.key_path.is_file() or self.key_path.stat().st_size <= 0:
-            raise SigningUnavailable("No protected production signing key is provisioned.")
-        kid, metadata_public_key = self._read_public_metadata()
-        raw = LicenceSigningKeyStore(self.key_path).load_private_key()
-        if raw is None:
-            raise SigningUnavailable("No protected production signing key is provisioned.")
-        try:
-            key = Ed25519PrivateKey.from_private_bytes(raw)
-            if public_key_bytes(key) != metadata_public_key:
-                del key
-                raise SigningUnavailable("Protected key and public metadata do not match.")
-            return key, kid
-        except (ValueError, TypeError) as error:
-            raise SigningUnavailable("Protected signing key is invalid or inconsistent.") from error
-        finally:
-            del raw
-
 
 def public_key_record(authority):
     status = authority.status()

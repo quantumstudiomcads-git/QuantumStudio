@@ -148,7 +148,7 @@ class LicenceManagerWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Import version 1 website application export", "", "JSON (*.json)")
         if not path: return
         try:
-            count = import_applicants_json(Path(path).read_bytes(), self.database, operator_id=self.operator_id)
+            count = import_applicants_json(Path(path), self.database, operator_id=self.operator_id)
             QMessageBox.information(self, "Import complete", f"Imported {count} new application(s).")
             self.refresh()
         except Exception as error: QMessageBox.critical(self, "Import failed", str(error))
@@ -157,7 +157,7 @@ class LicenceManagerWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Import Quantum Studio activation request", "", "JSON (*.json)")
         if not path: return
         try:
-            imported = import_activation_json(Path(path).read_bytes(), self.database, operator_id=self.operator_id)
+            imported = import_activation_json(Path(path), self.database, operator_id=self.operator_id)
             QMessageBox.information(self, "Activation request", "Request imported." if imported else "Identical request was already imported.")
             self.refresh()
         except Exception as error: QMessageBox.critical(self, "Import failed", str(error))

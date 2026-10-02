@@ -13,8 +13,9 @@ PRODUCT_NAME = "Quantum Studio"
 EXECUTABLE_NAME = "QuantumStudio.exe"
 PACKAGE_MARKER = "quantumstudio-build.json"
 INSTALLER_INPUT = "quantumstudio-installer-input.json"
-FORBIDDEN_PARTS = {"tests", ".git", ".venv", "venv", "build", "__pycache__", "operator_tools", "licence_manager"}
-FORBIDDEN_NAMES = {"pw.x", "ph.x", "q2r.x", "matdyn.x", "dynmat.x", "bands.x", "dos.x", "projwfc.x", "pp.x", "epsilon.x", "pw2wannier90.x", "epw.x", "wannier90.x", "bader"}
+FORBIDDEN_PARTS = {"tests", ".git", ".venv", "venv", "venvs", "build", "__pycache__", "operator_tools", "licence_manager", "applicant_exports", "operator_data", "engine-pack", "engine_pack", "runtime-image", "runtime_image"}
+FORBIDDEN_NAMES = {"pw.x", "ph.x", "q2r.x", "matdyn.x", "dynmat.x", "bands.x", "dos.x", "projwfc.x", "pp.x", "epsilon.x", "pw2wannier90.x", "epw.x", "wannier90.x", "bader", "engine-pack.json", "run_licence_manager.py", "licence.json", "receipt.json", "applicants.json", "audit.json", ".env", ".dev.vars", "id_rsa", "id_ed25519", "licence_manager_architecture.md", "licence_manager_operations.md", "licence_formats.md"}
+FORBIDDEN_SUFFIXES = {".vhdx", ".sqlite", ".sqlite3", ".db", ".dpapi", ".p12", ".pfx", ".dev.vars", ".env", ".pem", ".key", ".secret", ".token"}
 # These are the minimum application-level runtime artifacts.  An executable
 # alone is a linked intermediate, not a usable Nuitka standalone product.
 REQUIRED_STANDALONE_FILES = (
@@ -104,15 +105,25 @@ def installer_input_manifest(plan: WindowsBuildPlan, build_manifest: dict) -> di
 
 
 def audit_package_contents(root: str | Path, *, max_file_size: int = 2 * 1024 * 1024 * 1024) -> dict:
-    root = Path(root).resolve(); forbidden: list[str] = []; large: list[str] = []; files = 0; total = 0
+    root = Path(root).absolute(); forbidden: list[str] = []; large: list[str] = []; files = 0; total = 0
     if not root.is_dir():
         return {"valid": False, "reason": "PACKAGE_MISSING", "forbidden": (), "missing_required": REQUIRED_STANDALONE_FILES,
                 "file_count": 0, "total_bytes": 0, "large_files": ()}
+    if root.is_symlink() or getattr(root.lstat(), "st_file_attributes", 0) & getattr(__import__("stat"), "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+        return {"valid": False, "reason": "PACKAGE_ROOT_REPARSE_POINT", "forbidden": ("PACKAGE_ROOT_REPARSE_POINT",),
+                "missing_required": REQUIRED_STANDALONE_FILES, "file_count": 0, "total_bytes": 0, "large_files": ()}
     from scripts.package_exclusions import customer_package_exclusion_findings
     exclusion_findings = customer_package_exclusion_findings(root)
+    resolved_root = root.resolve()
     for item in root.rglob("*"):
         relative = item.relative_to(root)
-        if any(part in FORBIDDEN_PARTS for part in relative.parts) or item.name in FORBIDDEN_NAMES or item.suffix.lower() in {".vhdx"} or "rootfs" in item.name.lower(): forbidden.append(relative.as_posix())
+        attributes = getattr(item.lstat(), "st_file_attributes", 0)
+        if item.is_symlink() or attributes & getattr(__import__("stat"), "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+            forbidden.append(relative.as_posix())
+            continue
+        try: item.resolve().relative_to(resolved_root)
+        except ValueError: forbidden.append(relative.as_posix()); continue
+        if any(part.casefold() in FORBIDDEN_PARTS for part in relative.parts) or item.name.casefold() in FORBIDDEN_NAMES or item.suffix.lower() in FORBIDDEN_SUFFIXES or "rootfs" in item.name.lower(): forbidden.append(relative.as_posix())
         if item.is_file():
             files += 1; size = item.stat().st_size; total += size
             if size > max_file_size: large.append(relative.as_posix())

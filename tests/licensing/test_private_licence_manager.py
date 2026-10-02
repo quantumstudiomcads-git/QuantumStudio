@@ -24,20 +24,22 @@ from backend.licensing.verifier import LeaseValidationError, LeaseVerifier, devi
 from backend.licensing.enforcement import CalculationAuthorizationBoundary
 from backend.calculations import registry
 from operator_tools.licence_manager.audit import verify_chain
-from operator_tools.licence_manager.crypto import DataProtector, ProtectionUnavailable
+from operator_tools.licence_manager.crypto import DataProtector, ProtectionUnavailable, normalize_applicant_email
 from operator_tools.licence_manager.database import Database
-from operator_tools.licence_manager.exports import export_licence, receipt_for
-from operator_tools.licence_manager.imports import ImportRejected, import_activation_json, import_applicants_json
+from operator_tools.licence_manager.exports import ExportRecoveryError, export_licence, receipt_for
+from operator_tools.licence_manager.imports import (ImportRejected, MAX_ACTIVATION_IMPORT_BYTES,
+    MAX_APPLICANT_IMPORT_BYTES, import_activation_json, import_applicants_json)
 from operator_tools.licence_manager.issuance import (IssuanceRejected, authorize_activation_profile,
     issue_for_request_for_testing, record_expiries, revoke_licence)
 from operator_tools.licence_manager.main_window import LicenceManagerWindow
 from operator_tools.licence_manager.models import ApplicantStatus, Profile
 from operator_tools.licence_manager.policy import derive_profile
-from operator_tools.licence_manager.signing import (LicenceSigningKeyStore, ProductionAuthority,
+from operator_tools.licence_manager.signing import (ProductionAuthority,
     AuthorityState, SigningUnavailable, TestEphemeralAuthority as EphemeralAuthority, record_public_metadata)
 from scripts.package_exclusions import customer_package_exclusion_findings
 from scripts.windows_packaging import audit_package_contents, build_plan
 from scripts.windows_installer.payload_audit import audit_installer_payload
+from scripts.build_windows_installer import validate_installer_bundle
 from frontend.calculations.catalog import CALCULATIONS
 from frontend.calculations.reconciliation import ExecutionSupport, reconcile_catalog
 
@@ -90,7 +92,7 @@ class LicenceManagerTests(unittest.TestCase):
         return int(datetime.fromisoformat(self.request["created_at"].replace("Z", "+00:00")).timestamp()) + 1
 
     def test_database_migration_and_encrypted_pii_round_trip(self):
-        self.assertEqual(self.db.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 2)
+        self.assertEqual(self.db.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 3)
         self.assertEqual(self.db.applicant_pii(self.application_id)["email"], "ada@example.test")
         raw = self.db.path.read_bytes()
         for secret in ("Ada Beta Fixture", "ada@example.test", "Example Institute", "local test only"):
@@ -108,7 +110,7 @@ class LicenceManagerTests(unittest.TestCase):
         self.addCleanup(upgraded.close)
         columns = {row[1] for row in upgraded.connection.execute("PRAGMA table_info(activation_requests)")}
         self.assertIn("authorized_profile", columns)
-        self.assertEqual(upgraded.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 2)
+        self.assertEqual(upgraded.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 3)
 
     def test_raw_pii_keys_are_test_only_and_json_duplicate_fields_reject(self):
         with self.assertRaises(ProtectionUnavailable): DataProtector(b"K" * 32)
@@ -305,7 +307,8 @@ class LicenceManagerTests(unittest.TestCase):
 
     def test_production_rejections_happen_before_protected_key_load(self):
         authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
-        with patch.object(authority, "_load", side_effect=AssertionError("key load before authorization")) as load:
+        import operator_tools.licence_manager.signing as signing
+        with patch.object(signing, "dpapi_unprotect", side_effect=AssertionError("key load before authorization")) as load:
             with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
             load.assert_not_called()
             self.import_request(); self.authorize()
@@ -323,7 +326,8 @@ class LicenceManagerTests(unittest.TestCase):
         import operator_tools.licence_manager.issuance as issuance
         authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
         self.import_request(); self.authorize()
-        with patch.object(authority, "_load", side_effect=AssertionError("unauthorized key load")) as load:
+        import operator_tools.licence_manager.signing as signing
+        with patch.object(signing, "dpapi_unprotect", side_effect=AssertionError("unauthorized key load")) as load:
             with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA)
             with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], "NOT_A_PROFILE", confirmed=True)
             with patch.object(issuance, "derive_profile", side_effect=IssuanceRejected("fixture policy failure")):
@@ -435,12 +439,12 @@ class LicenceManagerTests(unittest.TestCase):
         private = Ed25519PrivateKey.generate().private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
         wrapped = b"mock-current-user-dpapi:" + hashlib.sha256(private).digest()
         key_path = self.root / "licence-signing-key.dpapi"
-        store = LicenceSigningKeyStore(key_path)
+        store = signing._LicenceSigningKeyStore(key_path)
         with patch.object(signing.sys, "platform", "win32"), patch.object(signing, "dpapi_protect", return_value=wrapped), patch.object(signing, "dpapi_unprotect", return_value=private):
-            store.store_protected_private_key(private)
-            self.assertEqual(store.load_private_key(), private)
+            store._store_protected_private_key(private)
             self.assertEqual(key_path.read_bytes(), wrapped)
-            with self.assertRaises(SigningUnavailable): store.store_protected_private_key(private)
+            self.assertFalse(any(name in dir(store) for name in ("load_private_key", "get_private_key", "decrypt_key")))
+            with self.assertRaises(SigningUnavailable): store._store_protected_private_key(private)
         self.assertNotIn(private, key_path.read_bytes())
 
     def test_database_transaction_rolls_back_all_mutations(self):
@@ -468,7 +472,7 @@ class LicenceManagerTests(unittest.TestCase):
         receipt1, receipt2 = receipt_for(envelope, event), receipt_for(envelope, event)
         self.assertEqual(receipt1, receipt2)
         path, receipt_path = export_licence(self.root / "export", envelope, event, database=self.db)
-        self.assertTrue(path.name.startswith("lic_")); self.assertNotIn("ada", path.name.casefold())
+        self.assertEqual(path.parent.name, envelope["licence_id"]); self.assertEqual(path.name, "licence.json")
         self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), json.loads(receipt_path.read_text())["licence_file_sha256"])
         self.assertTrue(revoke_licence(self.db, envelope["licence_id"], confirmed=True))
         self.assertEqual(json.loads(self.db.connection.execute("SELECT envelope_json FROM licences").fetchone()[0])["expires_at"], envelope["expires_at"])
@@ -506,6 +510,187 @@ class LicenceManagerTests(unittest.TestCase):
         self.assertEqual(self.db.connection.execute("SELECT status FROM applicants").fetchone()[0], "REVOKED")
         history = self.db.connection.execute("SELECT previous_state,new_state FROM application_status_history WHERE new_state='REVOKED'").fetchone()
         self.assertEqual(tuple(history), ("EXPIRED", "REVOKED"))
+
+    def test_pii_envelope_version_and_record_binding_reject_transplant(self):
+        second_id = str(uuid.uuid4())
+        second = dict(self.applicant, application_id=second_id, email="other@example.test")
+        import_applicants_json(json.dumps({"schema_version": 1, "applications": [second]}), self.db)
+        first_cipher = self.db.connection.execute("SELECT encrypted_pii FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0]
+        second_cipher = self.db.connection.execute("SELECT encrypted_pii FROM applicants WHERE application_id=?", (second_id,)).fetchone()[0]
+        self.assertIn(b'"version":1', first_cipher)
+        context = json.dumps({"application": "quantum-studio-licence-manager", "schema_id": "operator.sqlite3/applicants/encrypted-pii-v1", "table": "applicants", "record_id": self.application_id, "field": "encrypted_pii"}, sort_keys=True, separators=(",", ":")).encode()
+        envelope = json.loads(first_cipher)
+        envelope["version"] = 2
+        with self.assertRaises(ProtectionUnavailable): self.protector.decrypt(json.dumps(envelope).encode(), aad=context)
+        with self.assertRaises(ProtectionUnavailable): DataProtector.for_testing(b"W" * 32).decrypt(first_cipher, aad=context)
+        self.db.connection.execute("UPDATE applicants SET encrypted_pii=? WHERE application_id=?", (first_cipher, second_id)); self.db.connection.commit()
+        with self.assertRaises(ProtectionUnavailable): self.db.applicant_pii(second_id)
+        self.db.connection.execute("UPDATE applicants SET encrypted_pii=? WHERE application_id=?", (second_cipher, second_id)); self.db.connection.commit()
+        with self.assertRaises(ProtectionUnavailable): self.protector.decrypt(first_cipher, aad=b'{"application":"other"}')
+        with self.assertRaises(ProtectionUnavailable): self.protector.decrypt(first_cipher[:-1], aad=context)
+
+    def test_email_normalization_and_duplicate_identity_policy(self):
+        self.assertEqual(normalize_applicant_email("  ADa@Example.test  "), "ada@example.test")
+        self.assertEqual(normalize_applicant_email("e\u0301@example.test"), normalize_applicant_email("é@example.test"))
+        other = dict(self.applicant, application_id=str(uuid.uuid4()), email=" ADA@EXAMPLE.TEST ")
+        self.assertEqual(import_applicants_json(json.dumps({"schema_version": 1, "applications": [other]}), self.db), 0)
+        self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM applicants").fetchone()[0], 1)
+
+    def test_audit_chain_detects_middle_removal_and_reordering_but_not_unanchored_tail_truncation(self):
+        import sqlite3
+        from operator_tools.licence_manager.audit import append_event
+        connection = sqlite3.connect(":memory:")
+        connection.executescript("CREATE TABLE audit_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE,timestamp TEXT,event_type TEXT,operator_id TEXT,affected_ids TEXT,details TEXT,previous_hash TEXT,event_hash TEXT);")
+        for name in ("one", "two", "three"):
+            append_event(connection, name, "operator", (), {})
+        original = connection.execute("SELECT * FROM audit_events ORDER BY seq").fetchall()
+        connection.execute("DELETE FROM audit_events WHERE seq=3")
+        self.assertTrue(verify_chain(connection)[0], "unanchored tail removal cannot be detected")
+        connection.execute("DELETE FROM audit_events"); connection.executemany("INSERT INTO audit_events VALUES(?,?,?,?,?,?,?,?,?)", original)
+        connection.execute("DELETE FROM audit_events WHERE seq=2")
+        self.assertFalse(verify_chain(connection)[0])
+        connection.execute("DELETE FROM audit_events"); connection.executemany("INSERT INTO audit_events VALUES(?,?,?,?,?,?,?,?,?)", original)
+        connection.execute("UPDATE audit_events SET seq=-seq")
+        self.assertFalse(verify_chain(connection)[0])
+        connection.close()
+
+    def test_import_size_utf8_depth_and_field_limits_are_bounded(self):
+        from operator_tools.licence_manager.imports import _json
+        self.assertEqual(_json(b"{}" + b" " * (MAX_ACTIVATION_IMPORT_BYTES - 3), MAX_ACTIVATION_IMPORT_BYTES), {})
+        self.assertEqual(_json(b"{}" + b" " * (MAX_ACTIVATION_IMPORT_BYTES - 2), MAX_ACTIVATION_IMPORT_BYTES), {})
+        with self.assertRaises(ImportRejected): _json(b"{}" + b" " * (MAX_ACTIVATION_IMPORT_BYTES - 1), MAX_ACTIVATION_IMPORT_BYTES)
+        with self.assertRaises(ImportRejected): _json(b"\xff", MAX_ACTIVATION_IMPORT_BYTES)
+        with self.assertRaises(ImportRejected): _json(("[" * 10) + "0" + ("]" * 10), MAX_ACTIVATION_IMPORT_BYTES)
+        with self.assertRaises(ImportRejected): _json('{"value":1e10000}', MAX_ACTIVATION_IMPORT_BYTES)
+        self.assertEqual(_json("{}" + " " * (MAX_APPLICANT_IMPORT_BYTES - 2), MAX_APPLICANT_IMPORT_BYTES), {})
+        with self.assertRaises(ImportRejected): _json("{}" + " " * (MAX_APPLICANT_IMPORT_BYTES - 1), MAX_APPLICANT_IMPORT_BYTES)
+        class OversizedStream:
+            def read(self, count): return b"{}" + b" " * count
+        with self.assertRaises(ImportRejected): _json(OversizedStream(), MAX_ACTIVATION_IMPORT_BYTES)
+        bad = dict(self.applicant, full_name="x" * 257)
+        with self.assertRaises(ImportRejected): import_applicants_json(json.dumps({"schema_version": 1, "applications": [bad]}), self.db)
+        self.approve()
+        oversized_request = dict(self.request, device_public_key="A" * 44)
+        with self.assertRaises(ImportRejected): import_activation_json(json.dumps(oversized_request), self.db)
+
+    def test_failed_commit_and_rollback_recover_connection(self):
+        real = self.db.connection
+        class FailingConnection:
+            def __init__(self, raw, *, rollback_fails=False): self.raw=raw; self.commit_fails=True; self.rollback_fails=rollback_fails
+            @property
+            def in_transaction(self): return self.raw.in_transaction
+            def execute(self, *args, **kwargs): return self.raw.execute(*args, **kwargs)
+            def commit(self):
+                if self.commit_fails: self.commit_fails=False; raise sqlite3.OperationalError("injected commit failure")
+                return self.raw.commit()
+            def rollback(self):
+                if self.rollback_fails: self.rollback_fails=False; raise sqlite3.OperationalError("injected rollback failure")
+                return self.raw.rollback()
+            def close(self): return self.raw.close()
+        self.db.connection = FailingConnection(real)
+        with self.assertRaisesRegex(sqlite3.OperationalError, "injected commit failure"):
+            with self.db.transaction() as db: db.execute("INSERT INTO audit_events(event_id,timestamp,event_type,operator_id,affected_ids,details,previous_hash,event_hash) VALUES('x','t','x','o','[]','{}','','')")
+        self.assertFalse(self.db.connection.in_transaction)
+        with self.db.transaction() as db: db.execute("INSERT INTO audit_events(event_id,timestamp,event_type,operator_id,affected_ids,details,previous_hash,event_hash) VALUES('y','t','x','o','[]','{}','','')")
+        self.db.connection = FailingConnection(self.db.connection, rollback_fails=True)
+        with self.assertRaisesRegex(sqlite3.OperationalError, "injected commit failure"):
+            with self.db.transaction() as db: db.execute("INSERT INTO audit_events(event_id,timestamp,event_type,operator_id,affected_ids,details,previous_hash,event_hash) VALUES('z','t','x','o','[]','{}','','')")
+        self.assertFalse(self.db.connection.in_transaction)
+        with self.db.transaction() as db: db.execute("INSERT INTO audit_events(event_id,timestamp,event_type,operator_id,affected_ids,details,previous_hash,event_hash) VALUES('w','t','x','o','[]','{}','','')")
+        self.assertIsNotNone(self.db.connection.execute("SELECT 1 FROM audit_events WHERE event_id='w'").fetchone())
+
+    def test_issuance_audit_and_database_failures_leave_no_issued_state_and_allow_retry(self):
+        self.import_request(); self.authorize()
+        import operator_tools.licence_manager.issuance as issuance
+        original = issuance.append_event
+        def fail_success(db, event_type, *args, **kwargs):
+            if event_type == "successful_test_issuance": raise sqlite3.OperationalError("injected audit failure")
+            return original(db, event_type, *args, **kwargs)
+        with patch.object(issuance, "append_event", side_effect=fail_success):
+            with self.assertRaises(sqlite3.OperationalError): issue_for_request_for_testing(self.db, EphemeralAuthority(), self.request["request_id"], now=self.issue_time(), confirmed=True)
+        self.assertFalse(self.db.connection.in_transaction)
+        self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
+        self.assertEqual(self.db.connection.execute("SELECT status FROM applicants").fetchone()[0], "APPROVED")
+        self.assertEqual(self.db.connection.execute("SELECT authorized_profile FROM activation_requests").fetchone()[0], "PROFESSOR_BETA")
+        self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences WHERE request_id=?", (self.request["request_id"],)).fetchone()[0], 0)
+        trigger = "CREATE TRIGGER reject_licence_insert BEFORE INSERT ON licences BEGIN SELECT RAISE(ABORT,'injected write failure'); END"
+        self.db.connection.execute(trigger); self.db.connection.commit()
+        with self.assertRaises(sqlite3.IntegrityError): issue_for_request_for_testing(self.db, EphemeralAuthority(), self.request["request_id"], now=self.issue_time(), confirmed=True)
+        self.assertFalse(self.db.connection.in_transaction)
+        self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
+        self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "APPROVED")
+        self.db.connection.execute("DROP TRIGGER reject_licence_insert"); self.db.connection.commit()
+        result = issue_for_request_for_testing(self.db, EphemeralAuthority(), self.request["request_id"], now=self.issue_time(), confirmed=True)
+        self.assertTrue(result[0]["licence_id"])
+
+    def test_export_bundle_is_idempotent_atomic_and_rejects_conflicts_and_symlinks(self):
+        self.import_request(); self.authorize()
+        envelope, event = issue_for_request_for_testing(self.db, EphemeralAuthority(), self.request["request_id"], now=self.issue_time(), confirmed=True)
+        root = self.root / "bundle-export"
+        with patch("operator_tools.licence_manager.exports._write_synced", side_effect=OSError("injected stage failure")):
+            with self.assertRaises(OSError): export_licence(root, envelope, event, database=self.db)
+        final = root / envelope["licence_id"]
+        self.assertFalse(final.exists())
+        original_write = __import__("operator_tools.licence_manager.exports", fromlist=["_write_synced"])._write_synced
+        calls = {"count": 0}
+        def fail_after_licence(path, data):
+            calls["count"] += 1
+            if calls["count"] == 2: raise OSError("injected receipt staging interruption")
+            return original_write(path, data)
+        with patch("operator_tools.licence_manager.exports._write_synced", side_effect=fail_after_licence):
+            with self.assertRaises(OSError): export_licence(root, envelope, event, database=self.db)
+        self.assertFalse(final.exists())
+        with patch("operator_tools.licence_manager.exports._publish_directory_noreplace", side_effect=OSError("injected rename failure")):
+            with self.assertRaises(OSError): export_licence(root, envelope, event, database=self.db)
+        self.assertFalse(final.exists())
+        licence_path, receipt_path = export_licence(root, envelope, event, database=self.db)
+        self.assertEqual(licence_path.read_bytes(), export_licence(root, envelope, event, database=self.db)[0].read_bytes())
+        self.assertEqual(hashlib.sha256(licence_path.read_bytes()).hexdigest(), json.loads(receipt_path.read_text())["licence_file_sha256"])
+        with patch("operator_tools.licence_manager.exports._record_export", side_effect=OSError("injected post-publication audit failure")):
+            with self.assertRaises(OSError): export_licence(self.root / "post-commit-export", envelope, event, database=self.db)
+        recover_root = self.root / "post-commit-export"
+        recovered = export_licence(recover_root, envelope, event, database=self.db)
+        self.assertTrue(recovered[0].is_file() and recovered[1].is_file())
+        partial_root = self.root / "partial-export"; partial = partial_root / envelope["licence_id"]
+        partial.mkdir(parents=True); (partial / "licence.json").write_bytes(licence_path.read_bytes())
+        with self.assertRaises(ExportRecoveryError): export_licence(partial_root, envelope, event, database=self.db)
+        (final / "receipt.json").write_text("{}")
+        with self.assertRaises(ExportRecoveryError): export_licence(root, envelope, event, database=self.db)
+        link = self.root / "export-link"
+        try: link.symlink_to(root, target_is_directory=True)
+        except (OSError, NotImplementedError): return
+        with self.assertRaises(ExportRecoveryError): export_licence(link, envelope, event, database=self.db)
+
+    def test_protected_store_has_no_public_decryption_or_direct_signing_api(self):
+        import operator_tools.licence_manager.signing as signing
+        store = signing._LicenceSigningKeyStore(self.root / "key.dpapi")
+        for name in ("load_private_key", "get_private_key", "decrypt_key", "private_key"):
+            self.assertFalse(hasattr(store, name))
+        with self.assertRaises(SigningUnavailable): store._sign_authorized_lease({}, "lic-a", b"x" * 32, object())
+
+    def test_installer_boundary_reaudits_bundle_and_metadata(self):
+        root = self.root / "installer-bundle"; root.mkdir()
+        for relative in ("QuantumStudio.exe", "assets/quantum-studio-v0.1.svg", "PySide6/qt-plugins/platforms/qwindows.dll", "cryptography/hazmat/bindings/_rust.pyd"):
+            target = root / relative; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(b"fixture")
+        marker = {"schema_version": 1, "product": "Quantum Studio", "version": "0.2.0", "channel": "beta", "platform": "windows", "architecture": "x86_64", "commit": "abc1234", "dirty": False, "build_timestamp":"2026-01-01T00:00:00+00:00", "python":"3.13.0", "pyside6":"6.9.0", "nuitka":"2.7.0", "packaging_format":"nuitka-standalone", "entry_executable": "QuantumStudio.exe", "resource_manifest":"assets/quantum-studio-v0.1.svg"}
+        (root / "quantumstudio-build.json").write_text(json.dumps(marker))
+        inputs = {"schema_version": 1, "product": "Quantum Studio", "version": "0.2.0", "channel":"beta", "platform": "windows", "architecture": "x86_64", "gui_bundle": {"path":"QuantumStudio.dist", "entry": "QuantumStudio.exe"}, "runtime_image": {"status":"PENDING_W7","descriptor":None}, "runtime_agent":{"protocol_schema":1,"status":"included-in-runtime-image"}, "engine_pack": {"status":"PENDING_LEGAL_AND_W7","descriptor":None}, "licenses_notices":{"status":"PENDING_W7","inputs":[]}, "build_manifest": marker}
+        (root / "quantumstudio-installer-input.json").write_text(json.dumps(inputs))
+        self.assertTrue(validate_installer_bundle(root)["valid"])
+        manager = root / "operator_tools" / "licence_manager"; manager.mkdir(parents=True); (manager / "data.sqlite3").write_bytes(b"x")
+        with self.assertRaises(ValueError): validate_installer_bundle(root)
+        (root / "quantumstudio-installer-input.json").unlink()
+        with self.assertRaises(ValueError): validate_installer_bundle(root)
+        (root / "quantumstudio-installer-input.json").write_text(json.dumps(inputs))
+        (root / "operator_tools").rename(root / "operator-tools-removed")
+        (root / "pw.x").write_bytes(b"engine")
+        with self.assertRaises(ValueError): validate_installer_bundle(root)
+        link = self.root / "bundle-link"
+        try: link.symlink_to(root, target_is_directory=True)
+        except (OSError, NotImplementedError): return
+        with self.assertRaises(ValueError): validate_installer_bundle(link)
+        (root / "pw.x").unlink(); inputs["version"] = "mismatch"; (root / "quantumstudio-installer-input.json").write_text(json.dumps(inputs))
+        with self.assertRaises(ValueError): validate_installer_bundle(root)
 
     def test_test_ui_modes_and_customer_package_exclusion(self):
         app = QApplication.instance() or QApplication([])

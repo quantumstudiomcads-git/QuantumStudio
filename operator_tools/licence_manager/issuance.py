@@ -162,8 +162,13 @@ def _issue_from_authoritative_records(database, application_id, request_id, sele
             db.execute("INSERT INTO application_status_history VALUES(?,?,?,?,?,?,?,?)",
                    (str(uuid.uuid4()), app_id, utc_now(), operator_id, status[0], ApplicantStatus.LICENCE_ISSUED.value, "licence_issued", event_id))
     except Exception as error:
-        with database.transaction() as db:
-            append_event(db, "issuance_attempt", operator_id, [app_id, request_id], {"result": "failed", "code": "issuance_failed"})
+        try:
+            with database.transaction() as db:
+                append_event(db, "issuance_attempt", operator_id, [app_id, request_id], {"result": "failed", "code": "issuance_failed"})
+        except Exception:
+            # The failed issuance remains failed; failure telemetry must not
+            # conceal the primary error or falsely claim issuance success.
+            pass
         if isinstance(error, SigningUnavailable): raise IssuanceRejected("Signing authority is unavailable.") from error
         raise
     return envelope, event_id

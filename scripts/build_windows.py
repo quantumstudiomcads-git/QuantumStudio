@@ -15,10 +15,10 @@ if str(_REPO) not in sys.path: sys.path.insert(0, str(_REPO))
 
 try:
     from .windows_packaging import (EXECUTABLE_NAME, MSVC_APPEND_OPTIONS, PACKAGE_MARKER, WindowsBuildError, audit_package_contents,
-                                    build_plan, installer_input_manifest, normalize_architecture, safe_clean_output, write_json)
+                                    build_plan, generate_payload_inventory, installer_input_manifest, normalize_architecture, safe_clean_output, write_json)
 except ImportError:  # direct script execution
     from windows_packaging import (EXECUTABLE_NAME, MSVC_APPEND_OPTIONS, PACKAGE_MARKER, WindowsBuildError, audit_package_contents,
-                                   build_plan, installer_input_manifest, normalize_architecture, safe_clean_output, write_json)
+                                   build_plan, generate_payload_inventory, installer_input_manifest, normalize_architecture, safe_clean_output, write_json)
 from backend.runtime.identity import VERSION
 
 
@@ -96,7 +96,12 @@ def main(argv=None) -> int:
             raise WindowsBuildError("PACKAGE_AUDIT_FAILED: " + audit["reason"] + (": " + ", ".join(details) if details else ""))
         manifest = plan.manifest(python_version=platform.python_version(), pyside6_version=dependency_version("PySide6"), nuitka_version=dependency_version("Nuitka"), timestamp=environment["QUANTUM_STUDIO_BUILD_TIMESTAMP"])
         write_json(bundle / PACKAGE_MARKER, manifest); write_json(bundle / "quantumstudio-installer-input.json", installer_input_manifest(plan, manifest))
-        print(json.dumps({"status": "BUILT", "bundle": str(bundle), "manifest": manifest, "audit": audit}, indent=2)); return 0
+        inventory = generate_payload_inventory(bundle, manifest, generated_at=environment["QUANTUM_STUDIO_BUILD_TIMESTAMP"])
+        final_audit = audit_package_contents(bundle)
+        if not final_audit["valid"]:
+            raise WindowsBuildError("FINAL_PACKAGE_AUDIT_FAILED: " + final_audit["reason"])
+        print(json.dumps({"status": "BUILT", "bundle": str(bundle), "manifest": manifest,
+                          "inventory_files": len(inventory["files"]), "audit": final_audit}, indent=2)); return 0
     except WindowsBuildError as error:
         print(f"WINDOWS_BUILD_ERROR: {error}", file=sys.stderr); return 2
 

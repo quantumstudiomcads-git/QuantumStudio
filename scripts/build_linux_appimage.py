@@ -20,7 +20,7 @@ _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 from backend.release import APP_VERSION, PRODUCT_NAME
-from scripts.package_exclusions import customer_package_exclusion_findings
+from scripts.windows_packaging import audit_customer_package_contents
 
 
 class LinuxBuildError(RuntimeError):
@@ -69,13 +69,20 @@ def main(argv=None) -> int:
         if len(candidates) != 1:
             raise LinuxBuildError("NUITKA_STANDALONE_OUTPUT_MISSING")
         appdir = output / "QuantumStudio.AppDir"; bundle = candidates[0]
+        build_audit = audit_customer_package_contents(bundle)
+        if not build_audit["valid"]:
+            raise LinuxBuildError("LINUX_BUILD_PAYLOAD_AUDIT_FAILED: " + ", ".join(build_audit["forbidden"]))
         target = appdir / "usr" / "bin"; target.parent.mkdir(parents=True); shutil.copytree(bundle, target)
-        if customer_package_exclusion_findings(appdir):
-            raise LinuxBuildError("OPERATOR_TOOL_IN_CUSTOMER_PACKAGE")
+        package_audit = audit_customer_package_contents(appdir)
+        if not package_audit["valid"]:
+            raise LinuxBuildError("LINUX_PACKAGE_AUDIT_FAILED: " + ", ".join(package_audit["forbidden"]))
         desktop = appdir / "quantum-studio.desktop"
         desktop.write_text("[Desktop Entry]\nType=Application\nName=Quantum Studio\nExec=QuantumStudio\nIcon=quantum-studio\nCategories=Science;Education;\n", encoding="utf-8")
         shutil.copy2(_REPO / "assets" / "quantum-studio-v0.1.svg", appdir / "quantum-studio.svg")
         app_run = appdir / "AppRun"; app_run.write_text("#!/bin/sh\nexec \"$APPDIR/usr/bin/QuantumStudio\" \"$@\"\n", encoding="utf-8"); app_run.chmod(0o755)
+        package_audit = audit_customer_package_contents(appdir)
+        if not package_audit["valid"]:
+            raise LinuxBuildError("LINUX_PACKAGE_AUDIT_FAILED: " + ", ".join(package_audit["forbidden"]))
         artifact = output / f"QuantumStudio-Linux-x86_64-{APP_VERSION}.AppImage"
         if subprocess.run([appimagetool, str(appdir), str(artifact)], cwd=output, shell=False, check=False).returncode:
             raise LinuxBuildError("APPIMAGETOOL_FAILED")

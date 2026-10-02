@@ -39,7 +39,7 @@ from operator_tools.licence_manager.policy import derive_profile
 from operator_tools.licence_manager.signing import (ProductionAuthority,
     AuthorityState, SigningUnavailable, TestEphemeralAuthority as EphemeralAuthority, record_public_metadata)
 from scripts.package_exclusions import customer_package_exclusion_findings
-from scripts.windows_packaging import audit_package_contents, build_plan
+from scripts.windows_packaging import audit_package_contents, build_plan, generate_payload_inventory
 from scripts.windows_installer.payload_audit import audit_installer_payload
 from scripts.build_windows_installer import validate_installer_bundle
 from frontend.calculations.catalog import CALCULATIONS
@@ -822,6 +822,7 @@ class LicenceManagerTests(unittest.TestCase):
         (root / "quantumstudio-build.json").write_text(json.dumps(marker))
         inputs = {"schema_version": 1, "product": "Quantum Studio", "version": "0.2.0", "channel":"beta", "platform": "windows", "architecture": "x86_64", "gui_bundle": {"path":"QuantumStudio.dist", "entry": "QuantumStudio.exe"}, "runtime_image": {"status":"PENDING_W7","descriptor":None}, "runtime_agent":{"protocol_schema":1,"status":"included-in-runtime-image"}, "engine_pack": {"status":"PENDING_LEGAL_AND_W7","descriptor":None}, "licenses_notices":{"status":"PENDING_W7","inputs":[]}, "build_manifest": marker}
         (root / "quantumstudio-installer-input.json").write_text(json.dumps(inputs))
+        generate_payload_inventory(root, marker, generated_at="2026-01-01T00:00:00+00:00")
         self.assertTrue(validate_installer_bundle(root)["valid"])
         manager = root / "operator_tools" / "licence_manager"; manager.mkdir(parents=True); (manager / "data.sqlite3").write_bytes(b"x")
         with self.assertRaises(ValueError): validate_installer_bundle(root)

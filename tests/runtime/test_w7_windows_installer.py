@@ -18,6 +18,7 @@ from scripts.windows_installer.system import FEATURES, is_windows_11, prerequisi
 from scripts.windows_installer.payload_audit import audit_installer_payload
 from scripts.windows_installer.runtime_adapter import ManagedRuntimeInstallerAdapter
 from scripts.build_windows_installer import installer_script
+from scripts.windows_packaging import generate_payload_inventory
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -64,6 +65,7 @@ class WindowsInstallerTests(unittest.TestCase):
             (bundle/"quantumstudio-build.json").write_text(json.dumps(marker))
             inputs={"schema_version":1,"product":"Quantum Studio","version":"0.2.0","channel":"beta","platform":"windows","architecture":"x86_64","gui_bundle":{"path":"QuantumStudio.dist","entry":"QuantumStudio.exe"},"runtime_image":{"status":"PENDING_W7","descriptor":None},"runtime_agent":{"protocol_schema":1,"status":"included-in-runtime-image"},"engine_pack":{"status":"PENDING_LEGAL_AND_W7","descriptor":None},"licenses_notices":{"status":"PENDING_W7","inputs":[]},"build_manifest":marker}
             (bundle/"quantumstudio-installer-input.json").write_text(json.dumps(inputs))
+            generate_payload_inventory(bundle, marker, generated_at="2026-01-01T00:00:00+00:00")
             script = installer_script(app_bundle=bundle, output=Path("C:/installer-output"), version="0.2.0")
 
         for directive in (

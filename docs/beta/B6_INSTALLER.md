@@ -30,6 +30,31 @@ reinstall/uninstall execution are consequently pending the approved Inno Setup
 6 toolchain. This is a build-environment gate, not a reason to replace the
 existing installer architecture.
 
+## Verified customer payload boundary
+
+The authoritative Windows standalone build writes
+`quantumstudio-payload-inventory.json` only after the standalone payload,
+`quantumstudio-build.json`, and `quantumstudio-installer-input.json` are
+final. The versioned inventory lists every payload file except itself by
+canonical forward-slash path, byte size, and lowercase SHA-256. The installer
+builder rejects legacy/uninventoried bundles, compares the exact file set and
+metadata, streams hashes, runs path and content audits, then rechecks the
+bundle immediately before publishing the `.iss` file and invoking ISCC.
+
+Customer package audits do not trust filename extensions. They reject known
+SQLite database/journal/WAL signatures, private-key PEM material, known
+Licence Manager protected-key purpose/envelope fields, applicant/audit export
+records, receipts, and pre-issued signed licences. ZIP-compatible and other
+recognized archive/container formats are forbidden in customer bundles rather
+than recursively unpacked. Linux AppImage staging reuses the content-sensitive
+audit, but does not yet have the Windows canonical payload inventory format.
+
+These checks detect known formats and verify the exact inventoried build
+payload; they cannot classify every possible encrypted or arbitrary byte
+sequence. Clean source control, build-host custody, and release provenance
+remain part of the release trust boundary. Existing accepted artifacts are
+not retrofitted by this change.
+
 `QuantumStudioRuntime` is exactly the private WSL2 identity managed by the
 existing W3 provisioner.  It uses the managed LocalAppData runtime root and a
 fixed, structured `wsl.exe --import QuantumStudioRuntime ... --version 2`

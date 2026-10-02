@@ -10,6 +10,8 @@ The Licence Manager is an operator-only PySide6 desktop application launched wit
 
 This is an in-process application boundary: imported data cannot directly choose signed claims, and supported manager code has no production API for arbitrary-payload signing. Python does not isolate code within the process; arbitrary code execution in the operator process or compromise of the Windows account defeats this boundary.
 
+Production authority status is metadata-only: it checks metadata syntax and public-key encoding plus protected-blob file presence. A present protected blob is reported as unverified, never as ready or currently valid. Startup, refresh, review, imports, and profile selection do not decrypt the licence key. The normal production DPAPI-unprotect path is reached only after issuance authorization and request/device/policy validation have been repeated inside `BEGIN IMMEDIATE`. Private-key references are released immediately after signing and are not cached on the authority object. Python cannot guarantee complete memory zeroization; process or Windows-account compromise defeats this boundary. A last-use success shown during the running manager session is historical evidence and does not verify the current protected blob.
+
 The existing client licence verifier authenticates canonical JSON envelopes and device binding. The manager retains that schema and adds policy metadata as signed fields. It supplies explicit entitlement lists; it does not use wildcard grants. A request's `requested_profile` is never authorization: the operator makes a separate audited local profile decision before issuance.
 
 ## Data and PII

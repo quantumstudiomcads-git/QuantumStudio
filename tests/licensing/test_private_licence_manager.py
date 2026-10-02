@@ -34,7 +34,7 @@ from operator_tools.licence_manager.main_window import LicenceManagerWindow
 from operator_tools.licence_manager.models import ApplicantStatus, Profile
 from operator_tools.licence_manager.policy import derive_profile
 from operator_tools.licence_manager.signing import (LicenceSigningKeyStore, ProductionAuthority,
-    SigningUnavailable, TestEphemeralAuthority as EphemeralAuthority, record_public_metadata)
+    AuthorityState, SigningUnavailable, TestEphemeralAuthority as EphemeralAuthority, record_public_metadata)
 from scripts.package_exclusions import customer_package_exclusion_findings
 from scripts.windows_packaging import audit_package_contents, build_plan
 from scripts.windows_installer.payload_audit import audit_installer_payload
@@ -239,10 +239,60 @@ class LicenceManagerTests(unittest.TestCase):
 
     def test_production_authority_fails_closed_and_has_no_key_generation(self):
         authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
-        self.assertFalse(authority.status().available)
+        self.assertEqual(authority.status().state, AuthorityState.UNINITIALIZED)
         self.assertFalse(hasattr(authority, "sign"))
         self.assertFalse(hasattr(authority, "sign_lease"))
         self.assertFalse((self.root / "missing.dpapi").exists())
+
+    def test_production_status_is_structural_and_never_decrypts(self):
+        import operator_tools.licence_manager.signing as signing
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        with patch.object(signing, "dpapi_unprotect", side_effect=AssertionError("status decrypted key")) as unprotect:
+            authority = ProductionAuthority(self.root / "key.dpapi", self.root / "public.json", database=self.db)
+            unprotect.assert_not_called()
+            self.assertEqual(authority.status().state, AuthorityState.UNINITIALIZED)
+            public_key = Ed25519PrivateKey.generate().public_key().public_bytes_raw()
+            authority.metadata_path.write_text(json.dumps({"schema_version": 1, "kid": "lic-status", "public_key": b64url_encode(public_key)}))
+            self.assertEqual(authority.status().state, AuthorityState.PROTECTED_KEY_MISSING)
+            authority.key_path.write_bytes(b"opaque protected test blob")
+            first = authority.status()
+            second = authority.status()
+            self.assertEqual(first.state, AuthorityState.PROTECTED_KEY_PRESENT_UNVERIFIED)
+            self.assertIn("validated only during an authorized issuance", first.message)
+            self.assertEqual(second.state, AuthorityState.PROTECTED_KEY_PRESENT_UNVERIFIED)
+            unprotect.assert_not_called()
+
+    def test_status_reports_invalid_metadata_without_decrypting(self):
+        import operator_tools.licence_manager.signing as signing
+        authority = ProductionAuthority(self.root / "key.dpapi", self.root / "public.json", database=self.db)
+        authority.metadata_path.write_text("{broken")
+        authority.key_path.write_bytes(b"opaque protected test blob")
+        with patch.object(signing, "dpapi_unprotect", side_effect=AssertionError("invalid metadata status decrypted key")) as unprotect:
+            status = authority.status()
+            self.assertEqual(status.state, AuthorityState.METADATA_INVALID)
+            self.assertEqual(status.message, "Signing authority metadata is invalid.")
+            unprotect.assert_not_called()
+
+    def test_window_startup_refresh_import_and_profile_selection_never_decrypt_signing_key(self):
+        import operator_tools.licence_manager.signing as signing
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication([])
+        authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
+        with patch.object(signing, "dpapi_unprotect", side_effect=AssertionError("UI decrypted signing key")) as unprotect:
+            window = LicenceManagerWindow(test_mode=False, database=self.db, authority=authority)
+            self.addCleanup(window.close)
+            window.refresh()
+            import_applicants_json(json.dumps({"schema_version": 1, "applications": []}), self.db)
+            unprotect.assert_not_called()
+            self.approve(); import_activation_json(json.dumps(self.request), self.db)
+            unprotect.assert_not_called()
+            window.refresh()
+            window.requests_table.selectRow(0)
+            with patch("operator_tools.licence_manager.main_window.QInputDialog.getItem", return_value=("PROFESSOR_BETA", True)), \
+                 patch("operator_tools.licence_manager.main_window.QMessageBox.question", side_effect=[QMessageBox.Yes, QMessageBox.No]):
+                window.issue_selected()
+            unprotect.assert_not_called()
+        app.processEvents()
 
     def test_production_authority_has_only_narrow_identifier_profile_api(self):
         import inspect
@@ -261,18 +311,57 @@ class LicenceManagerTests(unittest.TestCase):
             self.import_request(); self.authorize()
             with self.assertRaises(IssuanceRejected): authority.issue(str(uuid.uuid4()), self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
             load.assert_not_called()
+            self.db.connection.execute("UPDATE applicants SET status='REJECTED' WHERE application_id=?", (self.application_id,)); self.db.connection.commit()
+            with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+            load.assert_not_called()
+            self.db.connection.execute("UPDATE applicants SET status='APPROVED' WHERE application_id=?", (self.application_id,)); self.db.connection.commit()
             self.db.transition(self.application_id, ApplicantStatus.REVOKED)
             with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
             load.assert_not_called()
 
+    def test_missing_confirmation_invalid_profile_and_policy_failure_do_not_load_key(self):
+        import operator_tools.licence_manager.issuance as issuance
+        authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
+        self.import_request(); self.authorize()
+        with patch.object(authority, "_load", side_effect=AssertionError("unauthorized key load")) as load:
+            with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA)
+            with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], "NOT_A_PROFILE", confirmed=True)
+            with patch.object(issuance, "derive_profile", side_effect=IssuanceRejected("fixture policy failure")):
+                with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+            load.assert_not_called()
+            stored_json = self.db.connection.execute("SELECT request_json FROM activation_requests WHERE request_id=?", (self.request["request_id"],)).fetchone()[0]
+            self.db.connection.execute("UPDATE activation_requests SET request_json=?", ('{"schema_version":999}',)); self.db.connection.commit()
+            with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+            load.assert_not_called()
+            self.db.connection.execute("UPDATE activation_requests SET request_json=?", (stored_json,)); self.db.connection.commit()
+
     def test_production_issue_signs_only_database_derived_lease(self):
+        import operator_tools.licence_manager.signing as signing
         from cryptography.hazmat.primitives import serialization
         self.import_request(); self.authorize()
         key = Ed25519PrivateKey.generate()
         raw = key.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
-        authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
-        with patch.object(authority, "_load", return_value=(key, "lic-p1b-fixture")):
+        protected = self.root / "key.dpapi"; protected.write_bytes(b"opaque protected test blob")
+        metadata = self.root / "public.json"
+        metadata.write_text(json.dumps({"schema_version": 1, "kid": "lic-p1b-fixture", "public_key": b64url_encode(key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))}))
+        authority = ProductionAuthority(protected, metadata, database=self.db)
+        def unprotect_after_checks(blob):
+            self.assertEqual(blob, b"opaque protected test blob")
+            self.assertTrue(self.db.connection.in_transaction)
+            self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "APPROVED")
+            self.assertEqual(self.db.connection.execute("SELECT authorized_profile FROM activation_requests WHERE request_id=?", (self.request["request_id"],)).fetchone()[0], "PROFESSOR_BETA")
+            stored_json, stored_hash = self.db.connection.execute("SELECT request_json,request_hash FROM activation_requests WHERE request_id=?", (self.request["request_id"],)).fetchone()
+            stored_request = json.loads(stored_json)
+            self.assertEqual(hashlib.sha256(json.dumps(stored_request, sort_keys=True, separators=(",", ":")).encode()).hexdigest(), stored_hash)
+            self.assertEqual(stored_request["product"], "Quantum Studio")
+            self.assertEqual(stored_request["platform"], "windows-x86_64")
+            self.assertEqual(stored_request["device_id"], self.device.device_id)
+            self.assertEqual(stored_request["device_public_key_hash"], self.device.public_key_hash)
+            self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
+            return raw
+        with patch.object(signing.sys, "platform", "win32"), patch.object(signing, "dpapi_unprotect", side_effect=unprotect_after_checks) as unprotect:
             envelope, event = authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+        unprotect.assert_called_once()
         verified = LeaseVerifier({"lic-p1b-fixture": key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)}).verify(envelope, self.device)
         self.assertEqual(len(verified.lease.calculation_entitlements), 29)
         self.assertEqual(envelope["expires_at"] - envelope["issued_at"], 90 * 86400)
@@ -280,42 +369,65 @@ class LicenceManagerTests(unittest.TestCase):
         self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "LICENCE_ISSUED")
         self.assertTrue(self.db.connection.execute("SELECT 1 FROM audit_events WHERE event_id=? AND event_type='licence_issuance'", (event,)).fetchone())
         self.assertNotIn(raw, self.db.path.read_bytes())
+        self.assertEqual(authority.status().state, AuthorityState.LAST_AUTHORIZED_USE_SUCCEEDED)
+        self.assertIn("current protected key has not been rechecked", authority.status().message)
         with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
         self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 1)
 
     def test_production_issuance_rejects_malformed_database_request_and_rolls_back_audit_failure(self):
-        from cryptography.hazmat.primitives import serialization
         self.import_request(); self.authorize()
-        authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
-        key = Ed25519PrivateKey.generate()
-        with patch.object(authority, "_load", return_value=(key, "lic-p1b-failure")):
-            self.db.connection.execute("UPDATE activation_requests SET request_json=?", ('{"schema_version":999}',)); self.db.connection.commit()
-            with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
-            self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
-            self.db.connection.execute("UPDATE activation_requests SET request_json=?,request_hash=?", (json.dumps(self.request, sort_keys=True, separators=(",", ":")), hashlib.sha256(json.dumps(self.request, sort_keys=True, separators=(",", ":")).encode()).hexdigest()))
-            self.db.connection.execute("CREATE TRIGGER fail_licence_insert BEFORE INSERT ON licences BEGIN SELECT RAISE(ABORT,'test database failure'); END")
-            self.db.connection.commit()
-            with self.assertRaises(sqlite3.DatabaseError): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
-            self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
-            self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "APPROVED")
-            self.db.connection.execute("DROP TRIGGER fail_licence_insert")
-            self.db.connection.execute("CREATE TRIGGER fail_issuance_audit BEFORE INSERT ON audit_events WHEN NEW.event_type='licence_issuance' BEGIN SELECT RAISE(ABORT,'test audit failure'); END")
-            self.db.connection.commit()
-            with self.assertRaises(sqlite3.DatabaseError): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+        authority = EphemeralAuthority(kid="test-lic-p1b-failure")
+        self.db.connection.execute("UPDATE activation_requests SET request_json=?", ('{"schema_version":999}',)); self.db.connection.commit()
+        with self.assertRaises(IssuanceRejected): issue_for_request_for_testing(self.db, authority, self.request["request_id"], confirmed=True)
+        self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
+        self.db.connection.execute("UPDATE activation_requests SET request_json=?,request_hash=?", (json.dumps(self.request, sort_keys=True, separators=(",", ":")), hashlib.sha256(json.dumps(self.request, sort_keys=True, separators=(",", ":")).encode()).hexdigest()))
+        self.db.connection.execute("CREATE TRIGGER fail_licence_insert BEFORE INSERT ON licences BEGIN SELECT RAISE(ABORT,'test database failure'); END")
+        self.db.connection.commit()
+        with self.assertRaises(sqlite3.DatabaseError): issue_for_request_for_testing(self.db, authority, self.request["request_id"], confirmed=True)
+        self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
+        self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "APPROVED")
+        self.db.connection.execute("DROP TRIGGER fail_licence_insert")
+        self.db.connection.execute("CREATE TRIGGER fail_issuance_audit BEFORE INSERT ON audit_events WHEN NEW.event_type='successful_test_issuance' BEGIN SELECT RAISE(ABORT,'test audit failure'); END")
+        self.db.connection.commit()
+        with self.assertRaises(sqlite3.DatabaseError): issue_for_request_for_testing(self.db, authority, self.request["request_id"], confirmed=True)
         self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
         self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "APPROVED")
 
     def test_signing_public_metadata_mismatch_fails_closed(self):
         import operator_tools.licence_manager.signing as signing
         from cryptography.hazmat.primitives import serialization
+        self.import_request(); self.authorize()
         private = Ed25519PrivateKey.generate()
-        protected = self.root / "key.dpapi"; protected.write_bytes(b"test protected fixture")
+        protected = self.root / "key.dpapi"; protected.write_bytes(b"opaque protected test blob")
         metadata = self.root / "public.json"
         metadata.write_text(json.dumps({"schema_version": 1, "kid": "lic-fixture", "public_key": b64url_encode(b"x" * 32)}))
-        authority = ProductionAuthority(protected, metadata)
+        authority = ProductionAuthority(protected, metadata, database=self.db)
         raw = private.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
-        with patch.object(signing.sys, "platform", "win32"), patch.object(signing, "dpapi_unprotect", return_value=raw):
-            self.assertFalse(authority.status().available)
+        with patch.object(signing.sys, "platform", "win32"), patch.object(signing, "dpapi_unprotect", return_value=raw) as unprotect:
+            self.assertEqual(authority.status().state, AuthorityState.PROTECTED_KEY_PRESENT_UNVERIFIED)
+            unprotect.assert_not_called()
+            with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+            unprotect.assert_called_once()
+        self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
+        self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "APPROVED")
+        self.assertEqual(authority.status().state, AuthorityState.LAST_AUTHORIZED_USE_FAILED)
+
+    def test_corrupt_protected_key_rolls_back_and_records_only_redacted_failure(self):
+        import operator_tools.licence_manager.signing as signing
+        self.import_request(); self.authorize()
+        key_path = self.root / "corrupt-key.dpapi"; key_path.write_bytes(b"opaque corrupted test blob")
+        metadata_path = self.root / "public.json"
+        public = Ed25519PrivateKey.generate().public_key().public_bytes_raw()
+        metadata_path.write_text(json.dumps({"schema_version": 1, "kid": "lic-corrupt-fixture", "public_key": b64url_encode(public)}))
+        authority = ProductionAuthority(key_path, metadata_path, database=self.db)
+        with patch.object(signing.sys, "platform", "win32"), patch.object(signing, "dpapi_unprotect", side_effect=ProtectionUnavailable("protected test blob cannot be unwrapped")) as unprotect:
+            with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+            unprotect.assert_called_once()
+        self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
+        self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "APPROVED")
+        details = json.dumps([row[0] for row in self.db.connection.execute("SELECT details FROM audit_events")])
+        self.assertNotIn("protected test blob cannot be unwrapped", details)
+        self.assertEqual(authority.status().state, AuthorityState.LAST_AUTHORIZED_USE_FAILED)
 
     def test_dpapi_signing_store_is_explicit_protected_and_refuses_replacement(self):
         import operator_tools.licence_manager.signing as signing
@@ -402,7 +514,7 @@ class LicenceManagerTests(unittest.TestCase):
         self.assertIn("TEST MODE", window.mode_banner.text())
         production = LicenceManagerWindow(test_mode=False, database=self.db, authority=ProductionAuthority(self.root / "missing", self.root / "no.json"))
         self.addCleanup(production.close)
-        self.assertIn("SIGNING AUTHORITY UNAVAILABLE", production.authority_banner.text())
+        self.assertIn("Production signing authority is not initialized.", production.authority_banner.text())
         staging = self.root / "bundle"; (staging / "frontend").mkdir(parents=True)
         (staging / "frontend" / "main.py").write_text("pass")
         self.assertEqual(customer_package_exclusion_findings(staging), ())

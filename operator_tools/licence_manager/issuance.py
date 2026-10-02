@@ -12,7 +12,7 @@ from backend.licensing.verifier import public_key_hash
 from .audit import append_event
 from .models import ApplicantStatus, Profile, TRANSITIONS
 from .policy import derive_profile
-from .signing import SigningUnavailable
+from .signing import AuthorityState, SigningUnavailable
 
 
 PRODUCT = "Quantum Studio"
@@ -196,16 +196,18 @@ def _record_signing_metadata_in_transaction(db, authority, operator_id):
     """Persist public metadata and its audit event in the issuance transaction."""
     from .audit import utc_now
     status = authority.status()
-    if not status.available:
+    if not status.kid or status.public_key is None or status.state in {
+        AuthorityState.UNINITIALIZED, AuthorityState.METADATA_INVALID, AuthorityState.PROTECTED_KEY_MISSING,
+    }:
         raise IssuanceRejected("Signing authority is unavailable.")
-    public_key = bytes(authority.public_key)
+    public_key = bytes(status.public_key)
     domain = "test-licence" if status.mode == "TEST" else "licence"
     existing = db.execute("SELECT public_key,domain FROM signing_keys WHERE kid=?", (status.kid,)).fetchone()
     if existing and (bytes(existing[0]) != public_key or existing[1] != domain):
         raise IssuanceRejected("Stored signing metadata does not match the active authority.")
     if not existing:
         db.execute("INSERT INTO signing_keys VALUES(?,?,?,?,?)", (status.kid, public_key, domain, utc_now(), "active"))
-    append_event(db, "signing_authority_status", operator_id, [status.kid], {"available": True, "mode": status.mode, "domain": domain})
+    append_event(db, "signing_authority_status", operator_id, [status.kid], {"state": status.state.value, "mode": status.mode, "domain": domain})
 
 
 def revoke_licence(database, licence_id: str, *, operator_id="operator", note_code="administrative_revocation", confirmed=False):

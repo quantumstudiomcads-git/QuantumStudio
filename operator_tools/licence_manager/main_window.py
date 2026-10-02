@@ -18,7 +18,7 @@ from .exports import export_licence
 from .imports import import_activation_json, import_applicants_json
 from .issuance import authorize_activation_profile, issue_for_request_for_testing, record_expiries, revoke_licence
 from .paths import data_root
-from .signing import ProductionAuthority, TestEphemeralAuthority, public_key_record, record_public_metadata
+from .signing import AuthorityState, ProductionAuthority, TestEphemeralAuthority, public_key_record, record_public_metadata
 from .models import Profile
 from PySide6.QtSvgWidgets import QSvgWidget
 
@@ -64,9 +64,10 @@ class LicenceManagerWindow(QMainWindow):
         status = self.authority.status()
         from .audit import append_event
         with self.database.transaction() as db:
-            append_event(db, "signing_authority_status", self.operator_id, [], {"available": status.available, "mode": status.mode})
-        self.authority_banner = QLabel("SIGNING AUTHORITY UNAVAILABLE" if not status.available else f"Signing authority available · {status.mode} · {status.kid}")
-        self.authority_banner.setStyleSheet("background:#ffe3e3;color:#842525;padding:9px;border-radius:4px;font-weight:600" if not status.available else "background:#dff5e9;color:#145c39;padding:9px;border-radius:4px")
+            append_event(db, "signing_authority_status", self.operator_id, [], {"state": status.state.value, "mode": status.mode})
+        self.authority_banner = QLabel(status.message)
+        unavailable = status.state in {AuthorityState.UNINITIALIZED, AuthorityState.METADATA_INVALID, AuthorityState.PROTECTED_KEY_MISSING}
+        self.authority_banner.setStyleSheet("background:#ffe3e3;color:#842525;padding:9px;border-radius:4px;font-weight:600" if unavailable else "background:#fff0c2;color:#704800;padding:9px;border-radius:4px;font-weight:600")
         layout.addWidget(self.authority_banner)
         body = QHBoxLayout(); self.nav = QListWidget(); self.nav.addItems(["Dashboard", "Applications", "Application Details", "Activation Requests", "Issue Licence", "Licences", "Audit Log", "Settings / Signing Authority"])
         self.pages = QStackedWidget(); body.addWidget(self.nav, 1); body.addWidget(self.pages, 4); layout.addLayout(body)
@@ -122,10 +123,14 @@ class LicenceManagerWindow(QMainWindow):
         status = self.authority.status()
         from .audit import append_event
         with self.database.transaction() as audit_db:
-            append_event(audit_db, "signing_authority_status", self.operator_id, [], {"available": status.available, "mode": status.mode})
+            append_event(audit_db, "signing_authority_status", self.operator_id, [], {"state": status.state.value, "mode": status.mode})
+        unavailable = status.state in {AuthorityState.UNINITIALIZED, AuthorityState.METADATA_INVALID, AuthorityState.PROTECTED_KEY_MISSING}
+        self.authority_banner.setText(status.message)
+        self.authority_banner.setStyleSheet("background:#ffe3e3;color:#842525;padding:9px;border-radius:4px;font-weight:600" if unavailable else "background:#fff0c2;color:#704800;padding:9px;border-radius:4px;font-weight:600")
         awaiting = counts["APPLIED"] + db.execute("SELECT COUNT(*) FROM applicants WHERE status='UNDER_REVIEW'").fetchone()[0]
         self.dashboard.setPlainText(f"Applications awaiting review: {awaiting}\nApproved applicants awaiting activation: {awaiting_activation}\nLicences expiring within 30 days: {expiring}\nExpired licences: {expired_licences}\nRevoked licences: {revoked_licences}\nSigning authority: {status.message}")
-        self.settings.setPlainText(f"Mode: {status.mode}\nStatus: {status.message}\nKey ID: {status.kid or '—'}\nFingerprint: {status.public_key_fingerprint or '—'}\nProduction key initialization is intentionally unavailable in this release.\nLicence trust is separate from updater signing.")
+        history = f"\nHistorical last authorized use: {status.last_authorized_use_at}" if status.last_authorized_use_at else ""
+        self.settings.setPlainText(f"Mode: {status.mode}\nState: {status.state.value}\nStatus: {status.message}{history}\nKey ID: {status.kid or '—'}\nPublic-key fingerprint: {status.public_key_fingerprint or '—'}\nProduction key initialization is intentionally unavailable in this release.\nLicence trust is separate from updater signing.")
 
     @staticmethod
     def _fill(table, db, query, headers):
@@ -216,7 +221,7 @@ class LicenceManagerWindow(QMainWindow):
 
     def export_public_key(self):
         status = self.authority.status()
-        if not status.available:
+        if not status.kid or status.public_key is None or status.state in {AuthorityState.UNINITIALIZED, AuthorityState.METADATA_INVALID, AuthorityState.PROTECTED_KEY_MISSING}:
             QMessageBox.warning(self, "Signing authority unavailable", status.message)
             return
         try:

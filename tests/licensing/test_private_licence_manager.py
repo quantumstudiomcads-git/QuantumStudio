@@ -15,7 +15,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from backend.licensing.canonical import b64url_encode
 from backend.licensing.models import ImplementationState
@@ -29,7 +29,7 @@ from operator_tools.licence_manager.database import Database
 from operator_tools.licence_manager.exports import export_licence, receipt_for
 from operator_tools.licence_manager.imports import ImportRejected, import_activation_json, import_applicants_json
 from operator_tools.licence_manager.issuance import (IssuanceRejected, authorize_activation_profile,
-    issue_for_request, record_expiries, revoke_licence)
+    issue_for_request_for_testing, record_expiries, revoke_licence)
 from operator_tools.licence_manager.main_window import LicenceManagerWindow
 from operator_tools.licence_manager.models import ApplicantStatus, Profile
 from operator_tools.licence_manager.policy import derive_profile
@@ -147,7 +147,7 @@ class LicenceManagerTests(unittest.TestCase):
         with self.assertRaises(ImportRejected): import_activation_json(json.dumps(conflicting), self.db)
         self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM activation_requests").fetchone()[0], 1)
         self.assertTrue(self.db.connection.execute("SELECT 1 FROM audit_events WHERE event_type='duplicate_import'").fetchone())
-        with self.assertRaises(IssuanceRejected): issue_for_request(self.db, EphemeralAuthority(), self.request["request_id"], confirmed=True)
+        with self.assertRaises(IssuanceRejected): issue_for_request_for_testing(self.db, EphemeralAuthority(), self.request["request_id"], confirmed=True)
 
     def test_activation_request_rejects_extra_capability_and_stale_timestamp(self):
         self.approve()
@@ -159,11 +159,11 @@ class LicenceManagerTests(unittest.TestCase):
         self.request["requested_profile"] = "INTERNAL_VALIDATION"
         self.import_request()
         with self.assertRaises(IssuanceRejected):
-            issue_for_request(self.db, EphemeralAuthority(), self.request["request_id"], now=self.issue_time(), confirmed=True)
+            issue_for_request_for_testing(self.db, EphemeralAuthority(), self.request["request_id"], now=self.issue_time(), confirmed=True)
         self.assertIsNone(self.db.connection.execute("SELECT authorized_profile FROM activation_requests").fetchone()[0])
         self.authorize(Profile.PROFESSOR_BETA)
         authority = EphemeralAuthority()
-        envelope, _ = issue_for_request(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
+        envelope, _ = issue_for_request_for_testing(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
         self.assertEqual(envelope["policy_profile"], "PROFESSOR_BETA")
         self.assertEqual(len(envelope["calculation_entitlements"]), 29)
 
@@ -174,7 +174,7 @@ class LicenceManagerTests(unittest.TestCase):
         self.db.connection.execute("UPDATE activation_requests SET request_json=?", (json.dumps(changed_request),))
         self.db.connection.commit()
         with self.assertRaises(IssuanceRejected):
-            issue_for_request(self.db, EphemeralAuthority(), self.request["request_id"], now=self.issue_time(), confirmed=True)
+            issue_for_request_for_testing(self.db, EphemeralAuthority(), self.request["request_id"], now=self.issue_time(), confirmed=True)
         self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
         self.assertTrue(self.db.connection.execute("SELECT 1 FROM audit_events WHERE details LIKE '%activation_record_integrity_failure%'").fetchone())
 
@@ -199,7 +199,7 @@ class LicenceManagerTests(unittest.TestCase):
         self.import_request()
         self.authorize()
         authority = EphemeralAuthority(kid="test-lic-fixture")
-        envelope, event_id = issue_for_request(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
+        envelope, event_id = issue_for_request_for_testing(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
         verified = LeaseVerifier({authority.kid: authority.public_key}).verify(envelope, self.device)
         self.assertEqual(verified.lease.calculation_entitlements, tuple(sorted(verified.lease.calculation_entitlements)))
         self.assertEqual(envelope["policy_profile"], "PROFESSOR_BETA")
@@ -216,7 +216,7 @@ class LicenceManagerTests(unittest.TestCase):
         with self.assertRaises(LeaseValidationError): LeaseVerifier({authority.kid: authority.public_key}).verify(changed, self.device)
         with self.assertRaises(LeaseValidationError): LeaseVerifier({},).verify(envelope, self.device)
         future = dict(envelope, not_before=envelope["issued_at"] + 1000)
-        future = authority.sign({k: v for k, v in future.items() if k not in {"kid", "signature"}})
+        future = authority.sign_test_fixture_only({k: v for k, v in future.items() if k not in {"kid", "signature"}})
         pending = LicensingService.for_testing(trusted_public_keys={authority.kid: authority.public_key}, device_identity=self.device, lease=future, now=lambda: envelope["issued_at"] + 1)
         self.assertFalse(pending.authorize_calculation("scf", ImplementationState.READY).allowed)
         expired = LicensingService.for_testing(trusted_public_keys={authority.kid: authority.public_key}, device_identity=self.device, lease=envelope, now=lambda: envelope["expires_at"] + 1)
@@ -227,7 +227,7 @@ class LicenceManagerTests(unittest.TestCase):
         self.import_request()
         self.authorize(Profile.INTERNAL_VALIDATION)
         authority = EphemeralAuthority()
-        envelope, _ = issue_for_request(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
+        envelope, _ = issue_for_request_for_testing(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
         self.assertEqual(len(envelope["calculation_entitlements"]), 35)
         service = LicensingService.for_testing(trusted_public_keys={authority.kid: authority.public_key}, device_identity=self.device, lease=envelope, now=lambda: envelope["issued_at"] + 1)
         self.assertFalse(service.authorize_calculation("relax", ImplementationState.PARTIAL).allowed)
@@ -238,10 +238,72 @@ class LicenceManagerTests(unittest.TestCase):
         self.assertTrue(all(decision.allowed for decision in decisions))
 
     def test_production_authority_fails_closed_and_has_no_key_generation(self):
-        authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json")
+        authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
         self.assertFalse(authority.status().available)
-        with self.assertRaises(Exception): authority.sign({})
+        self.assertFalse(hasattr(authority, "sign"))
+        self.assertFalse(hasattr(authority, "sign_lease"))
         self.assertFalse((self.root / "missing.dpapi").exists())
+
+    def test_production_authority_has_only_narrow_identifier_profile_api(self):
+        import inspect
+        authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
+        parameters = tuple(inspect.signature(authority.issue).parameters)
+        self.assertEqual(parameters, ("application_id", "activation_request_id", "profile", "confirmed"))
+        for extra in ({"entitlements": ["calc:planned"]}, {"expires_at": 9999999999}, {"kid": "attacker", "issuer": "attacker"}):
+            with self.assertRaises(TypeError): authority.issue(self.application_id, self.request["request_id"], "PROFESSOR_BETA", **extra)
+        with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], {"calculation_entitlements": ["calc:planned"]}, confirmed=True)
+
+    def test_production_rejections_happen_before_protected_key_load(self):
+        authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
+        with patch.object(authority, "_load", side_effect=AssertionError("key load before authorization")) as load:
+            with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+            load.assert_not_called()
+            self.import_request(); self.authorize()
+            with self.assertRaises(IssuanceRejected): authority.issue(str(uuid.uuid4()), self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+            load.assert_not_called()
+            self.db.transition(self.application_id, ApplicantStatus.REVOKED)
+            with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+            load.assert_not_called()
+
+    def test_production_issue_signs_only_database_derived_lease(self):
+        from cryptography.hazmat.primitives import serialization
+        self.import_request(); self.authorize()
+        key = Ed25519PrivateKey.generate()
+        raw = key.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
+        authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
+        with patch.object(authority, "_load", return_value=(key, "lic-p1b-fixture")):
+            envelope, event = authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+        verified = LeaseVerifier({"lic-p1b-fixture": key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)}).verify(envelope, self.device)
+        self.assertEqual(len(verified.lease.calculation_entitlements), 29)
+        self.assertEqual(envelope["expires_at"] - envelope["issued_at"], 90 * 86400)
+        self.assertEqual(envelope["issuer_label"], "Quantum Studio Licence Manager")
+        self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "LICENCE_ISSUED")
+        self.assertTrue(self.db.connection.execute("SELECT 1 FROM audit_events WHERE event_id=? AND event_type='licence_issuance'", (event,)).fetchone())
+        self.assertNotIn(raw, self.db.path.read_bytes())
+        with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+        self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 1)
+
+    def test_production_issuance_rejects_malformed_database_request_and_rolls_back_audit_failure(self):
+        from cryptography.hazmat.primitives import serialization
+        self.import_request(); self.authorize()
+        authority = ProductionAuthority(self.root / "missing.dpapi", self.root / "missing.json", database=self.db)
+        key = Ed25519PrivateKey.generate()
+        with patch.object(authority, "_load", return_value=(key, "lic-p1b-failure")):
+            self.db.connection.execute("UPDATE activation_requests SET request_json=?", ('{"schema_version":999}',)); self.db.connection.commit()
+            with self.assertRaises(IssuanceRejected): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+            self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
+            self.db.connection.execute("UPDATE activation_requests SET request_json=?,request_hash=?", (json.dumps(self.request, sort_keys=True, separators=(",", ":")), hashlib.sha256(json.dumps(self.request, sort_keys=True, separators=(",", ":")).encode()).hexdigest()))
+            self.db.connection.execute("CREATE TRIGGER fail_licence_insert BEFORE INSERT ON licences BEGIN SELECT RAISE(ABORT,'test database failure'); END")
+            self.db.connection.commit()
+            with self.assertRaises(sqlite3.DatabaseError): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+            self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
+            self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "APPROVED")
+            self.db.connection.execute("DROP TRIGGER fail_licence_insert")
+            self.db.connection.execute("CREATE TRIGGER fail_issuance_audit BEFORE INSERT ON audit_events WHEN NEW.event_type='licence_issuance' BEGIN SELECT RAISE(ABORT,'test audit failure'); END")
+            self.db.connection.commit()
+            with self.assertRaises(sqlite3.DatabaseError): authority.issue(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
+        self.assertEqual(self.db.connection.execute("SELECT COUNT(*) FROM licences").fetchone()[0], 0)
+        self.assertEqual(self.db.connection.execute("SELECT status FROM applicants WHERE application_id=?", (self.application_id,)).fetchone()[0], "APPROVED")
 
     def test_signing_public_metadata_mismatch_fails_closed(self):
         import operator_tools.licence_manager.signing as signing
@@ -290,7 +352,7 @@ class LicenceManagerTests(unittest.TestCase):
     def test_deterministic_receipt_atomic_export_hash_and_offline_revocation(self):
         self.import_request(); authority = EphemeralAuthority()
         self.authorize()
-        envelope, event = issue_for_request(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
+        envelope, event = issue_for_request_for_testing(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
         receipt1, receipt2 = receipt_for(envelope, event), receipt_for(envelope, event)
         self.assertEqual(receipt1, receipt2)
         path, receipt_path = export_licence(self.root / "export", envelope, event, database=self.db)
@@ -304,7 +366,7 @@ class LicenceManagerTests(unittest.TestCase):
     def test_export_revalidates_stored_signature_and_audit_chain(self):
         self.import_request(); self.authorize()
         authority = EphemeralAuthority()
-        envelope, event = issue_for_request(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
+        envelope, event = issue_for_request_for_testing(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
         mutated = dict(envelope, policy_profile="INTERNAL_VALIDATION")
         with self.assertRaises(ValueError): export_licence(self.root / "bad-export", mutated, event, database=self.db)
         self.assertFalse((self.root / "bad-export" / f"{envelope['licence_id']}.licence.json").exists())
@@ -314,7 +376,7 @@ class LicenceManagerTests(unittest.TestCase):
     def test_expiry_recording_and_audit_chain_tamper_detection(self):
         self.import_request(); authority = EphemeralAuthority()
         self.authorize()
-        envelope, _ = issue_for_request(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
+        envelope, _ = issue_for_request_for_testing(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
         self.assertEqual(record_expiries(self.db, now=envelope["expires_at"] + 1), 1)
         self.assertEqual(self.db.connection.execute("SELECT status FROM applicants").fetchone()[0], "EXPIRED")
         self.assertTrue(self.db.connection.execute("SELECT 1 FROM application_status_history WHERE new_state='EXPIRED'").fetchone())
@@ -326,7 +388,7 @@ class LicenceManagerTests(unittest.TestCase):
     def test_expired_licence_can_be_administratively_revoked_with_valid_history(self):
         self.import_request(); self.authorize()
         authority = EphemeralAuthority()
-        envelope, _ = issue_for_request(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
+        envelope, _ = issue_for_request_for_testing(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
         record_expiries(self.db, now=envelope["expires_at"] + 1)
         self.assertTrue(revoke_licence(self.db, envelope["licence_id"], confirmed=True))
         self.assertEqual(self.db.connection.execute("SELECT status FROM applicants").fetchone()[0], "REVOKED")
@@ -348,6 +410,32 @@ class LicenceManagerTests(unittest.TestCase):
         (staging / "operator_tools" / "licence_manager" / "crypto.py").write_text("pass")
         self.assertTrue(customer_package_exclusion_findings(staging))
         self.assertIn("operator_tools/licence_manager/crypto.py", audit_package_contents(staging)["forbidden"])
+        app.processEvents()
+
+    def test_ui_mode_never_falls_back_between_production_and_test_authorities(self):
+        app = QApplication.instance() or QApplication([])
+        production = LicenceManagerWindow(test_mode=False, database=self.db, data_root_override=self.root)
+        self.addCleanup(production.close)
+        self.assertIsInstance(production.authority, ProductionAuthority)
+        test = LicenceManagerWindow(test_mode=True, database=self.db)
+        self.addCleanup(test.close)
+        self.assertIsInstance(test.authority, EphemeralAuthority)
+        self.assertNotIsInstance(production.authority, EphemeralAuthority)
+        app.processEvents()
+
+    def test_issue_ui_calls_only_identifier_profile_production_api(self):
+        from unittest.mock import Mock
+        self.import_request(); self.authorize()
+        app = QApplication.instance() or QApplication([])
+        window = LicenceManagerWindow(test_mode=False, database=self.db, data_root_override=self.root)
+        self.addCleanup(window.close)
+        window.requests_table.selectRow(0)
+        window.authority.issue = Mock(return_value=({"licence_id": "lic_fixture"}, "audit_fixture"))
+        with patch("operator_tools.licence_manager.main_window.QInputDialog.getItem", return_value=("PROFESSOR_BETA", True)), \
+             patch("operator_tools.licence_manager.main_window.QMessageBox.question", return_value=QMessageBox.Yes), \
+             patch("operator_tools.licence_manager.main_window.QMessageBox.information"):
+            window.issue_selected()
+        window.authority.issue.assert_called_once_with(self.application_id, self.request["request_id"], Profile.PROFESSOR_BETA, confirmed=True)
         app.processEvents()
 
     def test_customer_build_plan_does_not_include_manager(self):

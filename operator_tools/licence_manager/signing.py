@@ -66,22 +66,39 @@ class AuthorityStatus:
 
 
 class TestEphemeralAuthority:
-    """Explicit ephemeral test signer; it never writes key material to disk."""
+    """TEST ONLY ephemeral fixture signer; never selected by production mode."""
     mode = "TEST"
-    def __init__(self, private_key=None, kid=None):
-        self._key = private_key or Ed25519PrivateKey.generate()
+    def __init__(self, kid=None):
+        self._key = Ed25519PrivateKey.generate()
         self.kid = kid or "test-lic-" + os.urandom(6).hex()
     @property
     def public_key(self): return public_key_bytes(self._key)
     def status(self): return AuthorityStatus(True, self.mode, self.kid, hashlib.sha256(self.public_key).hexdigest(), "Ephemeral test-only key in memory.")
-    def sign(self, payload): return issue_lease(payload, self._key, kid=self.kid)
+    def sign_test_fixture_only(self, payload): return issue_lease(payload, self._key, kid=self.kid)
 
 
 class ProductionAuthority:
     """A future ceremony may place a DPAPI-protected key and matching metadata here."""
     mode = "PRODUCTION"
-    def __init__(self, protected_key_path: str | Path, metadata_path: str | Path):
+    def __init__(self, protected_key_path: str | Path, metadata_path: str | Path, *, database=None):
         self.key_path, self.metadata_path = Path(protected_key_path), Path(metadata_path)
+        self._database = database
+
+    def issue(self, application_id: str, activation_request_id: str, profile, *, confirmed=False):
+        """Issue only from authoritative local IDs and a named local policy profile."""
+        from .issuance import _issue_from_authoritative_records
+        from .audit import current_operator_id
+        if self._database is None:
+            raise SigningUnavailable("Production authority is not bound to the operator database.")
+        def sign_built_lease(_database_transaction, internally_built_lease):
+            # This closure is only passed to the private checked issuance workflow.
+            key, kid = self._load()
+            return issue_lease(internally_built_lease, key, kid=kid)
+        return _issue_from_authoritative_records(
+            self._database, application_id, activation_request_id, profile,
+            operator_id=current_operator_id(), confirmed=confirmed,
+            signer=sign_built_lease, mode=self.mode, metadata_authority=self,
+        )
     def status(self):
         try:
             key, kid = self._load()
@@ -91,9 +108,6 @@ class ProductionAuthority:
             return AuthorityStatus(False, self.mode, None, None, "SIGNING AUTHORITY UNAVAILABLE")
     @property
     def public_key(self): return public_key_bytes(self._load()[0])
-    def sign(self, payload):
-        key, kid = self._load()
-        return issue_lease(payload, key, kid=kid)
     def _load(self):
         if not sys.platform.startswith("win") or not self.key_path.is_file() or not self.metadata_path.is_file():
             raise SigningUnavailable("No protected production signing key is provisioned.")

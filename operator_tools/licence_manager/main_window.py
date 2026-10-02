@@ -16,9 +16,10 @@ from .crypto import DataProtector
 from .database import Database
 from .exports import export_licence
 from .imports import import_activation_json, import_applicants_json
-from .issuance import authorize_activation_profile, issue_for_request, record_expiries, revoke_licence
+from .issuance import authorize_activation_profile, issue_for_request_for_testing, record_expiries, revoke_licence
 from .paths import data_root
 from .signing import ProductionAuthority, TestEphemeralAuthority, public_key_record, record_public_metadata
+from .models import Profile
 from PySide6.QtSvgWidgets import QSvgWidget
 
 
@@ -41,7 +42,7 @@ class LicenceManagerWindow(QMainWindow):
             database = Database(root, protector)
         self.database = database
         self.authority = authority or (TestEphemeralAuthority() if self.test_mode else ProductionAuthority(
-            data_root(data_root_override) / "licence-signing-key.dpapi", data_root(data_root_override) / "licence-signing-public.json"))
+            data_root(data_root_override) / "licence-signing-key.dpapi", data_root(data_root_override) / "licence-signing-public.json", database=database))
         self._build_ui()
         self.refresh()
 
@@ -190,7 +191,12 @@ class LicenceManagerWindow(QMainWindow):
         except Exception as error: QMessageBox.critical(self, "Profile authorization failed", str(error)); return
         if QMessageBox.question(self, "Issue licence", "Issue a 90-day device-bound licence for this approved request?") != QMessageBox.Yes: return
         try:
-            envelope, event_id = issue_for_request(self.database, self.authority, request_id, operator_id=self.operator_id, confirmed=True)
+            selected_profile = Profile(selected)
+            app_id = self.database.connection.execute("SELECT application_id FROM activation_requests WHERE request_id=?", (request_id,)).fetchone()[0]
+            if self.test_mode:
+                envelope, event_id = issue_for_request_for_testing(self.database, self.authority, request_id, operator_id=self.operator_id, confirmed=True)
+            else:
+                envelope, event_id = self.authority.issue(app_id, request_id, selected_profile, confirmed=True)
             QMessageBox.information(self, "Licence issued", f"Licence {envelope['licence_id']} issued. Select it in Licences and export it for controlled delivery.")
             self.refresh()
         except Exception as error: QMessageBox.critical(self, "Issuance failed", str(error))

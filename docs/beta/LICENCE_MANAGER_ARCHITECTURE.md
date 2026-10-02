@@ -6,7 +6,9 @@ The Licence Manager is an operator-only PySide6 desktop application launched wit
 
 1. The public website collects applications and exports versioned application records. It cannot approve, issue, or sign licences and receives no private key.
 2. The local manager encrypts applicant data, records review decisions, imports device activation requests, derives allowlisted profiles from the canonical calculation catalogue/backend registry, records issuance metadata, and requests a signature through a local authority interface.
-3. The local licence authority is a separate Ed25519 domain (`lic-` key IDs in production). This gate uses only an explicitly injected, in-memory test signer. There is no production key ceremony or automatic production key generation. Updater signing remains independent.
+3. The local licence authority is a separate Ed25519 domain (`lic-` key IDs in production). Its only production issuance entry point accepts an application ID, activation-request ID, named profile, and explicit confirmation. It reloads and checks authoritative database rows, derives all signed fields from policy and those rows, then loads the DPAPI-protected signing key and signs inside the same SQLite transaction as the issuance, transition, and audit records. The general-purpose client lease helper is not exposed as the production authority API. Tests use an explicitly injected, in-memory TEST ONLY signer; production mode never falls back to it. There is no production key ceremony or automatic production key generation. Updater signing remains independent.
+
+This is an in-process application boundary: imported data cannot directly choose signed claims, and supported manager code has no production API for arbitrary-payload signing. Python does not isolate code within the process; arbitrary code execution in the operator process or compromise of the Windows account defeats this boundary.
 
 The existing client licence verifier authenticates canonical JSON envelopes and device binding. The manager retains that schema and adds policy metadata as signed fields. It supplies explicit entitlement lists; it does not use wildcard grants. A request's `requested_profile` is never authorization: the operator makes a separate audited local profile decision before issuance.
 
@@ -26,4 +28,4 @@ Revocation records the operator's local administrative decision. A delivered off
 
 ## Customer package boundary
 
-Windows and Linux package audits reject paths containing the operator tool or manager package. The customer front end does not import this package. The manager is excluded from customer Nuitka bundles, installers, AppImages, update manifests, release ZIPs, Engine Packs, and website builds.
+Windows and Linux package audits reject paths containing the operator tool or manager package. These are package-content checks and focused plan tests, not proof from a completed customer build. The customer front end does not import this package. The manager is intended to remain excluded from customer Nuitka bundles, installers, AppImages, update manifests, release ZIPs, Engine Packs, and website builds.

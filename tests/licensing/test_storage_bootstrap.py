@@ -17,7 +17,7 @@ from operator_tools.licence_manager.database import Database
 from operator_tools.licence_manager import storage
 from operator_tools.licence_manager.storage import (CorruptStorageError, InconsistentStorageError,
     InvalidPendingMarkerError, MissingDataKeyError, KeyPublicationConflictError,
-    InitializationInProgressError, bootstrap_storage)
+    InitializationInProgressError, IncompleteInitializationError, bootstrap_storage)
 
 
 def _hold_storage_lock(root, ready, release):
@@ -97,7 +97,7 @@ class StorageBootstrapTests(unittest.TestCase):
         key.write_text(json.dumps({"fixture_generation": str(uuid.uuid4())}))
         with self.assertRaises(CorruptStorageError): bootstrap_storage(self.root)
 
-    def test_pending_initialization_resumes_after_key_publication(self):
+    def test_partial_database_after_key_publication_fails_closed(self):
         calls = 0
         real_database = storage.Database
         def fail_once(*args, **kwargs):
@@ -109,12 +109,19 @@ class StorageBootstrapTests(unittest.TestCase):
         with patch.object(storage, "Database", side_effect=fail_once):
             with self.assertRaises(CorruptStorageError): bootstrap_storage(self.root)
         first_generation = json.loads((self.root / "data-key.dpapi").read_text())["fixture_generation"]
+        key_before = (self.root / "data-key.dpapi").read_bytes()
+        database_path = self.root / "operator.sqlite3"
+        database_before = database_path.read_bytes()
+        marker_path = self.root / ".storage-initialization.pending"
+        marker_before = marker_path.read_bytes()
         self.assertTrue((self.root / ".storage-initialization.pending").exists())
-        database = bootstrap_storage(self.root)
-        self.addCleanup(database.close)
-        self.assertEqual(database.protector.storage_generation_id, first_generation)
+        with self.assertRaises(IncompleteInitializationError):
+            bootstrap_storage(self.root)
+        self.assertEqual((self.root / "data-key.dpapi").read_bytes(), key_before)
+        self.assertEqual(database_path.read_bytes(), database_before)
+        self.assertEqual(marker_path.read_bytes(), marker_before)
         self.assertEqual(self.generation_count, 1)
-        self.assertFalse((self.root / ".storage-initialization.pending").exists())
+        self.assertEqual(json.loads(key_before.decode())["fixture_generation"], first_generation)
 
     def test_valid_pending_marker_and_existing_key_resume_without_generation(self):
         self.root.mkdir(parents=True)
@@ -129,6 +136,183 @@ class StorageBootstrapTests(unittest.TestCase):
         self.assertEqual((self.root / "data-key.dpapi").read_bytes(), key_before)
         self.assertEqual(self.generation_count, 1)
         self.assertFalse(marker.exists())
+
+    def _make_pending_key(self):
+        self.root.mkdir(parents=True, exist_ok=True)
+        generation = str(uuid.uuid4())
+        storage._create_pending(self.root / ".storage-initialization.pending", self.root, generation)
+        (self.root / "data-key.dpapi").write_text(json.dumps({"fixture_generation": generation}), encoding="utf-8")
+        return generation
+
+    def test_pending_marker_cannot_adopt_unrelated_sqlite_database(self):
+        generation = self._make_pending_key()
+        database_path = self.root / "operator.sqlite3"
+        connection = sqlite3.connect(database_path)
+        connection.execute("CREATE TABLE unrelated_fixture(value TEXT)")
+        connection.execute("INSERT INTO unrelated_fixture VALUES('synthetic row')")
+        connection.commit(); connection.close()
+        database_before = database_path.read_bytes()
+        key_path = self.root / "data-key.dpapi"
+        key_before = key_path.read_bytes()
+        marker_path = self.root / ".storage-initialization.pending"
+        marker_before = marker_path.read_bytes()
+
+        with self.assertRaises(IncompleteInitializationError):
+            bootstrap_storage(self.root)
+
+        self.assertEqual(database_path.read_bytes(), database_before)
+        self.assertEqual(key_path.read_bytes(), key_before)
+        self.assertEqual(marker_path.read_bytes(), marker_before)
+        connection = sqlite3.connect(database_path)
+        try:
+            self.assertEqual(connection.execute("SELECT value FROM unrelated_fixture").fetchone()[0], "synthetic row")
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertNotIn("storage_metadata", tables)
+        finally:
+            connection.close()
+        self.assertEqual(json.loads(marker_before.decode())["storage_generation_id"], generation)
+        self.assertEqual(json.loads(key_before.decode())["fixture_generation"], generation)
+        self.assertEqual(self.generation_count, 0)
+
+    def test_pending_recovery_rejects_empty_zero_byte_and_malformed_databases_unchanged(self):
+        for kind in ("empty-sqlite", "zero-byte", "malformed"):
+            with self.subTest(kind=kind):
+                self.root.mkdir(parents=True, exist_ok=True)
+                generation = str(uuid.uuid4())
+                marker_path = self.root / ".storage-initialization.pending"
+                key_path = self.root / "data-key.dpapi"
+                database_path = self.root / "operator.sqlite3"
+                storage._create_pending(marker_path, self.root, generation)
+                key_path.write_text(json.dumps({"fixture_generation": generation}), encoding="utf-8")
+                if kind == "empty-sqlite":
+                    connection = sqlite3.connect(database_path); connection.close()
+                elif kind == "zero-byte":
+                    database_path.write_bytes(b"")
+                else:
+                    database_path.write_bytes(b"synthetic malformed SQLite bytes")
+                before = database_path.read_bytes()
+                key_before = key_path.read_bytes(); marker_before = marker_path.read_bytes()
+
+                with self.assertRaises((IncompleteInitializationError, CorruptStorageError)):
+                    bootstrap_storage(self.root)
+
+                self.assertEqual(database_path.read_bytes(), before)
+                self.assertEqual(key_path.read_bytes(), key_before)
+                self.assertEqual(marker_path.read_bytes(), marker_before)
+                database_path.unlink(); key_path.unlink(); marker_path.unlink()
+
+    def test_pending_recovery_rejects_malformed_mismatched_and_unproven_metadata(self):
+        for kind in ("malformed-generation", "different-generation", "missing-completion"):
+            with self.subTest(kind=kind):
+                self.root.mkdir(parents=True, exist_ok=True)
+                generation = str(uuid.uuid4())
+                marker_path = self.root / ".storage-initialization.pending"
+                key_path = self.root / "data-key.dpapi"
+                database_path = self.root / "operator.sqlite3"
+                storage._create_pending(marker_path, self.root, generation)
+                key_path.write_text(json.dumps({"fixture_generation": generation}), encoding="utf-8")
+                connection = sqlite3.connect(database_path)
+                connection.execute("CREATE TABLE storage_metadata(name TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                stored_generation = "not-a-uuid" if kind == "malformed-generation" else str(uuid.uuid4()) if kind == "different-generation" else generation
+                connection.execute("INSERT INTO storage_metadata VALUES('storage_generation_id', ?)", (stored_generation,))
+                if kind != "missing-completion":
+                    connection.execute("INSERT INTO storage_metadata VALUES('initialization_state', 'complete')")
+                connection.commit(); connection.close()
+                before = database_path.read_bytes(); key_before = key_path.read_bytes(); marker_before = marker_path.read_bytes()
+
+                with self.assertRaises((IncompleteInitializationError, storage.GenerationMismatchError)):
+                    bootstrap_storage(self.root)
+
+                self.assertEqual(database_path.read_bytes(), before)
+                self.assertEqual(key_path.read_bytes(), key_before)
+                self.assertEqual(marker_path.read_bytes(), marker_before)
+                database_path.unlink(); key_path.unlink(); marker_path.unlink()
+
+    def test_pending_recovery_accepts_only_proven_completed_matching_database(self):
+        database = bootstrap_storage(self.root)
+        generation = database.protector.storage_generation_id
+        database.close()
+        marker = self.root / ".storage-initialization.pending"
+        storage._create_pending(marker, self.root, generation)
+        key_before = (self.root / "data-key.dpapi").read_bytes()
+
+        reopened = bootstrap_storage(self.root)
+        self.addCleanup(reopened.close)
+
+        self.assertEqual(reopened.protector.storage_generation_id, generation)
+        self.assertEqual((self.root / "data-key.dpapi").read_bytes(), key_before)
+        self.assertFalse(marker.exists())
+        state = reopened.connection.execute("SELECT value FROM storage_metadata WHERE name='initialization_state'").fetchone()[0]
+        self.assertEqual(state, "complete")
+        format_version = reopened.connection.execute("SELECT value FROM storage_metadata WHERE name='initialization_format_version'").fetchone()[0]
+        self.assertEqual(format_version, "1")
+
+    def test_pending_recovery_rejects_unproven_completion_version_or_schema_set(self):
+        for kind in ("missing-format-version", "incomplete-schema-set"):
+            with self.subTest(kind=kind):
+                self.root.mkdir(parents=True, exist_ok=True)
+                generation = str(uuid.uuid4())
+                marker_path = self.root / ".storage-initialization.pending"
+                key_path = self.root / "data-key.dpapi"
+                database_path = self.root / "operator.sqlite3"
+                storage._create_pending(marker_path, self.root, generation)
+                key_path.write_text(json.dumps({"fixture_generation": generation}), encoding="utf-8")
+                connection = sqlite3.connect(database_path)
+                connection.execute("CREATE TABLE storage_metadata(name TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                connection.execute("INSERT INTO storage_metadata VALUES('storage_generation_id', ?)", (generation,))
+                connection.execute("INSERT INTO storage_metadata VALUES('initialization_state', 'complete')")
+                if kind != "missing-format-version":
+                    connection.execute("INSERT INTO storage_metadata VALUES('initialization_format_version', '1')")
+                connection.execute("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY)")
+                versions = (4,) if kind == "incomplete-schema-set" else (1, 2, 3, 4)
+                connection.executemany("INSERT INTO schema_migrations VALUES(?)", ((version,) for version in versions))
+                connection.commit(); connection.close()
+                before = database_path.read_bytes(); key_before = key_path.read_bytes(); marker_before = marker_path.read_bytes()
+
+                with self.assertRaises(IncompleteInitializationError):
+                    bootstrap_storage(self.root)
+
+                self.assertEqual(database_path.read_bytes(), before)
+                self.assertEqual(key_path.read_bytes(), key_before)
+                self.assertEqual(marker_path.read_bytes(), marker_before)
+                database_path.unlink(); key_path.unlink(); marker_path.unlink()
+
+    def test_offscreen_ui_blocks_unproven_pending_database_without_replacement(self):
+        from PySide6.QtWidgets import QApplication, QMessageBox
+        from operator_tools.licence_manager import app as manager_app
+        qt_app = QApplication.instance() or QApplication([])
+        local_appdata = Path(self.temp.name) / "synthetic-appdata"
+        root = local_appdata / "QuantumStudio" / "LicenceManager"
+        root.mkdir(parents=True)
+        generation = str(uuid.uuid4())
+        marker_path = root / ".storage-initialization.pending"
+        key_path = root / "data-key.dpapi"
+        storage._create_pending(marker_path, root, generation)
+        key_path.write_text(json.dumps({"fixture_generation": generation}), encoding="utf-8")
+        database_path = root / "operator.sqlite3"
+        connection = sqlite3.connect(database_path)
+        connection.execute("CREATE TABLE unrelated_fixture(value TEXT)")
+        connection.execute("INSERT INTO unrelated_fixture VALUES('synthetic row')")
+        connection.commit(); connection.close()
+        before = database_path.read_bytes(); key_before = key_path.read_bytes(); marker_before = marker_path.read_bytes()
+        shown = []
+        from operator_tools.licence_manager import main_window
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(local_appdata)}), \
+             patch.object(QMessageBox, "critical", side_effect=lambda *args: shown.append(args[2])), \
+             patch.object(main_window, "ProductionAuthority", side_effect=AssertionError("signing authority must not be constructed")), \
+             patch.object(manager_app.sys, "argv", ["licence-manager"]):
+            code = manager_app.main([])
+        self.assertEqual(code, 2)
+        self.assertEqual(len(shown), 1)
+        self.assertIn("initialization cannot be proven complete", shown[0])
+        self.assertIn("database, key, and pending recovery record were preserved", shown[0])
+        self.assertNotIn("synthetic row", shown[0])
+        self.assertEqual(database_path.read_bytes(), before)
+        self.assertEqual(key_path.read_bytes(), key_before)
+        self.assertEqual(marker_path.read_bytes(), marker_before)
+        self.assertFalse((root / "licence-signing-key.dpapi").exists())
+        self.assertFalse((root / "licence-signing-public.json").exists())
+        self.assertIsNotNone(qt_app)
 
     def test_interruption_before_key_publication_resumes_same_pending_generation(self):
         calls = 0
@@ -164,7 +348,7 @@ class StorageBootstrapTests(unittest.TestCase):
         connection.execute("DELETE FROM storage_metadata WHERE name='storage_generation_id'")
         connection.commit()
         connection.close()
-        with self.assertRaises(CorruptStorageError): bootstrap_storage(self.root)
+        with self.assertRaises(IncompleteInitializationError): bootstrap_storage(self.root)
         self.assertEqual(self.generation_count, 1)
 
     def test_malformed_pending_marker_fails_without_replacing_key(self):

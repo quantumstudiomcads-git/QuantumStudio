@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .crypto import DataProtector, WrongPurposeDataKeyError as CryptoWrongPurposeDataKeyError
-from .database import Database
+from .database import Database, SCHEMA_VERSION
 
 
 class StorageError(RuntimeError):
@@ -187,7 +187,7 @@ def _create_pending(marker: Path, root: Path, generation: str) -> None:
         stream.write(payload); stream.flush(); os.fsync(stream.fileno())
 
 
-def _validate_existing_database(database_path: Path, generation: str | None, *, pending: bool) -> None:
+def _validate_existing_database(database_path: Path, generation: str | None) -> None:
     try:
         uri = database_path.resolve().as_uri() + "?mode=ro"
         connection = sqlite3.connect(uri, uri=True, timeout=2.0)
@@ -197,16 +197,33 @@ def _validate_existing_database(database_path: Path, generation: str | None, *, 
                 raise ValueError
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if "storage_metadata" not in tables:
-                if not pending: raise ValueError
-                return
+                raise IncompleteInitializationError("Licence Manager database initialization cannot be proven complete; the database, key, and pending recovery record were preserved. Automatic recovery stopped to prevent adopting or modifying unrelated data. Manual inspection or restoration of a matched backup is required.")
             rows = dict(connection.execute("SELECT name,value FROM storage_metadata"))
             stored = rows.get("storage_generation_id")
             if stored is None:
-                if not pending: raise ValueError
-            elif stored != generation:
-                raise ValueError
+                raise IncompleteInitializationError("Licence Manager database initialization cannot be proven complete; the database, key, and pending recovery record were preserved. Automatic recovery stopped to prevent adopting or modifying unrelated data. Manual inspection or restoration of a matched backup is required.")
+            try:
+                canonical_generation = str(uuid.UUID(stored))
+            except (TypeError, ValueError, AttributeError):
+                raise IncompleteInitializationError("Licence Manager database pairing metadata is malformed; the database, key, and pending recovery record were preserved. Manual inspection or restoration of a matched backup is required.") from None
+            if canonical_generation != stored:
+                raise IncompleteInitializationError("Licence Manager database pairing metadata is malformed; the database, key, and pending recovery record were preserved. Manual inspection or restoration of a matched backup is required.")
+            if stored != generation:
+                raise GenerationMismatchError("Licence Manager database and protected data key belong to different storage generations; preserve both and restore a matched backup pair.")
+            if (rows.get("initialization_format_version") != "1"
+                    or rows.get("initialization_state") != "complete"):
+                raise IncompleteInitializationError("Licence Manager database initialization cannot be proven complete; the database, key, and pending recovery record were preserved. Automatic recovery stopped to prevent adopting or modifying unrelated data. Manual inspection or restoration of a matched backup is required.")
+            if "schema_migrations" not in tables:
+                raise IncompleteInitializationError("Licence Manager database schema completion cannot be proven; preserve the database, key, and pending recovery record for manual inspection or matched-backup restoration.")
+            versions = {row[0] for row in connection.execute("SELECT version FROM schema_migrations")}
+            if versions != set(range(1, SCHEMA_VERSION + 1)):
+                raise IncompleteInitializationError("Licence Manager database schema completion cannot be proven; preserve the database, key, and pending recovery record for manual inspection or matched-backup restoration.")
         finally:
             connection.close()
+    except IncompleteInitializationError:
+        raise
+    except GenerationMismatchError:
+        raise
     except Exception:
         raise CorruptStorageError("Licence Manager database is unreadable or does not match its protected key; preserve both for recovery.") from None
 
@@ -280,9 +297,9 @@ def bootstrap_storage(root: str | Path) -> Database:
             except OSError:
                 raise CorruptStorageError("Licence Manager could not create its database safely; preserve storage for recovery.") from None
         if db_exists:
-            _validate_existing_database(database_path, protector.storage_generation_id, pending=pending)
+            _validate_existing_database(database_path, protector.storage_generation_id)
         try:
-            database = Database(root, protector)
+            database = Database(root, protector, initializing=not db_exists)
         except Exception:
             raise CorruptStorageError("Licence Manager database initialization failed; preserve storage for recovery.") from None
         if database.protector.storage_generation_id != protector.storage_generation_id:

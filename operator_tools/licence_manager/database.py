@@ -16,11 +16,12 @@ _PII_CONTEXT = {"application": "quantum-studio-licence-manager", "schema_id": "o
 
 
 class Database:
-    def __init__(self, root: str | Path, protector):
+    def __init__(self, root: str | Path, protector, *, initializing=False):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "operator.sqlite3"
         self.protector = protector
+        self.initializing = bool(initializing)
         self.connection = sqlite3.connect(self.path)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys=ON")
@@ -66,12 +67,20 @@ class Database:
         if not db.execute("SELECT 1 FROM schema_migrations WHERE version=3").fetchone():
             db.execute("INSERT INTO schema_migrations VALUES(3,datetime('now'))")
         generation = self.protector.storage_generation_id
-        if generation:
+        if self.initializing:
+            if not generation:
+                raise sqlite3.DatabaseError("New storage requires a protected storage generation.")
+            if db.execute("SELECT 1 FROM storage_metadata LIMIT 1").fetchone():
+                raise sqlite3.DatabaseError("New storage already contains pairing metadata.")
+            db.executemany("INSERT INTO storage_metadata(name,value) VALUES(?,?)", (
+                ("storage_generation_id", generation),
+                ("initialization_format_version", "1"),
+                ("initialization_state", "complete"),
+            ))
+        elif generation:
             current = db.execute("SELECT value FROM storage_metadata WHERE name='storage_generation_id'").fetchone()
             if current and current[0] != generation:
                 raise sqlite3.DatabaseError("Storage generation does not match the protected data key.")
-            if not current:
-                db.execute("INSERT INTO storage_metadata(name,value) VALUES('storage_generation_id',?)", (generation,))
         if not db.execute("SELECT 1 FROM schema_migrations WHERE version=4").fetchone():
             db.execute("INSERT INTO schema_migrations VALUES(4,datetime('now'))")
         db.commit()

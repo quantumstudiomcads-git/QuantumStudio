@@ -48,8 +48,10 @@ from frontend.calculations.reconciliation import ExecutionSupport, reconcile_cat
 
 def _key_material(purpose, raw):
     algorithm = "Ed25519" if purpose == "licence-signing-ed25519" else "AES-256-GCM+HMAC-SHA256"
-    return json.dumps({"format": "quantum-studio-key-material", "version": 1, "purpose": purpose,
-        "algorithm": algorithm, "key_length": 32, "key": base64.urlsafe_b64encode(raw).decode("ascii")},
+    material = {"format": "quantum-studio-key-material", "version": 1, "purpose": purpose,
+        "algorithm": algorithm, "key_length": 32, "key": base64.urlsafe_b64encode(raw).decode("ascii")}
+    if purpose == "applicant-pii-database-key": material["storage_generation_id"] = str(uuid.UUID(int=1))
+    return json.dumps(material,
         sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
@@ -147,7 +149,7 @@ class LicenceManagerTests(unittest.TestCase):
         return int(datetime.fromisoformat(self.request["created_at"].replace("Z", "+00:00")).timestamp()) + 1
 
     def test_database_migration_and_encrypted_pii_round_trip(self):
-        self.assertEqual(self.db.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 3)
+        self.assertEqual(self.db.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 4)
         self.assertEqual(self.db.applicant_pii(self.application_id)["email"], "ada@example.test")
         raw = self.db.path.read_bytes()
         for secret in ("Ada Beta Fixture", "ada@example.test", "Example Institute", "local test only"):
@@ -165,7 +167,7 @@ class LicenceManagerTests(unittest.TestCase):
         self.addCleanup(upgraded.close)
         columns = {row[1] for row in upgraded.connection.execute("PRAGMA table_info(activation_requests)")}
         self.assertIn("authorized_profile", columns)
-        self.assertEqual(upgraded.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 3)
+        self.assertEqual(upgraded.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 4)
 
     def test_raw_pii_keys_are_test_only_and_json_duplicate_fields_reject(self):
         with self.assertRaises(ProtectionUnavailable): DataProtector(b"K" * 32)
@@ -173,7 +175,7 @@ class LicenceManagerTests(unittest.TestCase):
         from operator_tools.licence_manager import crypto
         protected_path = self.root / "unsupported.dpapi"
         with patch.object(crypto.sys, "platform", "linux"):
-            with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(protected_path)
+            with self.assertRaises(ProtectionUnavailable): DataProtector.open_existing_windows_keyfile(protected_path)
         self.assertFalse(protected_path.exists())
 
     def test_no_supported_generic_dpapi_decryption_api_exists(self):
@@ -190,7 +192,7 @@ class LicenceManagerTests(unittest.TestCase):
                              for name, value in public_crypto.items()))
         self.assertFalse(any(name in dir(signing._LicenceSigningKeyStore(self.root / "key"))
                              for name in ("load_private_key", "get_private_key", "decrypt_key", "private_key")))
-        self.assertNotIn("protected_blob", inspect.signature(crypto.DataProtector.from_windows_keyfile).parameters)
+        self.assertNotIn("protected_blob", inspect.signature(crypto.DataProtector.open_existing_windows_keyfile).parameters)
         self.assertFalse(any(name in getattr(package, "__all__", ()) for name in ("dpapi_unprotect", "unprotect_dpapi")))
 
     def test_purpose_envelopes_reject_cross_domain_before_or_after_dpapi(self):
@@ -199,7 +201,7 @@ class LicenceManagerTests(unittest.TestCase):
         pii_path = self.root / "data-key.dpapi"
         _write_protected_key_file(pii_path, "licence-signing-ed25519")
         with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto) as (calls, _):
-            with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(pii_path)
+            with self.assertRaises(ProtectionUnavailable): DataProtector.open_existing_windows_keyfile(pii_path)
             self.assertEqual(calls, [])
         signing_path = self.root / "signing-key.dpapi"
         _write_protected_key_file(signing_path, "applicant-pii-database-key")
@@ -231,21 +233,21 @@ class LicenceManagerTests(unittest.TestCase):
         ):
             path.write_text(json.dumps(content), encoding="ascii")
             with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto) as (calls, _):
-                with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(path)
+                with self.assertRaises(ProtectionUnavailable): DataProtector.open_existing_windows_keyfile(path)
                 self.assertEqual(calls, [])
         path.write_bytes(b"{\xff")
         with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto) as (calls, _):
-            with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(path)
+            with self.assertRaises(ProtectionUnavailable): DataProtector.open_existing_windows_keyfile(path)
             self.assertEqual(calls, [])
         path.write_text('{"format":"quantum-studio-protected-key","version":1,"purpose":"licence-signing-ed25519","purpose":"applicant-pii-database-key","protected_data":"eA=="}', encoding="ascii")
         with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto) as (calls, _):
-            with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(path)
+            with self.assertRaises(ProtectionUnavailable): DataProtector.open_existing_windows_keyfile(path)
             self.assertEqual(calls, [])
         for raw in (b"short", b"K" * 31):
             path.write_text(json.dumps({"format": "quantum-studio-protected-key", "version": 1,
                 "purpose": "applicant-pii-database-key", "protected_data": base64.urlsafe_b64encode(b"mock").decode()}), encoding="ascii")
             with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto, unprotected=_key_material("licence-signing-ed25519", raw)) as (calls, _):
-                with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(path)
+                with self.assertRaises(ProtectionUnavailable): DataProtector.open_existing_windows_keyfile(path)
                 self.assertEqual(calls, ["unprotect"])
 
     def test_pii_key_loader_accepts_only_its_exact_versioned_material(self):
@@ -254,14 +256,14 @@ class LicenceManagerTests(unittest.TestCase):
         _write_protected_key_file(path, "applicant-pii-database-key")
         raw = b"D" * 32
         with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto, unprotected=_key_material("applicant-pii-database-key", raw)) as (calls, _):
-            protector = DataProtector.from_windows_keyfile(path)
+            protector = DataProtector.open_existing_windows_keyfile(path)
         self.assertEqual(calls, ["unprotect"])
         self.assertIsInstance(protector, DataProtector)
         self.assertNotIn(raw, repr(vars(protector)).encode())
         encrypted = protector.encrypt(b"synthetic applicant", aad=b'{"record_id":"fixture"}')
         self.assertEqual(protector.decrypt(encrypted, aad=b'{"record_id":"fixture"}'), b"synthetic applicant")
         with patch.object(crypto.sys, "platform", "win32"), _mock_dpapi(crypto, unprotected=_key_material("applicant-pii-database-key", b"K" * 31)) as (calls, _):
-            with self.assertRaises(ProtectionUnavailable): DataProtector.from_windows_keyfile(path)
+            with self.assertRaises(ProtectionUnavailable): DataProtector.open_existing_windows_keyfile(path)
             self.assertEqual(calls, ["unprotect"])
 
     def test_website_import_forces_applied_and_duplicate_is_idempotent(self):

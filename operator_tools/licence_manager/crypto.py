@@ -10,6 +10,7 @@ import sys
 import json
 import base64
 import unicodedata
+import uuid
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -18,13 +19,22 @@ class ProtectionUnavailable(RuntimeError):
     pass
 
 
+class WrongPurposeDataKeyError(ProtectionUnavailable):
+    """A structurally valid protected envelope belongs to another key purpose."""
+
+
 def _load_pii_key_file(path):
     """Load only a purpose-bound PII key file; never accept a caller blob."""
     from pathlib import Path
     target = Path(path)
     if not sys.platform.startswith("win"):
         raise ProtectionUnavailable("Windows CurrentUser DPAPI is unavailable.")
-    if not target.is_file():
+    try:
+        file_info = target.lstat()
+    except OSError:
+        raise ProtectionUnavailable("Protected applicant-data key is missing or unavailable.") from None
+    if (not __import__("stat").S_ISREG(file_info.st_mode)
+            or getattr(file_info, "st_file_attributes", 0) & 0x400):
         raise ProtectionUnavailable("Protected applicant-data key is missing.")
     plain = inner = key = None
     try:
@@ -35,10 +45,19 @@ def _load_pii_key_file(path):
                     raise ValueError
                 value[name] = item
             return value
-        outer = json.loads(target.read_text(encoding="ascii"), object_pairs_hook=unique_pairs)
+        if file_info.st_size <= 0 or file_info.st_size > 16 * 1024:
+            raise ValueError
+        with target.open("rb") as stream:
+            raw_envelope = stream.read(16 * 1024 + 1)
+        if not raw_envelope or len(raw_envelope) > 16 * 1024:
+            raise ValueError
+        outer = json.loads(raw_envelope.decode("ascii", "strict"), object_pairs_hook=unique_pairs)
+        del raw_envelope
+        if isinstance(outer, dict) and outer.get("purpose") != "applicant-pii-database-key":
+            raise WrongPurposeDataKeyError("Protected key envelope has the wrong purpose.")
         if (not isinstance(outer, dict) or set(outer) != {"format", "version", "purpose", "protected_data"}
                 or outer["format"] != "quantum-studio-protected-key" or type(outer["version"]) is not int
-                or outer["version"] != 1 or outer["purpose"] != "applicant-pii-database-key"
+                or outer["version"] != 1
                 or not isinstance(outer["protected_data"], str)):
             raise ValueError
         protected = base64.b64decode(outer["protected_data"], altchars=b"-_", validate=True)
@@ -62,18 +81,23 @@ def _load_pii_key_file(path):
             kernel32.LocalFree.restype = ctypes.c_void_p
             kernel32.LocalFree(out.pbData)
         inner = json.loads(plain.decode("utf-8", "strict"), object_pairs_hook=unique_pairs)
-        if (not isinstance(inner, dict) or set(inner) != {"format", "version", "purpose", "algorithm", "key_length", "key"}
+        if isinstance(inner, dict) and inner.get("purpose") != "applicant-pii-database-key":
+            raise WrongPurposeDataKeyError("Unprotected key material has the wrong purpose.")
+        if (not isinstance(inner, dict) or set(inner) != {"format", "version", "purpose", "algorithm", "key_length", "key", "storage_generation_id"}
                 or inner["format"] != "quantum-studio-key-material" or type(inner["version"]) is not int
-                or inner["version"] != 1 or inner["purpose"] != "applicant-pii-database-key"
+                or inner["version"] != 1
                 or inner["algorithm"] != "AES-256-GCM+HMAC-SHA256" or type(inner["key_length"]) is not int
                 or inner["key_length"] != 32 or not isinstance(inner["key"], str)):
+            raise ValueError
+        generation_id = str(uuid.UUID(inner["storage_generation_id"]))
+        if generation_id != inner["storage_generation_id"]:
             raise ValueError
         key = base64.b64decode(inner["key"], altchars=b"-_", validate=True)
         if len(key) != 32 or base64.urlsafe_b64encode(key).decode("ascii") != inner["key"]:
             raise ValueError
         del inner
         del plain
-        return key
+        return key, generation_id
     except ProtectionUnavailable:
         plain = inner = key = None
         raise
@@ -84,10 +108,11 @@ def _load_pii_key_file(path):
 
 class DataProtector:
     """AES-GCM at rest; production keys are DPAPI-wrapped, test keys injected."""
-    def __init__(self, key: bytes, *, test_only=False):
+    def __init__(self, key: bytes, *, test_only=False, storage_generation_id=None):
         if not test_only:
             raise ProtectionUnavailable("Raw data keys are accepted only by the explicit test provider.")
         self._set_key(key)
+        self.storage_generation_id = str(uuid.UUID(storage_generation_id)) if storage_generation_id else None
 
     def _set_key(self, key: bytes):
         if len(key) != 32:
@@ -96,39 +121,63 @@ class DataProtector:
         self._index = hashlib.sha256(b"qs-lm-index\0" + key).digest()
 
     @classmethod
-    def for_testing(cls, key: bytes):
-        return cls(key, test_only=True)
+    def for_testing(cls, key: bytes, *, storage_generation_id=None):
+        return cls(key, test_only=True, storage_generation_id=storage_generation_id or str(uuid.uuid4()))
 
     @classmethod
-    def from_windows_keyfile(cls, path):
+    def open_existing_windows_keyfile(cls, path):
         from pathlib import Path
         target = Path(path)
-        if not target.exists():
-            if not sys.platform.startswith("win"):
-                raise ProtectionUnavailable("Windows CurrentUser DPAPI is unavailable.")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            key = os.urandom(32)
-            try:
-                inner = json.dumps({"format": "quantum-studio-key-material", "version": 1,
-                    "purpose": "applicant-pii-database-key", "algorithm": "AES-256-GCM+HMAC-SHA256",
-                    "key_length": 32, "key": base64.urlsafe_b64encode(key).decode("ascii")}, sort_keys=True, separators=(",", ":")).encode("utf-8")
-                protected = _protect_pii_key(inner)
-                outer = json.dumps({"format": "quantum-studio-protected-key", "version": 1,
-                    "purpose": "applicant-pii-database-key", "protected_data": base64.urlsafe_b64encode(protected).decode("ascii")}, sort_keys=True, separators=(",", ":")).encode("ascii")
-                import tempfile
-                descriptor, name = tempfile.mkstemp(prefix="." + target.name + ".", suffix=".tmp", dir=target.parent)
-                try:
-                    with os.fdopen(descriptor, "wb") as stream:
-                        stream.write(outer); stream.flush(); os.fsync(stream.fileno())
-                    os.replace(name, target)
-                finally:
-                    try: os.unlink(name)
-                    except FileNotFoundError: pass
-            finally:
-                key = inner = protected = outer = None
+        if not target.exists() or target.is_dir() or target.is_symlink():
+            raise ProtectionUnavailable("Protected applicant-data key is missing or unsafe.")
         instance = cls.__new__(cls)
-        instance._set_key(_load_pii_key_file(target))
+        loaded = _load_pii_key_file(target)
+        key, generation_id = loaded
+        instance._set_key(key)
+        instance.storage_generation_id = generation_id
+        key = None
         return instance
+
+    @classmethod
+    def _initialize_new_windows_keyfile(cls, path, *, storage_generation_id):
+        """Internal first-run primitive; call only from storage.bootstrap_storage."""
+        from pathlib import Path
+        import tempfile
+        target = Path(path)
+        if not sys.platform.startswith("win"):
+            raise ProtectionUnavailable("Windows CurrentUser DPAPI is unavailable.")
+        if target.exists():
+            raise FileExistsError("Protected applicant-data key already exists.")
+        generation_id = str(uuid.UUID(storage_generation_id))
+        key = os.urandom(32)
+        inner = json.dumps({"format": "quantum-studio-key-material", "version": 1,
+            "purpose": "applicant-pii-database-key", "algorithm": "AES-256-GCM+HMAC-SHA256",
+            "key_length": 32, "key": base64.urlsafe_b64encode(key).decode("ascii"),
+            "storage_generation_id": generation_id}, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        protected = _protect_pii_key(inner)
+        outer = json.dumps({"format": "quantum-studio-protected-key", "version": 1,
+            "purpose": "applicant-pii-database-key", "protected_data": base64.urlsafe_b64encode(protected).decode("ascii")}, sort_keys=True, separators=(",", ":")).encode("ascii")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, name = tempfile.mkstemp(prefix="." + target.name + ".", suffix=".tmp", dir=target.parent)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(outer); stream.flush(); os.fsync(stream.fileno())
+            try:
+                os.link(name, target)
+            except FileExistsError:
+                raise FileExistsError("Protected applicant-data key already exists.") from None
+        finally:
+            primary_error_active = sys.exc_info()[0] is not None
+            try: os.unlink(name)
+            except FileNotFoundError: pass
+            except OSError:
+                if not primary_error_active:
+                    raise
+            key = inner = protected = outer = None
+        opened = cls.open_existing_windows_keyfile(target)
+        if opened.storage_generation_id != generation_id:
+            raise ProtectionUnavailable("Protected applicant-data key validation failed.")
+        return opened
 
     def encrypt(self, value: bytes, *, aad: bytes = b"applicant-pii") -> bytes:
         nonce = os.urandom(12)

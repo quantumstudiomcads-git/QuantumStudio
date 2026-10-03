@@ -26,6 +26,17 @@ Initial beta licences last 90 days and bind to one device. Renewal requires a fr
 
 Use Audit Log → Verify audit chain before reviewing records. Preserve database and data-key backups as one recovery set. If the workstation or Windows account is lost, restore only under the original protected account where DPAPI permits; otherwise the encrypted PII may be unrecoverable. A lost licence signing key requires a future public-key rotation ceremony and client update; never recreate a replacement with the old key ID. Updater signing recovery is a separate process and key domain.
 
+### Database and PII-key pair recovery
+
+Startup takes an exclusive, bounded cross-process storage-initialization lock before inspecting the database, protected data-key file, and pending marker together; it rechecks state after acquiring the lock. On Windows the lock is an exclusively opened per-root file with read/write/delete sharing denied. A process crash releases the operating-system handle; restart accepts that abandoned lock only by validating the pending marker and all storage state. A new storage root is initialized only when both database and key are absent. Initialization creates a versioned, root-bound pending marker with a random non-secret storage-generation UUID, publishes the DPAPI-protected key and initial database without replacement, creates/migrates SQLite, validates the pair, then removes the marker. An interrupted first run may resume only when the marker and existing key prove the same generation. The UUID is stored in database metadata and inside the protected key envelope; it is a pairing check, not a secret or decryption credential.
+
+- **Database exists, key missing:** stop using the manager and preserve the database unchanged. Restore the exact matching protected key from the approved backup. Do not generate a replacement. Where practical, validate a copied database/key pair in a disposable recovery environment first.
+- **Key exists, database missing:** stop and investigate. Restore the matching database backup. Do not let normal startup create a blank database.
+- **Both missing:** controlled first-run initialization is allowed.
+- **Both present but corrupt or mismatched:** preserve both and restore a matched backup pair. Do not overwrite either automatically.
+
+The manager has no destructive reset or “start over” action. CurrentUser DPAPI neither backs up nor recovers a deleted key. The lock is an initialization coordination mechanism, not a defense against a compromised Windows account or administrator.
+
 CurrentUser DPAPI protects against offline access by other Windows accounts, not compromise of the logged-in account/session. The audit chain records tampering but cannot defeat a fully compromised administrator. The issuance boundary limits supported manager code and untrusted imports; it is not Python process isolation. Same-user arbitrary code can invoke Windows DPAPI directly; arbitrary code execution in the operator process or compromise of the Windows account defeats this boundary. No production key ceremony or production database migration has been performed.
 
 Audit verification detects modified events, removed middle events, and reordering. The current audit head is not anchored outside SQLite. An administrator with database write access can truncate the tail, replace the complete history and recompute its hashes, or restore an older database snapshot without detection. The hash chain is tamper evidence, not append-only immutability.

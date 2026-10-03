@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QInputDialog, QLabel, Q
 from .audit import current_operator_id, verify_chain
 from .crypto import DataProtector
 from .database import Database
+from .storage import bootstrap_storage
 from .exports import export_licence
 from .imports import import_activation_json, import_applicants_json
 from .issuance import authorize_activation_profile, issue_for_request_for_testing, record_expiries, revoke_licence
@@ -38,8 +39,9 @@ class LicenceManagerWindow(QMainWindow):
                 root = data_root_override or self._temporary.name
             else:
                 root = data_root(data_root_override)
-                protector = DataProtector.from_windows_keyfile(root / "data-key.dpapi")
-            database = Database(root, protector)
+                database = bootstrap_storage(root)
+            if self.test_mode:
+                database = Database(root, protector)
         self.database = database
         self.authority = authority or (TestEphemeralAuthority() if self.test_mode else ProductionAuthority(
             data_root(data_root_override) / "licence-signing-key.dpapi", data_root(data_root_override) / "licence-signing-public.json", database=database))

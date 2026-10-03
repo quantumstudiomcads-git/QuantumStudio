@@ -1,4 +1,5 @@
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -39,6 +40,15 @@ def make_bundle(root: Path):
 
 
 class CustomerPayloadInventoryTests(unittest.TestCase):
+    def fake_iscc(self, command, **kwargs):
+        script=Path(command[1]); text=script.read_text(encoding="utf-8-sig")
+        self.assertNotIn("recursesubdirs",text.casefold())
+        self.assertFalse(any("*" in line or "?" in line for line in text.splitlines() if line.startswith("Source:")))
+        output_line=next(line for line in text.splitlines() if line.startswith("OutputDir="))
+        compiled=Path(output_line.split("=",1)[1]); compiled.mkdir(parents=True,exist_ok=True)
+        (compiled/"QuantumStudio-0.2.0-Setup.exe").write_bytes(b"synthetic installer")
+        return __import__("subprocess").CompletedProcess(command,0,"","")
+
     def test_valid_inventory_is_canonical_and_excludes_itself(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "bundle"; marker, inputs = make_bundle(root)
@@ -158,6 +168,195 @@ class CustomerPayloadInventoryTests(unittest.TestCase):
             audit = audit_customer_package_contents(root)
             self.assertTrue(audit["valid"], audit)
 
+    def test_inno_script_uses_one_explicit_source_per_inventory_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/"bundle"; marker,inputs=make_bundle(root)
+            special=root/"assets"/"space Ω; O'Brien.svg"; special.write_text("asset",encoding="utf-8")
+            (root/PAYLOAD_INVENTORY).unlink()
+            generate_payload_inventory(root,marker,generated_at="2026-01-01T00:00:00+00:00")
+            script=build_windows_installer.installer_script(app_bundle=root,output=Path("C:/installer"),version="0.2.0")
+            source_lines=[line for line in script.splitlines() if line.startswith("Source:")]
+            inventory=json.loads((root/PAYLOAD_INVENTORY).read_bytes())
+            self.assertEqual(len(source_lines),len(inventory["files"]))
+            self.assertFalse(any("*" in line or "?" in line for line in source_lines))
+            self.assertNotIn("recursesubdirs",script.casefold())
+            self.assertTrue(any("space Ω; O'Brien.svg" in line for line in source_lines))
+            self.assertIn('DestDir: "{app}\\assets"',next(line for line in source_lines if "space Ω" in line))
+
+    def test_main_compiles_only_allowlisted_snapshot_and_cleans_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); bundle=root/"bundle"; make_bundle(bundle); output=root/"installer"
+            with patch.object(build_windows_installer.sys,"platform","win32"), \
+                 patch.object(build_windows_installer.shutil,"which",return_value="ISCC.exe"), \
+                 patch.object(build_windows_installer.subprocess,"run",side_effect=self.fake_iscc) as run:
+                result=build_windows_installer.main(["--app-bundle",str(bundle),"--output",str(output)])
+            self.assertEqual(result,0); run.assert_called_once()
+            self.assertTrue((output/"QuantumStudio-0.2.0-Setup.exe").is_file())
+            self.assertFalse(list(output.glob(".qs-installer-stage-*")))
+            self.assertFalse((bundle/"operator-cache.bin").exists())
+
+    def test_unrecorded_sqlite_is_rejected_before_snapshot_or_iscc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); bundle=root/"bundle"; make_bundle(bundle); output=root/"installer"
+            (bundle/"operator-cache.bin").write_bytes(b"SQLite format 3\x00"+b"x"*80)
+            with patch.object(build_windows_installer.sys,"platform","win32"), \
+                 patch.object(build_windows_installer.shutil,"which",return_value="ISCC.exe"), \
+                 patch.object(build_windows_installer.subprocess,"run") as run:
+                result=build_windows_installer.main(["--app-bundle",str(bundle),"--output",str(output)])
+            self.assertEqual(result,2); run.assert_not_called()
+            self.assertFalse((output/"QuantumStudio.iss").exists())
+            self.assertFalse((output/"QuantumStudio-0.2.0-Setup.exe").exists())
+            self.assertFalse(list(output.glob(".qs-installer-stage-*")))
+
+    def test_inventoried_sqlite_is_rejected_before_snapshot_or_iscc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); bundle=root/"bundle"; marker,_inputs=make_bundle(bundle); output=root/"installer"
+            (bundle/PAYLOAD_INVENTORY).unlink()
+            (bundle/"operator-cache.bin").write_bytes(b"SQLite format 3\x00"+b"x"*80)
+            generate_payload_inventory(bundle,marker,generated_at="2026-01-01T00:00:00+00:00")
+            with patch.object(build_windows_installer.sys,"platform","win32"), \
+                 patch.object(build_windows_installer.shutil,"which",return_value="ISCC.exe"), \
+                 patch.object(build_windows_installer.subprocess,"run") as run:
+                result=build_windows_installer.main(["--app-bundle",str(bundle),"--output",str(output)])
+            self.assertEqual(result,2); run.assert_not_called()
+            self.assertFalse((output/"QuantumStudio.iss").exists())
+            self.assertFalse(list(output.glob(".qs-installer-stage-*")))
+
+    def test_original_mutation_after_snapshot_does_not_change_compilation_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); bundle=root/"bundle"; make_bundle(bundle); output=root/"installer"
+            copier=build_windows_installer._copy_payload_snapshot
+            def copy_then_mutate(source,snapshot,verified):
+                copier(source,snapshot,verified)
+                (source/"QuantumStudio.exe").write_bytes(b"modified after snapshot")
+                (source/"new-after-snapshot.bin").write_bytes(b"extra")
+            def fake(command,**kwargs):
+                script=Path(command[1]); text=script.read_text(encoding="utf-8-sig")
+                line=next(item for item in text.splitlines() if item.startswith("Source:") and "QuantumStudio.exe" in item)
+                self.assertIn("/payload/QuantumStudio.exe",line)
+                self.assertNotIn("new-after-snapshot",text)
+                out=Path(next(item for item in text.splitlines() if item.startswith("OutputDir=")).split("=",1)[1])
+                (out/"QuantumStudio-0.2.0-Setup.exe").write_bytes(b"synthetic installer")
+                return __import__("subprocess").CompletedProcess(command,0,"","")
+            with patch.object(build_windows_installer.sys,"platform","win32"), \
+                 patch.object(build_windows_installer.shutil,"which",return_value="ISCC.exe"), \
+                 patch.object(build_windows_installer,"_copy_payload_snapshot",side_effect=copy_then_mutate), \
+                 patch.object(build_windows_installer.subprocess,"run",side_effect=fake):
+                result=build_windows_installer.main(["--app-bundle",str(bundle),"--output",str(output)])
+            self.assertEqual(result,0)
+
+    def test_original_replacement_before_copy_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); bundle=root/"bundle"; make_bundle(bundle); output=root/"installer"
+            copier=build_windows_installer._copy_payload_snapshot
+            def mutate_before_copy(source,snapshot,verified):
+                (source/"QuantumStudio.exe").write_bytes(b"changed after original validation")
+                return copier(source,snapshot,verified)
+            with patch.object(build_windows_installer.sys,"platform","win32"), \
+                 patch.object(build_windows_installer.shutil,"which",return_value="ISCC.exe"), \
+                 patch.object(build_windows_installer,"_copy_payload_snapshot",side_effect=mutate_before_copy), \
+                 patch.object(build_windows_installer.subprocess,"run") as run:
+                result=build_windows_installer.main(["--app-bundle",str(bundle),"--output",str(output)])
+            self.assertEqual(result,2); run.assert_not_called()
+            self.assertFalse(list(output.glob(".qs-installer-stage-*")))
+
+    def test_snapshot_addition_after_audit_cannot_enter_explicit_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); bundle=root/"bundle"; make_bundle(bundle); output=root/"installer"
+            def fake(command,**kwargs):
+                script=Path(command[1]); text=script.read_text(encoding="utf-8-sig")
+                snapshot=script.parent/"payload"; injected=snapshot/"operator-cache.bin"
+                try: injected.write_bytes(b"SQLite format 3\x00"+b"x"*80)
+                except OSError: pass  # directory handles may deny new entries on Windows.
+                sources=[line for line in text.splitlines() if line.startswith("Source:")]
+                self.assertFalse(any("operator-cache.bin" in line for line in sources))
+                self.assertTrue(all("/payload/" in line for line in sources))
+                compiled=Path(next(line for line in text.splitlines() if line.startswith("OutputDir=")).split("=",1)[1])
+                (compiled/"QuantumStudio-0.2.0-Setup.exe").write_bytes(b"synthetic installer")
+                return __import__("subprocess").CompletedProcess(command,0,"","")
+            with patch.object(build_windows_installer.sys,"platform","win32"), \
+                 patch.object(build_windows_installer.shutil,"which",return_value="ISCC.exe"), \
+                 patch.object(build_windows_installer.subprocess,"run",side_effect=fake):
+                result=build_windows_installer.main(["--app-bundle",str(bundle),"--output",str(output)])
+            self.assertEqual(result,0)
+
+    def test_windows_snapshot_locks_allow_reads_and_deny_writes_and_deletes(self):
+        if not sys.platform.startswith("win"): self.skipTest("Windows share-mode locking requires Windows")
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); bundle=root/"bundle"; marker,inputs=make_bundle(bundle)
+            audit,verified=build_windows_installer._validate_installer_bundle(bundle)
+            snapshot=root/"snapshot"; snapshot.mkdir(); build_windows_installer._copy_payload_snapshot(bundle,snapshot,verified)
+            _audit,snap_verified=build_windows_installer._validate_installer_bundle(snapshot)
+            iss=root/"test.iss"; iss.write_text("[Setup]\n",encoding="utf-8")
+            locks=build_windows_installer._lock_snapshot(snapshot,snap_verified["inventory"]["files"],iss)
+            try:
+                self.assertTrue((snapshot/"QuantumStudio.exe").read_bytes())
+                with self.assertRaises(OSError): (snapshot/"QuantumStudio.exe").write_bytes(b"replace")
+                with self.assertRaises(OSError): (snapshot/"QuantumStudio.exe").unlink()
+                with self.assertRaises(OSError): iss.write_text("changed",encoding="utf-8")
+                with self.assertRaises(OSError): iss.rename(root/"renamed.iss")
+            finally: locks.close()
+            (snapshot/"QuantumStudio.exe").write_bytes(b"after close")
+            self.assertEqual((snapshot/"QuantumStudio.exe").read_bytes(),b"after close")
+
+    def test_partial_lock_failure_releases_prior_handles_and_aborts(self):
+        if not sys.platform.startswith("win"): self.skipTest("Windows share-mode locking requires Windows")
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); bundle=root/"bundle"; make_bundle(bundle); output=root/"installer"
+            real_cls=build_windows_installer._WindowsReadLocks; instances=[]; count=0
+            real_init=real_cls.__init__; real_add=real_cls.add
+            def init(instance): real_init(instance); instances.append(instance)
+            def add(instance,path,*,directory=False):
+                nonlocal count
+                count+=1
+                if count==3: raise OSError("controlled lock failure")
+                return real_add(instance,path,directory=directory)
+            with patch.object(build_windows_installer.sys,"platform","win32"), \
+                 patch.object(build_windows_installer.shutil,"which",return_value="ISCC.exe"), \
+                 patch.object(build_windows_installer._WindowsReadLocks,"__init__",init), \
+                 patch.object(build_windows_installer._WindowsReadLocks,"add",add), \
+                 patch.object(build_windows_installer.subprocess,"run") as run:
+                result=build_windows_installer.main(["--app-bundle",str(bundle),"--output",str(output)])
+            self.assertEqual(result,2); run.assert_not_called()
+            self.assertEqual(len(instances),1); self.assertEqual(instances[0].handles,[])
+            self.assertFalse(list(output.glob(".qs-installer-stage-*")))
+
+    def test_alternate_data_stream_is_not_copied_or_referenced(self):
+        if not sys.platform.startswith("win"): self.skipTest("NTFS alternate streams require Windows")
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); bundle=root/"bundle"; make_bundle(bundle); output=root/"installer"
+            original_exe=bundle/"QuantumStudio.exe"
+            try:
+                with open(str(original_exe)+":audit_stream","wb") as stream: stream.write(b"operator stream")
+            except OSError: self.skipTest("alternate streams unavailable on this filesystem")
+            def fake(command,**kwargs):
+                iss=Path(command[1]); text=iss.read_text(encoding="utf-8-sig")
+                self.assertNotIn(":audit_stream",text)
+                snapshot_exe=iss.parent/"payload"/"QuantumStudio.exe"
+                self.assertFalse(Path(str(snapshot_exe)+":audit_stream").exists())
+                compiled=Path(next(line for line in text.splitlines() if line.startswith("OutputDir=")).split("=",1)[1])
+                (compiled/"QuantumStudio-0.2.0-Setup.exe").write_bytes(b"synthetic installer")
+                return __import__("subprocess").CompletedProcess(command,0,"","")
+            with patch.object(build_windows_installer.sys,"platform","win32"), \
+                 patch.object(build_windows_installer.shutil,"which",return_value="ISCC.exe"), \
+                 patch.object(build_windows_installer.subprocess,"run",side_effect=fake):
+                result=build_windows_installer.main(["--app-bundle",str(bundle),"--output",str(output)])
+            self.assertEqual(result,0)
+
+    def test_failed_iscc_cleans_stage_without_publishing_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); bundle=root/"bundle"; make_bundle(bundle); output=root/"installer"
+            def fail(command,**kwargs):
+                return __import__("subprocess").CompletedProcess(command,1,"","controlled failure")
+            with patch.object(build_windows_installer.sys,"platform","win32"), \
+                 patch.object(build_windows_installer.shutil,"which",return_value="ISCC.exe"), \
+                 patch.object(build_windows_installer.subprocess,"run",side_effect=fail):
+                result=build_windows_installer.main(["--app-bundle",str(bundle),"--output",str(output)])
+            self.assertEqual(result,2)
+            self.assertFalse((output/"QuantumStudio.iss").exists())
+            self.assertFalse((output/"QuantumStudio-0.2.0-Setup.exe").exists())
+            self.assertFalse(list(output.glob(".qs-installer-stage-*")))
+
     def test_linux_shared_audit_rejects_disguised_content_and_accepts_clean_fixture(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); (root / "payload.bin").write_bytes(b"SQLite format 3\x00" + b"\x00" * 64)
@@ -192,7 +391,7 @@ class CustomerPayloadInventoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); bundle = root / "bundle"; make_bundle(bundle); output = root / "installer"
             calls = 0
-            original = build_windows_installer.validate_installer_bundle
+            original = build_windows_installer._validate_installer_bundle
             def validate(*args, **kwargs):
                 nonlocal calls
                 calls += 1
@@ -200,7 +399,7 @@ class CustomerPayloadInventoryTests(unittest.TestCase):
                 return original(*args, **kwargs)
             with patch.object(build_windows_installer.sys, "platform", "win32"), \
                  patch.object(build_windows_installer.shutil, "which", return_value="ISCC.exe"), \
-                 patch.object(build_windows_installer, "validate_installer_bundle", side_effect=validate), \
+                 patch.object(build_windows_installer, "_validate_installer_bundle", side_effect=validate), \
                  patch.object(build_windows_installer.subprocess, "run") as run:
                 result = build_windows_installer.main(["--app-bundle", str(bundle), "--output", str(output)])
             self.assertEqual(result, 2); self.assertFalse((output / "QuantumStudio.iss").exists())
@@ -210,15 +409,15 @@ class CustomerPayloadInventoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); bundle = root / "bundle"; make_bundle(bundle); output = root / "installer"
             calls = 0
-            original = build_windows_installer.validate_installer_bundle
+            original = build_windows_installer._validate_installer_bundle
             def validate(*args, **kwargs):
                 nonlocal calls
                 calls += 1
-                if calls == 4: raise ValueError("PAYLOAD_INTEGRITY_MISMATCH")
+                if calls == 3: raise ValueError("PAYLOAD_INTEGRITY_MISMATCH")
                 return original(*args, **kwargs)
             with patch.object(build_windows_installer.sys, "platform", "win32"), \
                  patch.object(build_windows_installer.shutil, "which", return_value="ISCC.exe"), \
-                 patch.object(build_windows_installer, "validate_installer_bundle", side_effect=validate), \
+                 patch.object(build_windows_installer, "_validate_installer_bundle", side_effect=validate), \
                  patch.object(build_windows_installer.subprocess, "run") as run:
                 result = build_windows_installer.main(["--app-bundle", str(bundle), "--output", str(output)])
             self.assertEqual(result, 2); self.assertFalse((output / "QuantumStudio.iss").exists())

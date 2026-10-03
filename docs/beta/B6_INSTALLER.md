@@ -38,8 +38,30 @@ The authoritative Windows standalone build writes
 final. The versioned inventory lists every payload file except itself by
 canonical forward-slash path, byte size, and lowercase SHA-256. The installer
 builder rejects legacy/uninventoried bundles, compares the exact file set and
-metadata, streams hashes, runs path and content audits, then rechecks the
-bundle immediately before publishing the `.iss` file and invoking ISCC.
+metadata, streams hashes, and runs path and content audits. It then creates a
+unique operation-owned staging root beneath the dedicated installer output,
+copies only inventoried files into a payload snapshot, hashes the copied
+bytes, and re-audits that snapshot. The Inno script uses one explicit file
+entry per inventory record; no wildcard or recursive source rule is used.
+On Windows, read-only handles denying write and delete sharing are held for
+inventoried files, snapshot directories where supported, and the temporary
+`.iss` for the complete ISCC invocation. The snapshot is rechecked while
+locked immediately before compilation. The completed installer is published
+without replacing an existing output; the unique staging root is removed
+after its ownership marker and identity are verified. A pre-existing final
+`.iss` or installer is preserved and causes failure.
+The inventory copy transfers only the ordinary file data stream; alternate
+data streams are not copied or named by the generated source list.
+
+These controls defend against concurrent filesystem changes to the original
+bundle and controlled snapshot within the trusted builder process: original
+changes after snapshot creation cannot affect compiler input, and extra
+snapshot files are not named by the explicit Inno list. They do not defend
+against arbitrary malicious code already running in the builder process,
+compromise of the Windows build account, administrator/kernel control, or a
+replaced ISCC executable. Windows directory sharing behavior can vary; the
+explicit source list is the primary control against added files. The snapshot
+is not cryptographically immutable.
 
 Customer package audits do not trust filename extensions. They reject known
 SQLite database/journal/WAL signatures, private-key PEM material, known

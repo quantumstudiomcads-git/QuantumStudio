@@ -191,6 +191,8 @@ class LocalExecutionManager:
    with self._lock:self._process=None
    runtime.finished_at=now(); self._emit(record,task.task_id,runtime.state)
  def execute(self,workflow, record=None, store=None):
+  if record is not None and any(item.state in {TaskState.INDETERMINATE, TaskState.CANCELLED} for item in record.tasks.values()):
+   raise ExecutionPreflightError("Indeterminate or cancelled execution is terminal; it cannot be resumed.")
   errors=self.preflight(workflow)
   if errors: raise ExecutionPreflightError("\n".join(errors))
   self._cancel.clear(); self._store=store; records=record.tasks if record is not None else {task.task_id:TaskExecutionRecord(task.task_id) for task in workflow.tasks}; record=record or WorkflowExecutionRecord(workflow.request_id,str(Path(workflow.root).resolve()),records); record.started_at=record.started_at or now(); task_map=workflow.task_map()
@@ -213,7 +215,9 @@ class LocalExecutionManager:
     registry.register(task, ArtifactResolver.declarations(task))
   return registry.load()
  def resume(self, workflow, record, store=None):
-  retryable={TaskState.FAILED, TaskState.INTERRUPTED, TaskState.CANCELLED}
+  if any(item.state in {TaskState.INDETERMINATE, TaskState.CANCELLED} for item in record.tasks.values()):
+   raise ExecutionPreflightError("Indeterminate or cancelled execution is terminal; it cannot be resumed.")
+  retryable={TaskState.FAILED, TaskState.INTERRUPTED}
   first=next((task.task_id for task in workflow.tasks if record.tasks[task.task_id].state in retryable), None)
   if first is not None:
    descendants = store.invalidate_downstream(workflow, record, first) if store else {first}
@@ -221,6 +225,10 @@ class LocalExecutionManager:
   return self.execute(workflow, record, store)
 
  def restart_task(self, workflow, record, task_id, store=None):
+  if any(item.state is TaskState.INDETERMINATE for item in record.tasks.values()):
+   raise ExecutionPreflightError("Indeterminate execution requires operator review; it cannot create another attempt.")
+  if record.tasks[task_id].state is TaskState.CANCELLED:
+   raise ExecutionPreflightError("Confirmed cancellation is terminal; start a separate explicit run if needed.")
   if record.tasks[task_id].state is TaskState.RUNNING: raise ExecutionPreflightError("Cannot restart a running task.")
   descendants = store.invalidate_downstream(workflow, record, task_id) if store else {task_id}
   for item in descendants: record.tasks[item].state=TaskState.PENDING

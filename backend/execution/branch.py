@@ -90,6 +90,8 @@ class BranchExecutionBuilder:
     def create(self, workflow, reuse_plan, parent_record, parent_registry, *, branch_root):
         if reuse_plan.parent_execution_id != parent_record.execution_id:
             raise BranchExecutionError("Reuse plan parent does not match the supplied execution.")
+        if any(item.state in {TaskState.INDETERMINATE, TaskState.CANCELLED} for item in parent_record.tasks.values()):
+            raise BranchExecutionError("Indeterminate or cancelled parent execution cannot be branched automatically.")
         child_root = Path(branch_root).resolve()
         if child_root.exists():
             raise BranchExecutionError("Branch root already exists.")

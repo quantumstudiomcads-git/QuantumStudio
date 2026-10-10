@@ -1980,10 +1980,20 @@ class CalculateWorkspace(QWidget):
             store = ExecutionStore(root)
             assessment = store.assess(workflow, request_id=self.calculation_request.id)
             record = None
+            if assessment.state is RecoveryState.MANUAL_REVIEW:
+                QMessageBox.information(self, "Execution Requires Review", assessment.message)
+                return
+            if assessment.state is RecoveryState.CANCELLED:
+                QMessageBox.information(self, "Execution Cancelled", assessment.message)
+                return
+            if assessment.state is RecoveryState.CORRUPT_RUNTIME_RECORD:
+                QMessageBox.information(self, "Execution Requires Review",
+                    assessment.message + " Review the execution record before starting new work.")
+                return
             if assessment.state is RecoveryState.RECOVERABLE:
                 if QMessageBox.question(self, "Recover Local Execution", "A recoverable execution was found. Resume from completed prerequisites?") == QMessageBox.StandardButton.Yes:
                     record = assessment.record
-            elif assessment.state in {RecoveryState.INCOMPATIBLE, RecoveryState.MODIFIED_INPUTS, RecoveryState.CORRUPT_RUNTIME_RECORD}:
+            elif assessment.state in {RecoveryState.INCOMPATIBLE, RecoveryState.MODIFIED_INPUTS}:
                 QMessageBox.information(self, "Execution History", assessment.message + " A new execution attempt will be created.")
             record = record or store.create(workflow)
             self._local_execution_service = LocalExecutionService(manager)
@@ -2005,10 +2015,17 @@ class CalculateWorkspace(QWidget):
             return
         if getattr(self, "_batch_current", None) is not None:
             _prepared, _workflow, _root, request_ids = self._batch_current
-            state = "FAILED" if handle.error is not None or handle.result is None or handle.result.state.value != "COMPLETED" else "COMPLETED"
+            state = ("FAILED" if handle.error is not None or handle.result is None else
+                     "INDETERMINATE" if handle.result.state.value == "INDETERMINATE" else
+                     "COMPLETED" if handle.result.state.value == "COMPLETED" else "FAILED")
             self._request_status.update({request_id: state for request_id in request_ids})
             self._active_execution = None
             self._batch_current = None
+            if state == "INDETERMINATE":
+                self._batch_queue = []
+                self.workflow_status.setText("Status: Outcome indeterminate — operator review required")
+                self.execution_preview.setText("Managed task outcome is unproven. Review the execution record before starting new work.")
+                return
             if state == "FAILED":
                 self._batch_failed = True
                 self._request_status.update({request_id: "FAILED" for request_id in request_ids})
@@ -2051,6 +2068,10 @@ class CalculateWorkspace(QWidget):
             self._result_parsing_worker = worker
             worker.finished_result.connect(self._result_parsing_completed)
             worker.start()
+        elif result.state.value == "INDETERMINATE":
+            self.workflow_status.setText("Status: Outcome indeterminate — operator review required")
+            QMessageBox.information(self, "Execution Requires Review",
+                "The managed task outcome is unproven. Review its execution record before starting new work.")
         else:
             detail = next((task.error_message for task in result.tasks.values() if task.error_message), None)
             detail = detail or f"Workflow ended in state {result.state.value}."

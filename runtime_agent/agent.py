@@ -29,6 +29,7 @@ DEFAULT_TASK_CONTROL_ROOT = "/var/lib/quantumstudio/runtime/tasks"
 CAPABILITIES = ("run", "status", "cancel", "stage_in", "stage_out", "install_engine_pack")
 _TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)\Z")
+_CANCELLATION_EVIDENCE_VERSION = 2
 
 
 def _under(path: RuntimePath, roots: Iterable[str]) -> bool:
@@ -231,6 +232,23 @@ def _result(request: RuntimeProcessRequest | None, status: AgentStatus, diagnost
     return RuntimeProcessResult(request.task_id if request else "", status, **values, diagnostic=diagnostic)
 
 
+def _process_boundary_identity(record: Mapping[str, object]) -> tuple[str, str] | None:
+    """Canonical, restart-stable identity of the owned process boundary."""
+    kind = record.get("boundary_type")
+    if kind == "windows_job_object+process_group":
+        ownership, name = record.get("ownership_token"), record.get("job_name")
+        if (not isinstance(ownership, str) or not re.fullmatch(r"[0-9a-f]{32}", ownership)
+                or not isinstance(name, str) or name != "Local\\QSRuntime-" + ownership):
+            return None
+        return kind, name
+    if kind == "posix_session":
+        pgid = record.get("pgid")
+        if type(pgid) is not int or pgid <= 1:
+            return None
+        return kind, str(pgid)
+    return None
+
+
 def _cancellation_action_evidence(record: Mapping[str, object], *, ownership: str,
                                   request_id: str, pid: int,
                                   creation_time: int) -> str | None:
@@ -251,6 +269,14 @@ def _cancellation_action_evidence(record: Mapping[str, object], *, ownership: st
             or record.get("cancel_requested") is not True
             or record.get("cancel_token") != request_id):
         return None
+    if (not isinstance(ownership, str) or not re.fullmatch(r"[0-9a-f]{32}", ownership)
+            or record.get("ownership_token") != ownership
+            or type(record.get("pid")) is not int or record.get("pid") != pid
+            or record.get("process_creation_time") != str(creation_time)):
+        return None
+    boundary = _process_boundary_identity(record)
+    if boundary is None:
+        return None
     for evidence in reversed(receipts):
         if not isinstance(evidence, dict):
             continue
@@ -262,8 +288,8 @@ def _cancellation_action_evidence(record: Mapping[str, object], *, ownership: st
                 continue
             prepared_at = _parse_utc_timestamp(intent.get("prepared_at"))
             action_at = _parse_utc_timestamp(evidence.get("action_at"))
-            if (type(evidence.get("version")) is int and evidence.get("version") == 1
-                    and type(intent.get("version")) is int and intent.get("version") == 1
+            if (type(evidence.get("version")) is int and evidence.get("version") == _CANCELLATION_EVIDENCE_VERSION
+                    and type(intent.get("version")) is int and intent.get("version") == _CANCELLATION_EVIDENCE_VERSION
                     and isinstance(record.get("task_id"), str) and record.get("task_id")
                     and evidence.get("task_id") == record.get("task_id") == intent.get("task_id")
                     and evidence.get("request_id") == intent.get("request_id") == request_id
@@ -271,8 +297,11 @@ def _cancellation_action_evidence(record: Mapping[str, object], *, ownership: st
                     and isinstance(intent.get("attempt_id"), str)
                     and re.fullmatch(r"[0-9a-f]{32}", intent["attempt_id"])
                     and evidence.get("ownership_token") == intent.get("ownership_token") == ownership
+                    and type(evidence.get("pid")) is int and type(intent.get("pid")) is int
                     and evidence.get("pid") == intent.get("pid") == pid
                     and evidence.get("process_creation_time") == intent.get("process_creation_time") == str(creation_time)
+                    and evidence.get("boundary_type") == intent.get("boundary_type") == boundary[0]
+                    and evidence.get("boundary_id") == intent.get("boundary_id") == boundary[1]
                     and evidence.get("action") == intent.get("action")
                     and prepared_at is not None and action_at is not None and action_at >= prepared_at):
                 return action
@@ -299,11 +328,17 @@ def _prepare_cancellation_action(record: Mapping[str, object], *, action: str,
                                  ownership: str, request_id: str, pid: int,
                                  creation_time: int) -> dict[str, object]:
     updated = dict(record)
+    boundary = _process_boundary_identity(updated)
+    if (boundary is None or updated.get("ownership_token") != ownership
+            or type(updated.get("pid")) is not int or updated.get("pid") != pid
+            or updated.get("process_creation_time") != str(creation_time)):
+        raise ValueError("Managed process boundary identity could not be verified.")
     intent = {
-        "version": 1, "state": "prepared", "task_id": updated.get("task_id"),
+        "version": _CANCELLATION_EVIDENCE_VERSION, "state": "prepared", "task_id": updated.get("task_id"),
         "request_id": request_id, "attempt_id": uuid.uuid4().hex,
         "ownership_token": ownership, "pid": pid,
         "process_creation_time": str(creation_time), "action": action,
+        "boundary_type": boundary[0], "boundary_id": boundary[1],
         "prepared_at": timestamp(),
     }
     updated["cancellation_action_intent"] = intent
@@ -346,14 +381,18 @@ def _with_cancellation_action(record: Mapping[str, object], *, action: str,
     intent = updated.get("cancellation_action_intent")
     if not isinstance(intent, dict) or intent.get("state") != "prepared" or intent.get("action") != action:
         raise ValueError("Cancellation action has no matching prepared intent.")
+    boundary = _process_boundary_identity(updated)
+    if boundary is None:
+        raise ValueError("Managed process boundary identity could not be verified.")
     updated["cancellation_action_evidence"] = {
-        "version": 1,
+        "version": _CANCELLATION_EVIDENCE_VERSION,
         "task_id": updated.get("task_id"),
         "request_id": request_id,
         "attempt_id": intent.get("attempt_id"),
         "ownership_token": ownership,
         "pid": pid,
         "process_creation_time": str(creation_time),
+        "boundary_type": boundary[0], "boundary_id": boundary[1],
         "action": action,
         "action_at": timestamp(),
     }
@@ -428,6 +467,7 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
                                    "job_name": job.name, "process_creation_time": str(process_creation_time)})
                 else:
                     record["boundary_type"] = "posix_session"
+                    record["process_creation_time"] = record["process_start_ticks"]
                 with _task_record_lock(request.task_id, task_control_root):
                     _atomic_json(control, record)
                     if job is not None:
@@ -489,28 +529,30 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
                 if not existing or existing.get("ownership_token") != ownership_token:
                     final_state = "FAILED"
                 else:
-                    if job is not None:
+                    if existing.get("state") in {"FINISHED", "FAILED", "CANCELLED", "CANCELLATION_INDETERMINATE", "OUTCOME_INDETERMINATE"}:
+                        final_state = str(existing["state"])
+                    elif job is not None:
                         action = _cancellation_action_evidence(
                             existing, ownership=ownership_token,
                             request_id=str(existing.get("cancel_token", "")), pid=pid,
                             creation_time=int(process_creation_time or 0))
                         if action:
                             final_state = "CANCELLED"
-                        elif (isinstance(existing.get("cancellation_action_intent"), dict)
-                              and existing["cancellation_action_intent"].get("state") != "failed"):
+                        elif _has_unresolved_action_intent(existing):
                             final_state = "CANCELLATION_INDETERMINATE"
-                        elif existing.get("state") in {"FINISHED", "FAILED"}:
-                            final_state = str(existing["state"])
                         else:
-                            final_state = "FINISHED"
+                            final_state = "FINISHED" if return_code == 0 else "FAILED"
                     else:
-                        # Keep the existing POSIX cancellation result policy.
-                        if existing.get("state") in {"CANCELLED", "FINISHED", "FAILED"}:
-                            final_state = str(existing["state"])
+                        action = _cancellation_action_evidence(
+                            existing, ownership=ownership_token,
+                            request_id=str(existing.get("cancel_token", "")), pid=pid,
+                            creation_time=int(str(existing.get("process_creation_time", "0"))))
+                        if action is not None:
+                            final_state = "CANCELLED"
+                        elif _has_unresolved_action_intent(existing):
+                            final_state = "CANCELLATION_INDETERMINATE"
                         else:
-                            final_state = ("CANCELLED" if existing.get("cancel_requested")
-                                           and return_code is not None and return_code < 0
-                                           and status is not AgentStatus.PROCESS_TIMEOUT else "FINISHED")
+                            final_state = "FINISHED" if return_code == 0 else "FAILED"
                 final_record = dict(existing or {})
                 final_record.update({"state": final_state, "return_code": return_code,
                                      "finished_at": timestamp()})
@@ -624,20 +666,8 @@ def task_status(task_id: str, *, task_control_root: str = DEFAULT_TASK_CONTROL_R
         record = _read_control(task_id, task_control_root)
         if record is None:
             return {"schema_version": 1, "status": AgentStatus.TASK_NOT_FOUND.value, "task_id": task_id}
-        if _has_unresolved_action_intent(record) and record.get("state") != "CANCELLATION_INDETERMINATE":
-            indeterminate = _mark_cancellation_indeterminate(record, error_type="restart_reconciliation")
-            try:
-                _atomic_json(_control_path(task_id, task_control_root), indeterminate)
-                record = indeterminate
-            except (OSError, TypeError, ValueError):
-                return {"schema_version": 1,
-                        "status": AgentStatus.TASK_CANCELLATION_INDETERMINATE.value,
-                        "task_id": task_id,
-                        "failure_code": "cancellation_action_outcome_unproven",
-                        "record": record}
-        if record.get("state") == "CANCELLATION_INDETERMINATE":
-            state = AgentStatus.TASK_CANCELLATION_INDETERMINATE
-        else:
+        terminal = {"FINISHED", "FAILED", "CANCELLED", "CANCELLATION_INDETERMINATE", "OUTCOME_INDETERMINATE"}
+        if record.get("state") not in terminal:
             try:
                 action = _cancellation_action_evidence(
                     record, ownership=str(record.get("ownership_token", "")),
@@ -647,17 +677,71 @@ def task_status(task_id: str, *, task_control_root: str = DEFAULT_TASK_CONTROL_R
             except (TypeError, ValueError):
                 action = None
             alive = _record_alive(record)
-            if record.get("state") == "CANCELLING" and not alive and action is not None:
-                record = dict(record)
-                record.update({"state": "CANCELLED", "cancellation_outcome": action,
-                               "cancelled_at": timestamp()})
-                _atomic_json(_control_path(task_id, task_control_root), record)
-                state = AgentStatus.TASK_CANCELLED
+            if record.get("state") not in {"RUNNING", "CANCELLING"}:
+                updated = dict(record)
+                updated.update({"state": "OUTCOME_INDETERMINATE",
+                                "failure_code": "task_control_state_unknown",
+                                "finished_at": timestamp()})
+            elif _has_unresolved_action_intent(record):
+                updated = _mark_cancellation_indeterminate(record, error_type="restart_reconciliation")
+            elif alive:
+                updated = None
+            elif action is not None:
+                updated = dict(record)
+                updated.update({"state": "CANCELLED", "cancellation_outcome": action,
+                                "cancelled_at": timestamp(), "finished_at": timestamp()})
             else:
-                state = AgentStatus.TASK_RUNNING if alive else (
-                    AgentStatus.TASK_CANCELLED if record.get("state") == "CANCELLED"
-                    else AgentStatus.TASK_FINISHED)
-    return {"schema_version": 1, "status": state.value, "task_id": task_id, "record": record}
+                code = _known_return_code(record)
+                updated = dict(record)
+                updated["return_code"] = code
+                updated["finished_at"] = timestamp()
+                if code is None:
+                    updated.update({"state": "OUTCOME_INDETERMINATE",
+                                    "failure_code": "task_exit_outcome_unproven"})
+                else:
+                    updated["state"] = "FINISHED" if code == 0 else "FAILED"
+            if updated is not None:
+                _atomic_json(_control_path(task_id, task_control_root), updated)
+                record = _read_control(task_id, task_control_root)
+                if record is None:
+                    raise ProtocolError("INVALID_REQUEST", "Committed task record disappeared.")
+    states = {"FINISHED": AgentStatus.TASK_FINISHED, "FAILED": AgentStatus.TASK_FAILED,
+              "CANCELLED": AgentStatus.TASK_CANCELLED,
+              "CANCELLATION_INDETERMINATE": AgentStatus.TASK_CANCELLATION_INDETERMINATE,
+              "OUTCOME_INDETERMINATE": AgentStatus.TASK_OUTCOME_INDETERMINATE}
+    state = states.get(record.get("state"), AgentStatus.TASK_RUNNING)
+    return {"schema_version": 1, "status": state.value, "task_id": task_id,
+            "failure_code": record.get("failure_code"), "return_code": record.get("return_code"),
+            "diagnostic": ("Task outcome is unproven; operator review is required."
+                           if state in {AgentStatus.TASK_CANCELLATION_INDETERMINATE,
+                                        AgentStatus.TASK_OUTCOME_INDETERMINATE} else ""),
+            "record": record}
+
+
+def _known_return_code(record: Mapping[str, object]) -> int | None:
+    code = record.get("return_code")
+    if type(code) is int:
+        return code
+    if os.name != "nt" or _process_boundary_identity(record) is None:
+        return None
+    pid, created = record.get("pid"), record.get("process_creation_time")
+    if type(pid) is not int or not isinstance(created, str) or not created.isdecimal():
+        return None
+    from .windows_job import process_exit_code
+    try:
+        return process_exit_code(pid, int(created))
+    except OSError:
+        return None
+
+
+def _natural_terminal_record(record: Mapping[str, object]) -> dict[str, object]:
+    final = dict(record)
+    code = _known_return_code(record)
+    final.update({"return_code": code, "finished_at": timestamp(),
+                  "state": "FINISHED" if code == 0 else "FAILED" if code is not None else "OUTCOME_INDETERMINATE"})
+    if code is None:
+        final["failure_code"] = "task_exit_outcome_unproven"
+    return final
 
 
 def _has_unresolved_action_intent(record: Mapping[str, object]) -> bool:
@@ -699,12 +783,29 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
             if state == "CANCELLED":
                 return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLED.value,
                         "task_id": task_id, "outcome": record.get("cancellation_outcome", "ALREADY_CANCELLED")}
-            if state in {"FINISHED", "FAILED"}:
-                return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
+            if state in {"FINISHED", "FAILED", "OUTCOME_INDETERMINATE"}:
+                return _cancel_terminal_result(task_id, record)
             if state == "CANCELLATION_INDETERMINATE" or _has_unresolved_action_intent(record):
-                return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLATION_INDETERMINATE.value,
-                        "task_id": task_id, "failure_code": "cancellation_action_outcome_unproven"}
+                if state != "CANCELLATION_INDETERMINATE":
+                    record = _mark_cancellation_indeterminate(record, error_type="cancel_reconciliation")
+                    _atomic_json(_control_path(task_id, task_control_root), record)
+                return _cancel_terminal_result(task_id, record)
             if state == "CANCELLING":
+                if not _record_alive(record):
+                    try:
+                        action = _cancellation_action_evidence(
+                            record, ownership=str(record.get("ownership_token", "")),
+                            request_id=str(record.get("cancel_token", "")),
+                            pid=int(record.get("pid", 0)),
+                            creation_time=int(str(record.get("process_creation_time", "0"))))
+                    except (TypeError, ValueError):
+                        action = None
+                    final = (dict(record) if action is not None else _natural_terminal_record(record))
+                    if action is not None:
+                        final.update({"state": "CANCELLED", "cancellation_outcome": action,
+                                      "cancelled_at": timestamp(), "finished_at": timestamp()})
+                    _atomic_json(_control_path(task_id, task_control_root), final)
+                    return _cancel_terminal_result(task_id, final)
                 return {"schema_version": 1, "status": AgentStatus.TASK_RUNNING.value,
                         "task_id": task_id, "outcome": "CANCELLATION_IN_PROGRESS"}
             if state != "RUNNING":
@@ -727,14 +828,19 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                 job = WindowsJob(name, create=False)
                 try:
                     if job.active_processes() == 0:
-                        return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
+                        final = _natural_terminal_record(record)
+                        _atomic_json(_control_path(task_id, task_control_root), final)
+                        return _cancel_terminal_result(task_id, final)
                     creation = int(str(record.get("process_creation_time", "")))
                     process_state = process_exit_state(pid, creation)
                     if process_state is None:
-                        return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
-                                "diagnostic": "Managed process exit state could not be verified; no signal was sent."}
+                        final = _natural_terminal_record(record)
+                        _atomic_json(_control_path(task_id, task_control_root), final)
+                        return _cancel_terminal_result(task_id, final)
                     if process_state:
-                        return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
+                        final = _natural_terminal_record(record)
+                        _atomic_json(_control_path(task_id, task_control_root), final)
+                        return _cancel_terminal_result(task_id, final)
                     if not job.is_process_member(pid, creation):
                         return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
                                 "diagnostic": "Managed process identity changed; no signal was sent."}
@@ -745,15 +851,14 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                     _atomic_json(_control_path(task_id, task_control_root), cancelling)
                     process_state = process_exit_state(pid, creation)
                     if process_state is None:
-                        return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
-                                "diagnostic": "Managed process exit state could not be verified; no signal was sent."}
+                        final = _natural_terminal_record(cancelling)
+                        _atomic_json(_control_path(task_id, task_control_root), final)
+                        return _cancel_terminal_result(task_id, final)
                     if process_state:
-                        finished = dict(cancelling)
-                        finished.update({"state": "FINISHED", "finished_at": timestamp(),
-                                         "cancellation_outcome": "lost_natural_completion_race"})
-                        _atomic_json(_control_path(task_id, task_control_root), finished)
-                        return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value,
-                                "task_id": task_id}
+                        final = _natural_terminal_record(cancelling)
+                        final["cancellation_outcome"] = "lost_natural_completion_race"
+                        _atomic_json(_control_path(task_id, task_control_root), final)
+                        return _cancel_terminal_result(task_id, final)
                     prepared = _prepare_cancellation_action(
                         cancelling, action="graceful", ownership=ownership,
                         request_id=cancel_token, pid=pid, creation_time=creation)
@@ -775,14 +880,29 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                 # recorded process identity before requesting cancellation.
                 pgid = int(record.get("pgid", 0))
                 if not _record_alive(record):
-                    finished = dict(record); finished.update({"state": "FINISHED", "finished_at": timestamp()})
-                    _atomic_json(_control_path(task_id, task_control_root), finished)
-                    return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
+                    final = _natural_terminal_record(record)
+                    _atomic_json(_control_path(task_id, task_control_root), final)
+                    return _cancel_terminal_result(task_id, final)
                 cancelling = dict(record); cancelling.update({"state": "CANCELLING", "cancel_requested": True,
                                                               "cancel_token": cancel_token,
                                                               "cancel_started_at": timestamp()})
                 _atomic_json(_control_path(task_id, task_control_root), cancelling)
-                _signal_group(pgid, signal.SIGTERM)
+                creation = int(str(record.get("process_creation_time", "")))
+                prepared = _prepare_cancellation_action(
+                    cancelling, action="graceful", ownership=ownership,
+                    request_id=cancel_token, pid=pid, creation_time=creation)
+                _atomic_json(_control_path(task_id, task_control_root), prepared)
+                try:
+                    _signal_group(pgid, signal.SIGTERM)
+                except (OSError, ValueError):
+                    _atomic_json(_control_path(task_id, task_control_root),
+                                 _finish_cancellation_intent(prepared, state="failed"))
+                    raise
+                acted = _with_cancellation_action(
+                    prepared, action="graceful", ownership=ownership,
+                    request_id=cancel_token, pid=pid, creation_time=creation)
+                acted["cancellation_outcome"] = "TERMINATED"
+                _persist_cancellation_action_receipt(_control_path(task_id, task_control_root), acted)
         if os.name == "nt":
             # Wait outside the record lock so natural completion can win.
             if event_sent:
@@ -793,7 +913,7 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                         if not latest or latest.get("ownership_token") != ownership:
                             return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
                                     "diagnostic": "Managed task ownership changed during graceful cancellation."}
-                        if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                        if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED", "CANCELLATION_INDETERMINATE", "OUTCOME_INDETERMINATE"}:
                             return _cancel_terminal_result(task_id, latest)
                         if latest.get("state") != "CANCELLING" or latest.get("cancel_token") != cancel_token:
                             return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
@@ -809,20 +929,20 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                 if not latest or latest.get("ownership_token") != ownership:
                     return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
                             "diagnostic": "Managed task ownership changed during cancellation."}
-                if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED", "CANCELLATION_INDETERMINATE", "OUTCOME_INDETERMINATE"}:
                     return _cancel_terminal_result(task_id, latest)
                 if latest.get("cancel_token") != cancel_token or latest.get("state") != "CANCELLING":
                     return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
                             "diagnostic": "Managed task state changed during cancellation."}
                 with WindowsJob(name, create=False) as job:
                     if job.active_processes() == 0:
-                        from .windows_job import process_exit_code
-                        code = process_exit_code(pid, creation)
+                        code = _known_return_code(latest)
                         action = _cancellation_action_evidence(
                             latest, ownership=ownership, request_id=cancel_token,
                             pid=pid, creation_time=creation)
-                        cancelled = action is not None
-                        final_state = "CANCELLED" if cancelled else "FINISHED"
+                        final_state = ("CANCELLED" if action is not None else
+                                       "FINISHED" if code == 0 else
+                                       "FAILED" if code is not None else "OUTCOME_INDETERMINATE")
                         outcome = action or "lost_natural_completion_race"
                     else:
                         prepared = _prepare_cancellation_action(
@@ -853,7 +973,7 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                         if not latest or latest.get("ownership_token") != ownership:
                             return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
                                     "diagnostic": "Managed task ownership changed during termination."}
-                        if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                        if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED", "CANCELLATION_INDETERMINATE", "OUTCOME_INDETERMINATE"}:
                             return _cancel_terminal_result(task_id, latest)
                         if latest.get("cancel_token") != cancel_token:
                             return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
@@ -870,7 +990,7 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                     if not latest or latest.get("ownership_token") != ownership:
                         return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
                                 "diagnostic": "Managed task ownership changed during termination."}
-                    if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                    if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED", "CANCELLATION_INDETERMINATE", "OUTCOME_INDETERMINATE"}:
                         return _cancel_terminal_result(task_id, latest)
                     if latest.get("cancel_token") != cancel_token:
                         return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
@@ -899,7 +1019,7 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                         if not latest or latest.get("ownership_token") != ownership:
                             return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
                                     "diagnostic": "Managed task ownership changed during force termination."}
-                        if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                        if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED", "CANCELLATION_INDETERMINATE", "OUTCOME_INDETERMINATE"}:
                             return _cancel_terminal_result(task_id, latest)
                         if latest.get("cancel_token") != cancel_token:
                             return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
@@ -924,12 +1044,19 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                     elif _has_unresolved_action_intent(latest):
                         final_state, outcome = "CANCELLATION_INDETERMINATE", "cancellation_action_outcome_unproven"
                     elif final_state == "CANCELLED":
-                        final_state, outcome = "FINISHED", "lost_natural_completion_race"
+                        code = _known_return_code(latest)
+                        final_state, outcome = ("FINISHED" if code == 0 else
+                                                "FAILED" if code is not None else
+                                                "OUTCOME_INDETERMINATE"), "lost_natural_completion_race"
                     final = dict(latest); final.update({"state": final_state,
                                                         "cancellation_outcome": outcome,
                                                         "cancelled_at": timestamp() if final_state == "CANCELLED" else None})
                     if final_state == "CANCELLATION_INDETERMINATE":
                         final["failure_code"] = "cancellation_action_outcome_unproven"
+                    elif final_state in {"FINISHED", "FAILED", "OUTCOME_INDETERMINATE"}:
+                        final["return_code"] = _known_return_code(latest)
+                        if final_state == "OUTCOME_INDETERMINATE":
+                            final["failure_code"] = "task_exit_outcome_unproven"
                     _atomic_json(_control_path(task_id, task_control_root), final)
                 else:
                     final = latest or {}
@@ -938,7 +1065,7 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
         while time.monotonic() < deadline:
             with _task_record_lock(task_id, task_control_root):
                 latest = _read_control(task_id, task_control_root)
-                if not latest or latest.get("ownership_token") != ownership or latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                if not latest or latest.get("ownership_token") != ownership or latest.get("state") in {"FINISHED", "FAILED", "CANCELLED", "CANCELLATION_INDETERMINATE", "OUTCOME_INDETERMINATE"}:
                     return _cancel_terminal_result(task_id, latest or {})
                 if latest.get("cancel_token") != cancel_token:
                     return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
@@ -949,13 +1076,27 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
             time.sleep(min(0.03, max(0.0, deadline-time.monotonic())))
         with _task_record_lock(task_id, task_control_root):
             latest = _read_control(task_id, task_control_root)
-            if not latest or latest.get("ownership_token") != ownership or latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+            if not latest or latest.get("ownership_token") != ownership or latest.get("state") in {"FINISHED", "FAILED", "CANCELLED", "CANCELLATION_INDETERMINATE", "OUTCOME_INDETERMINATE"}:
                 return _cancel_terminal_result(task_id, latest or {})
             if latest.get("cancel_token") != cancel_token:
                 return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
                         "diagnostic": "Managed cancellation ownership changed."}
             if _record_alive(latest):
-                _signal_group(pgid, signal.SIGKILL)
+                prepared = _prepare_cancellation_action(
+                    latest, action="forced", ownership=ownership,
+                    request_id=cancel_token, pid=pid, creation_time=creation)
+                _atomic_json(_control_path(task_id, task_control_root), prepared)
+                try:
+                    _signal_group(pgid, signal.SIGKILL)
+                except (OSError, ValueError):
+                    _atomic_json(_control_path(task_id, task_control_root),
+                                 _finish_cancellation_intent(prepared, state="failed"))
+                    raise
+                acted = _with_cancellation_action(
+                    prepared, action="forced", ownership=ownership,
+                    request_id=cancel_token, pid=pid, creation_time=creation)
+                acted["cancellation_outcome"] = "KILLED_AFTER_GRACE"
+                _persist_cancellation_action_receipt(_control_path(task_id, task_control_root), acted)
                 outcome = "KILLED_AFTER_GRACE"
                 force_sent = True
         if force_sent:
@@ -966,7 +1107,7 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                     if not latest or latest.get("ownership_token") != ownership:
                         return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
                                 "diagnostic": "Managed task ownership changed during force termination."}
-                    if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                    if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED", "CANCELLATION_INDETERMINATE", "OUTCOME_INDETERMINATE"}:
                         return _cancel_terminal_result(task_id, latest)
                     if latest.get("cancel_token") != cancel_token:
                         return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
@@ -983,13 +1124,23 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
             if not latest or latest.get("ownership_token") != ownership:
                 return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
                         "diagnostic": "Managed task ownership changed before finalization."}
-            if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+            if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED", "CANCELLATION_INDETERMINATE", "OUTCOME_INDETERMINATE"}:
                 return _cancel_terminal_result(task_id, latest)
             if latest.get("cancel_token") != cancel_token or latest.get("state") != "CANCELLING":
                 return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
                         "diagnostic": "Managed cancellation ownership changed before finalization."}
-            final = dict(latest); final.update({"state": "CANCELLED", "cancellation_outcome": outcome,
-                                                "cancelled_at": timestamp()})
+            action = _cancellation_action_evidence(
+                latest, ownership=ownership, request_id=cancel_token,
+                pid=pid, creation_time=creation)
+            if action is not None:
+                final = dict(latest)
+                final.update({"state": "CANCELLED",
+                              "cancellation_outcome": "KILLED_AFTER_GRACE" if action == "forced" else "TERMINATED",
+                              "cancelled_at": timestamp()})
+            elif _has_unresolved_action_intent(latest):
+                final = _mark_cancellation_indeterminate(latest, error_type="cancel_finalization")
+            else:
+                final = _natural_terminal_record(latest)
             _atomic_json(_control_path(task_id, task_control_root), final)
         return _cancel_terminal_result(task_id, final)
     except (OSError, ValueError, RuntimeError, TimeoutError, KeyError, TypeError) as error:
@@ -1020,12 +1171,20 @@ def _cancel_terminal_result(task_id: str, record: Mapping[str, object]) -> dict[
     state = str(record.get("state", ""))
     if state == "CANCELLATION_INDETERMINATE" or _has_unresolved_action_intent(record):
         return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLATION_INDETERMINATE.value,
-                "task_id": task_id, "failure_code": "cancellation_action_outcome_unproven"}
+                "task_id": task_id, "failure_code": "cancellation_action_outcome_unproven",
+                "return_code": record.get("return_code"),
+                "diagnostic": "Cancellation outcome is unproven; operator review is required."}
     if state == "CANCELLED":
         return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLED.value,
                 "task_id": task_id, "outcome": record.get("cancellation_outcome", "TERMINATED")}
+    if state == "OUTCOME_INDETERMINATE":
+        return {"schema_version": 1, "status": AgentStatus.TASK_OUTCOME_INDETERMINATE.value,
+                "task_id": task_id, "failure_code": record.get("failure_code"),
+                "return_code": record.get("return_code")}
     if state in {"FINISHED", "FAILED"}:
-        return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
+        return {"schema_version": 1,
+                "status": (AgentStatus.TASK_FINISHED if state == "FINISHED" else AgentStatus.TASK_FAILED).value,
+                "task_id": task_id, "return_code": record.get("return_code")}
     return {"schema_version": 1, "status": AgentStatus.TASK_RUNNING.value,
             "task_id": task_id, "outcome": "CANCELLATION_IN_PROGRESS"}
 

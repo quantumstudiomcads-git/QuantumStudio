@@ -76,9 +76,12 @@ Cancellation sends `CTRL_BREAK_EVENT` only to the explicitly created,
 nonzero child group after verifying membership. Under the task-record lock it
 first persists a versioned, non-secret prepared action intent bound to the
 cancellation request, unique attempt ID, ownership token, PID, process
-creation time, action, and UTC ISO-8601 timestamp. Only then does it invoke
+creation time, canonical process-boundary type and identity, action, and UTC
+ISO-8601 timestamp. The Windows identity is the exact token-bound Job Object
+name; the POSIX representation uses the numeric process-group identity when
+evidence is recorded. Only then does it invoke
 the native action. A successful action is followed by an atomically persisted
-version-1 receipt bound to that same attempt and identity; receipt timestamps
+version-2 receipt bound to that same attempt and identity; receipt timestamps
 must be valid timezone-aware UTC values. A valid receipt is required to record
 `CANCELLED`, including when a handled graceful request exits with code 0. A
 request flag or prepared intent alone is insufficient. A definite native
@@ -97,6 +100,31 @@ require operator review; no automatic action is inferred from process exit,
 return code, an empty Job, or the request flag. The actual return code is
 preserved when known.
 
+Version-1 intents and receipts remain readable as historical task data, but
+they lack a proven boundary identity and cannot newly authorize `CANCELLED`.
+An unresolved historical intent is reconciled as indeterminate. The agent
+compares the boundary fields in both version-2 records with the authoritative
+task record, rather than trusting agreement between the intent and receipt.
+
+`task_status` commits dead `CANCELLING` records to a durable terminal state
+under the record lock before returning. A confirmed receipt yields `CANCELLED`;
+an unresolved intent yields `CANCELLATION_INDETERMINATE`. After a durably
+failed action or without action evidence, a trustworthy return code yields
+`FINISHED` for zero or `FAILED` for nonzero. If the exit outcome cannot be
+verified, `OUTCOME_INDETERMINATE` with `task_exit_outcome_unproven` requires
+operator review rather than fabricated success. Repeated status and cancel
+calls observe the committed state.
+
+The managed-science service reads authoritative task status after execution.
+It maps confirmed cancellation to `CANCELLED`, unresolved cancellation or
+unknown outcome to terminal `INDETERMINATE`, and natural completion according
+to the verified return code. Code 0 cannot override an indeterminate task.
+Execution sidecars retain the typed failure code and known return code.
+Recovery assessment exposes `MANUAL_REVIEW`; resume, retry, branch creation,
+and new attempts in that workflow are blocked until an operator resolves the
+uncertainty outside the automatic recovery path. `INTERRUPTED` remains the
+separate retryable state for stale work without this evidence.
+
 The agent rereads authoritative state during bounded grace polling and before
 each termination or final state update. If graceful delivery is unavailable
 or ignored, it prepares a distinct bounded escalation attempt for the
@@ -107,7 +135,11 @@ process-name-based termination is used. The historical managed-runtime
 not claim to explain or suppress it.
 
 POSIX launches retain their separate session and process-group behavior, with
-the process start discriminator and group checked before signalling. On both
+the process start discriminator and group checked before signalling. POSIX
+SIGTERM and SIGKILL attempts also persist a version-2 prepared intent before
+the signal and a matching receipt after a successful call; signal failure is
+recorded explicitly. POSIX cancellation is never inferred from the request
+flag or a negative return code alone. On both
 platforms, task-record transitions are serialized. Cancellation rereads the
 authoritative state before escalation, stops when the task is terminal, and
 allows only one cancellation request to own the bounded grace/termination
@@ -115,7 +147,7 @@ sequence. Natural completion is preserved if it wins the race. Job/process
 waits are bounded, and repeated cancellation is idempotent; unrelated
 processes remain outside the managed ownership boundary.
 
-Result parsing remains host-side: only collected host paths are handed to `ResultService` and `ResultStore`, so Analyze can show persisted results without WSL. W5 preserves the existing distinction between a zero process exit (`COMPLETED`) and parser result validity (`PARSE_FAILED` is not an engine failure).
+Result parsing remains host-side: only collected host paths are handed to `ResultService` and `ResultStore`, so Analyze can show persisted results without WSL. A verified natural zero exit is `COMPLETED`; parser result validity remains separate (`PARSE_FAILED` is not an engine failure).
 
 PUBLIC ENGINE PACK DISTRIBUTION LEGAL REVIEW: **PENDING**. W5 contains no third-party engine binaries, no downloader, no package-manager calls, and no real Windows/QE validation.
 

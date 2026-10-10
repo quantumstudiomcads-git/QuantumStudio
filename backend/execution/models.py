@@ -2,8 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-class TaskState(str,Enum): PENDING="PENDING"; READY="READY"; RUNNING="RUNNING"; COMPLETED="COMPLETED"; FAILED="FAILED"; CANCELLED="CANCELLED"; BLOCKED="BLOCKED"; INTERRUPTED="INTERRUPTED"
-class WorkflowState(str,Enum): PENDING="PENDING"; RUNNING="RUNNING"; COMPLETED="COMPLETED"; FAILED="FAILED"; CANCELLED="CANCELLED"
+class TaskState(str,Enum): PENDING="PENDING"; READY="READY"; RUNNING="RUNNING"; COMPLETED="COMPLETED"; FAILED="FAILED"; CANCELLED="CANCELLED"; BLOCKED="BLOCKED"; INTERRUPTED="INTERRUPTED"; INDETERMINATE="INDETERMINATE"
+class WorkflowState(str,Enum): PENDING="PENDING"; RUNNING="RUNNING"; COMPLETED="COMPLETED"; FAILED="FAILED"; CANCELLED="CANCELLED"; INDETERMINATE="INDETERMINATE"
 def now(): return datetime.now(timezone.utc).isoformat()
 @dataclass
 class TaskExecutionRecord:
@@ -14,6 +14,7 @@ class WorkflowExecutionRecord:
  @property
  def state(self):
   states={x.state for x in self.tasks.values()}
+  if TaskState.INDETERMINATE in states:return WorkflowState.INDETERMINATE
   if TaskState.RUNNING in states or TaskState.READY in states:return WorkflowState.RUNNING
   if TaskState.FAILED in states or TaskState.INTERRUPTED in states:return WorkflowState.FAILED
   if TaskState.CANCELLED in states:return WorkflowState.CANCELLED

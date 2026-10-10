@@ -184,7 +184,10 @@ while True: time.sleep(.02)
         from runtime_agent.agent import _cancellation_action_evidence
         from runtime_agent.agent import _prepare_cancellation_action, _with_cancellation_action
         record = {"task_id": "evidence-task", "state": "CANCELLING",
-                  "cancel_requested": True, "cancel_token": "a" * 32}
+                  "cancel_requested": True, "cancel_token": "a" * 32,
+                  "ownership_token": "b" * 32, "boundary_type": "windows_job_object+process_group",
+                  "job_name": "Local\\QSRuntime-" + "b" * 32,
+                  "pid": 123, "process_creation_time": "456"}
         record = _prepare_cancellation_action(record, action="graceful", ownership="b" * 32,
                                               request_id="a" * 32, pid=123, creation_time=456)
         record["cancellation_action_intent"]["prepared_at"] = "2026-10-10T12:00:00+00:00"
@@ -207,15 +210,19 @@ while True: time.sleep(.02)
 
     def test_action_receipt_rejects_malformed_and_non_utc_timestamps(self):
         from runtime_agent.agent import _cancellation_action_evidence
+        boundary = {"boundary_type": "windows_job_object+process_group",
+                    "boundary_id": "Local\\QSRuntime-" + "b" * 32}
         base = {"task_id": "timestamp-task", "cancel_requested": True, "cancel_token": "a" * 32,
-                "cancellation_action_intent": {"version": 1, "state": "confirmed", "task_id": "timestamp-task",
+                "ownership_token": "b" * 32, "boundary_type": boundary["boundary_type"],
+                "job_name": boundary["boundary_id"], "pid": 12, "process_creation_time": "34",
+                "cancellation_action_intent": {"version": 2, "state": "confirmed", "task_id": "timestamp-task",
                     "request_id": "a" * 32, "attempt_id": "c" * 32, "ownership_token": "b" * 32,
                     "pid": 12, "process_creation_time": "34", "action": "graceful",
-                    "prepared_at": "2026-10-10T12:00:00+00:00"},
-                "cancellation_action_evidence": {"version": 1, "task_id": "timestamp-task",
+                    "prepared_at": "2026-10-10T12:00:00+00:00", **boundary},
+                "cancellation_action_evidence": {"version": 2, "task_id": "timestamp-task",
                     "request_id": "a" * 32, "attempt_id": "c" * 32, "ownership_token": "b" * 32,
                     "pid": 12, "process_creation_time": "34", "action": "graceful",
-                    "action_at": "2026-10-10T12:00:01Z"}}
+                    "action_at": "2026-10-10T12:00:01Z", **boundary}}
         base["cancellation_action_attempts"] = [base["cancellation_action_intent"]]
         base["cancellation_action_receipts"] = [base["cancellation_action_evidence"]]
         kwargs = {"ownership": "b" * 32, "request_id": "a" * 32, "pid": 12, "creation_time": 34}
@@ -226,6 +233,80 @@ while True: time.sleep(.02)
             malformed["cancellation_action_evidence"]["action_at"] = invalid
             malformed["cancellation_action_receipts"] = [malformed["cancellation_action_evidence"]]
             self.assertIsNone(_cancellation_action_evidence(malformed, **kwargs), repr(invalid))
+
+    def test_boundary_evidence_is_bound_to_authoritative_job_and_fails_closed(self):
+        from runtime_agent.agent import (_cancellation_action_evidence, _prepare_cancellation_action,
+                                         _with_cancellation_action)
+        token, request = "b" * 32, "a" * 32
+        base = {"schema_version": 1, "task_id": "boundary-task", "state": "CANCELLING",
+                "cancel_requested": True, "cancel_token": request, "ownership_token": token,
+                "pid": 12345, "pgid": 12345, "process_creation_time": "456",
+                "boundary_type": "windows_job_object+process_group",
+                "job_name": "Local\\QSRuntime-" + token}
+        prepared = _prepare_cancellation_action(base, action="graceful", ownership=token,
+                                                request_id=request, pid=12345, creation_time=456)
+        confirmed = _with_cancellation_action(prepared, action="graceful", ownership=token,
+                                              request_id=request, pid=12345, creation_time=456)
+        args = {"ownership": token, "request_id": request, "pid": 12345, "creation_time": 456}
+        self.assertEqual(_cancellation_action_evidence(confirmed, **args), "graceful")
+        mutations = (
+            ("record", "boundary_type", "posix_session"),
+            ("record", "job_name", "Local\\OtherJob"),
+            ("record", "job_name", "Local\\QSRuntime-" + "c" * 32),
+            ("record", "job_name", "x" * 300),
+            ("intent", "boundary_type", "posix_session"),
+            ("intent", "boundary_id", "Local\\OtherJob"),
+            ("intent", "boundary_id", None),
+            ("receipt", "boundary_type", "posix_session"),
+            ("receipt", "boundary_id", "Local\\OtherJob"),
+            ("receipt", "boundary_id", True),
+            ("receipt", "boundary_id", "x" * 300),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            for index, (target, field, value) in enumerate(mutations):
+                with self.subTest(target=target, field=field, value=value):
+                    changed = json.loads(json.dumps(confirmed))
+                    item = (changed if target == "record" else
+                            changed["cancellation_action_intent"] if target == "intent" else
+                            changed["cancellation_action_evidence"])
+                    if value is None: item.pop(field, None)
+                    else: item[field] = value
+                    if target == "intent": changed["cancellation_action_attempts"] = [item]
+                    if target == "receipt": changed["cancellation_action_receipts"] = [item]
+                    self.assertIsNone(_cancellation_action_evidence(changed, **args))
+                    root = Path(tmp, str(index)); root.mkdir()
+                    (root / "boundary-task.json").write_text(json.dumps(changed), encoding="utf-8")
+                    status = task_status("boundary-task", task_control_root=str(root))
+                    self.assertEqual(status["status"], AgentStatus.TASK_CANCELLATION_INDETERMINATE.value)
+                    self.assertEqual(json.loads((root / "boundary-task.json").read_text())["state"],
+                                     "CANCELLATION_INDETERMINATE")
+        legacy = json.loads(json.dumps(confirmed))
+        for item in (legacy["cancellation_action_intent"], legacy["cancellation_action_evidence"]):
+            item["version"] = 1; item.pop("boundary_type"); item.pop("boundary_id")
+        legacy["cancellation_action_attempts"] = [legacy["cancellation_action_intent"]]
+        legacy["cancellation_action_receipts"] = [legacy["cancellation_action_evidence"]]
+        self.assertIsNone(_cancellation_action_evidence(legacy, **args))
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "boundary-task.json").write_text(json.dumps(legacy), encoding="utf-8")
+            self.assertEqual(task_status("boundary-task", task_control_root=tmp)["status"],
+                             AgentStatus.TASK_CANCELLATION_INDETERMINATE.value)
+
+    def test_posix_boundary_schema_rejects_changed_group_and_boolean_id(self):
+        from runtime_agent.agent import (_cancellation_action_evidence, _prepare_cancellation_action,
+                                         _with_cancellation_action)
+        token, request = "b" * 32, "a" * 32
+        base = {"task_id": "posix-evidence", "state": "CANCELLING", "cancel_requested": True,
+                "cancel_token": request, "ownership_token": token, "boundary_type": "posix_session",
+                "pgid": 345, "pid": 345, "process_creation_time": "678"}
+        prepared = _prepare_cancellation_action(base, action="graceful", ownership=token,
+                                                request_id=request, pid=345, creation_time=678)
+        confirmed = _with_cancellation_action(prepared, action="graceful", ownership=token,
+                                              request_id=request, pid=345, creation_time=678)
+        args = {"ownership": token, "request_id": request, "pid": 345, "creation_time": 678}
+        self.assertEqual(_cancellation_action_evidence(confirmed, **args), "graceful")
+        for pgid in (True, 346, "345", 0):
+            altered = dict(confirmed); altered["pgid"] = pgid
+            self.assertIsNone(_cancellation_action_evidence(altered, **args))
 
     def test_action_receipt_persistence_retries_only_bounded_sharing_violations(self):
         from runtime_agent.agent import _persist_cancellation_action_receipt
@@ -292,6 +373,65 @@ while True: time.sleep(.02)
             self.assertEqual(result["record"]["state"], "CANCELLED")
             self.assertEqual(result["record"]["cancellation_outcome"], "graceful")
             self.assertEqual(result["record"]["return_code"], 0)
+
+    def test_dead_cancelling_reconciliation_commits_natural_or_unknown_outcome(self):
+        from runtime_agent.agent import _finish_cancellation_intent, _prepare_cancellation_action
+        token, request = "b" * 32, "a" * 32
+        base = {"schema_version": 1, "task_id": "dead-task", "state": "CANCELLING",
+                "pid": 987654, "pgid": 987654, "ownership_token": token,
+                "cancel_requested": True, "cancel_token": request,
+                "boundary_type": "windows_job_object+process_group",
+                "job_name": "Local\\QSRuntime-" + token,
+                "process_creation_time": "654321"}
+        prepared = _prepare_cancellation_action(base, action="graceful", ownership=token,
+                                                request_id=request, pid=987654, creation_time=654321)
+        failed = _finish_cancellation_intent(prepared, state="failed")
+        with tempfile.TemporaryDirectory() as tmp:
+            for index, (source, code, expected, api) in enumerate((
+                    (failed, 0, "FINISHED", AgentStatus.TASK_FINISHED.value),
+                    (failed, 7, "FAILED", AgentStatus.TASK_FAILED.value),
+                    (base, 0, "FINISHED", AgentStatus.TASK_FINISHED.value),
+                    (base, 7, "FAILED", AgentStatus.TASK_FAILED.value),
+                    (base, None, "OUTCOME_INDETERMINATE", AgentStatus.TASK_OUTCOME_INDETERMINATE.value),
+                    ({**base, "state": "FUTURE_STATE"}, 0, "OUTCOME_INDETERMINATE",
+                     AgentStatus.TASK_OUTCOME_INDETERMINATE.value))):
+                with self.subTest(index=index):
+                    root = Path(tmp, str(index)); root.mkdir()
+                    record = dict(source)
+                    if code is not None: record["return_code"] = code
+                    path = root / "dead-task.json"; path.write_text(json.dumps(record), encoding="utf-8")
+                    with patch("runtime_agent.agent._record_alive", return_value=False), \
+                         patch("runtime_agent.windows_job.process_exit_code", return_value=None):
+                        first = task_status("dead-task", task_control_root=str(root))
+                        second = task_status("dead-task", task_control_root=str(root))
+                    saved = json.loads(path.read_text(encoding="utf-8"))
+                    self.assertEqual((first["status"], saved["state"]), (api, expected))
+                    self.assertEqual(second["record"], saved)
+                    self.assertEqual(cancel_task("dead-task", task_control_root=str(root))["status"], api)
+                    self.assertEqual(saved.get("return_code"), code)
+
+    def test_two_status_callers_do_not_overwrite_terminal_reconciliation(self):
+        from runtime_agent.agent import _prepare_cancellation_action
+        token, request = "b" * 32, "a" * 32
+        record = {"schema_version": 1, "task_id": "concurrent-status", "state": "CANCELLING",
+                  "pid": 987654, "pgid": 987654, "ownership_token": token,
+                  "cancel_requested": True, "cancel_token": request,
+                  "boundary_type": "windows_job_object+process_group",
+                  "job_name": "Local\\QSRuntime-" + token,
+                  "process_creation_time": "654321", "return_code": 0}
+        record = _prepare_cancellation_action(record, action="graceful", ownership=token,
+                                              request_id=request, pid=987654, creation_time=654321)
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "concurrent-status.json").write_text(json.dumps(record), encoding="utf-8")
+            output = []
+            threads = [threading.Thread(target=lambda: output.append(task_status(
+                "concurrent-status", task_control_root=tmp)), daemon=True) for _ in range(2)]
+            for thread in threads: thread.start()
+            for thread in threads: thread.join(5); self.assertFalse(thread.is_alive())
+            self.assertEqual([item["status"] for item in output],
+                             [AgentStatus.TASK_CANCELLATION_INDETERMINATE.value] * 2)
+            self.assertEqual(json.loads((Path(tmp) / "concurrent-status.json").read_text())["state"],
+                             "CANCELLATION_INDETERMINATE")
 
     @unittest.skipUnless(os.name == "nt", "Windows cancellation receipt-persistence failure test")
     def test_receipt_persistence_failure_finalizes_as_indeterminate(self):
@@ -371,7 +511,8 @@ while True: time.sleep(.02)
                 def __enter__(self): return self
                 def __exit__(self, *_args): self.close()
             with patch("runtime_agent.windows_job.WindowsJob", ExitingJob), \
-                    patch("runtime_agent.windows_job.process_exit_state", side_effect=[False, True]):
+                    patch("runtime_agent.windows_job.process_exit_state", side_effect=[False, True]), \
+                    patch("runtime_agent.windows_job.process_exit_code", return_value=0):
                 result = cancel_task(task_id, grace_seconds=0, task_control_root=str(root))
             final = json.loads((root / f"{task_id}.json").read_text(encoding="utf-8"))
             self.assertEqual(result["status"], AgentStatus.TASK_FINISHED.value)
@@ -399,7 +540,8 @@ while True: time.sleep(.02)
                 def __enter__(self): return self
                 def __exit__(self, *_args): self.close()
             with patch("runtime_agent.windows_job.WindowsJob", EmptyingJob), \
-                    patch("runtime_agent.windows_job.process_exit_state", return_value=False):
+                    patch("runtime_agent.windows_job.process_exit_state", return_value=False), \
+                    patch("runtime_agent.windows_job.process_exit_code", return_value=0):
                 result = cancel_task(task_id, grace_seconds=0, task_control_root=str(root))
             final = json.loads((root / f"{task_id}.json").read_text(encoding="utf-8"))
             self.assertEqual(result["status"], AgentStatus.TASK_FINISHED.value)
@@ -416,7 +558,8 @@ while True: time.sleep(.02)
                           "pid": os.getpid() + 10_000_000, "ownership_token": "0" * 32}
                 (root / f"{task_id}.json").write_text(json.dumps(record), encoding="utf-8")
                 result = cancel_task(task_id, task_control_root=str(root))
-                expected = AgentStatus.TASK_CANCELLED.value if state == "CANCELLED" else AgentStatus.TASK_FINISHED.value
+                expected = (AgentStatus.TASK_CANCELLED.value if state == "CANCELLED" else
+                            AgentStatus.TASK_FAILED.value if state == "FAILED" else AgentStatus.TASK_FINISHED.value)
                 self.assertEqual(result["status"], expected)
                 self.assertEqual(json.loads((root / f"{task_id}.json").read_text()) , record)
 

@@ -15,6 +15,8 @@ import subprocess
 import sys
 import time
 import threading
+import contextlib
+import uuid
 from typing import BinaryIO, Iterable, Mapping
 
 from .protocol import AGENT_VERSION, AgentStatus, ProtocolError, RuntimeAgentHealth, RuntimePath, RuntimeProcessRequest, RuntimeProcessResult, timestamp
@@ -102,6 +104,55 @@ def _atomic_json(path: Path, payload: Mapping[str, object]) -> None:
     os.replace(temporary, path)
 
 
+@contextlib.contextmanager
+def _task_record_lock(task_id: str, root: str, *, timeout: float = 15.0):
+    """Bounded cross-process lock for task state transitions."""
+    path = _control_path(task_id, root).with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stream = path.open("a+b")
+    acquired = False
+    deadline = time.monotonic() + timeout
+    try:
+        if os.name == "nt":
+            import msvcrt
+            if path.stat().st_size == 0:
+                stream.write(b"0"); stream.flush()
+            while True:
+                stream.seek(0)
+                try:
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                    acquired = True
+                    break
+                except OSError as error:
+                    if error.errno not in (11, 13, 36) and getattr(error, "winerror", None) not in (33, 36):
+                        raise
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Managed task record lock timed out.") from error
+                    time.sleep(0.02)
+        else:
+            import fcntl
+            while True:
+                try:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except BlockingIOError as error:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Managed task record lock timed out.") from error
+                    time.sleep(0.02)
+        yield
+    finally:
+        if acquired:
+            if os.name == "nt":
+                import msvcrt
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        stream.close()
+
+
 def _control_path(task_id: str, root: str) -> Path:
     return Path(root) / (_safe_task_id(task_id) + ".json")
 
@@ -128,28 +179,50 @@ def _proc_start_ticks(pid: int) -> str:
 
 
 def _record_alive(record: Mapping[str, object]) -> bool:
-    if str(record.get("state", "")) != "RUNNING":
+    if str(record.get("state", "")) not in {"RUNNING", "CANCELLING"}:
         return False
     try:
         pid, pgid = int(record["pid"]), int(record["pgid"])
         expected = str(record.get("process_start_ticks", ""))
     except (KeyError, TypeError, ValueError):
         return False
-    if expected and _proc_start_ticks(pid) != expected:
+    if os.name == "nt":
+        name = str(record.get("job_name", ""))
+        token = str(record.get("ownership_token", ""))
+        if (record.get("boundary_type") != "windows_job_object+process_group"
+                or not re.fullmatch(r"Local\\QSRuntime-([0-9a-f]{32})", name)
+                or not token or name.rsplit("-", 1)[-1] != token):
+            return False
+        try:
+            from .windows_job import WindowsJob
+            with WindowsJob(name, create=False) as job:
+                creation = int(str(record.get("process_creation_time", "")))
+                active = job.active_processes() > 0
+                if not active:
+                    return False
+                # The named, token-bound Job Object remains authoritative if
+                # a launcher exited while one of its inherited members lives.
+                return True
+        except (OSError, ValueError, RuntimeError):
+            return False
+    if not expected or _proc_start_ticks(pid) != expected:
         return False
     try:
-        (os.killpg if hasattr(os, "killpg") else os.kill)(pgid, 0)
-    except (ProcessLookupError, PermissionError):
+        if pgid <= 1 or pgid == os.getpgrp() or os.getpgid(pid) != pgid:
+            return False
+        os.killpg(pgid, 0)
+    except (ProcessLookupError, PermissionError, OSError):
         return False
     return True
 
 
 def _signal_group(pgid: int, sig: signal.Signals) -> None:
-    """Signal a POSIX process group, with a Windows single-process fallback."""
-    if hasattr(os, "killpg"):
-        os.killpg(pgid, sig)
-    else:
-        os.kill(pgid, sig)
+    """Signal a verified POSIX task group; Windows uses Job Objects."""
+    if os.name == "nt":
+        raise RuntimeError("Windows cancellation must use the recorded Job Object.")
+    if pgid <= 1 or pgid == os.getpgrp():
+        raise ValueError("Refusing to signal an unowned or current process group.")
+    os.killpg(pgid, sig)
 
 
 def _result(request: RuntimeProcessRequest | None, status: AgentStatus, diagnostic: str, **values) -> RuntimeProcessResult:
@@ -173,6 +246,10 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
         return _result(request, AgentStatus.CWD_REJECTED, "Trusted runtime working directory is missing or escapes its root.", started=False, finished=False)
     stdin = stdout = stderr = None
     control = None
+    process = None
+    job = None
+    ownership_token = uuid.uuid4().hex
+    process_creation_time = None
     try:
         if request.stdin_path:
             stdin_target = _host_path(request.stdin_path)
@@ -191,42 +268,112 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
         started_at, timer = timestamp(), time.monotonic()
         environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", **request.environment}
         try:
-            process = subprocess.Popen([str(executable), *(_host_argument(value) for value in request.argv)], cwd=str(cwd), stdin=stdin or subprocess.DEVNULL,
-                                       stdout=stdout or subprocess.DEVNULL, stderr=stderr or subprocess.DEVNULL,
-                                       env=environment, shell=False, start_new_session=True)
-        except OSError as error:
-            return _result(request, AgentStatus.PROCESS_START_FAILED, str(error), started=False, finished=False)
-        pid, pgid = process.pid, os.getpgid(process.pid) if hasattr(os, "getpgid") else process.pid
-        if enable_task_control:
-            control = _control_path(request.task_id, task_control_root)
-            _atomic_json(control, {"schema_version": 1, "task_id": request.task_id, "pid": pid, "pgid": pgid,
-                                   "process_start_ticks": _proc_start_ticks(pid), "state": "RUNNING", "started_at": started_at,
-                                   "cwd": str(request.cwd), "executable": str(request.executable)})
+            if os.name == "nt":
+                from .windows_job import WindowsJob, SuspendedProcess, windows_creation_flags
+                job = WindowsJob("Local\\QSRuntime-" + ownership_token)
+                process = SuspendedProcess(
+                    str(executable), tuple(_host_argument(value) for value in request.argv), str(cwd), environment,
+                    stdin or subprocess.DEVNULL, stdout or subprocess.DEVNULL, stderr or subprocess.DEVNULL,
+                    windows_creation_flags())
+                process_creation_time = job.assign_suspended_process(process)
+            else:
+                process = subprocess.Popen([str(executable), *(_host_argument(value) for value in request.argv)], cwd=str(cwd), stdin=stdin or subprocess.DEVNULL,
+                                           stdout=stdout or subprocess.DEVNULL, stderr=stderr or subprocess.DEVNULL,
+                                           env=environment, shell=False, start_new_session=True)
+            pid, pgid = process.pid, os.getpgid(process.pid) if hasattr(os, "getpgid") else process.pid
+            if enable_task_control:
+                control = _control_path(request.task_id, task_control_root)
+                record = {"schema_version": 1, "task_id": request.task_id, "pid": pid, "pgid": pgid,
+                          "process_start_ticks": _proc_start_ticks(pid), "state": "RUNNING", "started_at": started_at,
+                          "cwd": str(request.cwd), "executable": str(request.executable),
+                          "ownership_token": ownership_token}
+                if job is not None:
+                    record.update({"boundary_type": "windows_job_object+process_group",
+                                   "job_name": job.name, "process_creation_time": str(process_creation_time)})
+                else:
+                    record["boundary_type"] = "posix_session"
+                with _task_record_lock(request.task_id, task_control_root):
+                    _atomic_json(control, record)
+                    if job is not None:
+                        job.resume_process(process, process_creation_time)
+            elif job is not None:
+                job.resume_process(process, process_creation_time)
+        except (OSError, RuntimeError, TimeoutError) as error:
+            cleanup_error = None
+            if process is not None:
+                try:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait(timeout=5)
+                except Exception as failure:
+                    cleanup_error = failure
+            if job is not None:
+                job.close()
+            if cleanup_error is not None:
+                error.add_note("Owned process cleanup also failed: " + type(cleanup_error).__name__)
+            if control is not None:
+                with _task_record_lock(request.task_id, task_control_root):
+                    existing = _read_control(request.task_id, task_control_root)
+                    if existing and existing.get("ownership_token") == ownership_token:
+                        failed = dict(existing); failed.update({"state": "FAILED", "finished_at": timestamp()})
+                        _atomic_json(control, failed)
+            return _result(request, AgentStatus.PROCESS_START_FAILED,
+                           type(error).__name__ + ("; cleanup failed: " + type(cleanup_error).__name__ if cleanup_error else ""),
+                           started=False, finished=False)
         try:
             return_code = process.wait(timeout=request.timeout_seconds)
             status, diagnostic = AgentStatus.PROCESS_EXITED, ""
         except subprocess.TimeoutExpired:
-            _signal_group(pgid, signal.SIGTERM)
-            try: return_code = process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                _signal_group(pgid, signal.SIGKILL); return_code = process.wait()
-            status, diagnostic = AgentStatus.PROCESS_TIMEOUT, "Runtime task timeout exceeded."
+            if job is not None:
+                from .windows_job import windows_cancel_exit_codes
+                event_sent = job.send_ctrl_break(pid, process_creation_time, current_pid=os.getpid())
+                try:
+                    return_code = process.wait(timeout=5 if event_sent else 0.05)
+                except subprocess.TimeoutExpired:
+                    job.terminate(0xD1F3)
+                    if not job.wait_empty(5.0):
+                        job.terminate()
+                        if not job.wait_empty(5.0):
+                            raise TimeoutError("Timed-out Windows runtime task did not exit after bounded termination.")
+                    return_code = process.wait(timeout=5)
+                status = AgentStatus.PROCESS_TIMEOUT
+                diagnostic = "Runtime task timeout exceeded."
+            else:
+                _signal_group(pgid, signal.SIGTERM)
+                try: return_code = process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    _signal_group(pgid, signal.SIGKILL); return_code = process.wait()
+                status, diagnostic = AgentStatus.PROCESS_TIMEOUT, "Runtime task timeout exceeded."
+        if job is not None and not job.wait_empty(0.25):
+            job.terminate(0xD1F2)
+            job.wait_empty(5.0)
         if control is not None:
-            existing = _read_control(request.task_id, task_control_root)
-            # A concurrent cancel operation may atomically update the record
-            # between this waiter observing the process exit and its final
-            # write. A signal exit from the owned session is terminal cancel
-            # evidence unless this agent itself applied a request timeout.
-            final_state = "CANCELLED" if ((existing and existing.get("state") == "CANCELLED") or (return_code is not None and return_code < 0 and status is not AgentStatus.PROCESS_TIMEOUT)) else "FINISHED"
-            _atomic_json(control, {"schema_version": 1, "task_id": request.task_id, "pid": pid, "pgid": pgid,
-                                   "process_start_ticks": _proc_start_ticks(pid), "state": final_state, "return_code": return_code,
-                                   "started_at": started_at, "finished_at": timestamp(), "cwd": str(request.cwd),
-                                   "executable": str(request.executable)})
+            from .windows_job import windows_cancel_exit_codes
+            with _task_record_lock(request.task_id, task_control_root):
+                existing = _read_control(request.task_id, task_control_root)
+                if not existing or existing.get("ownership_token") != ownership_token:
+                    final_state = "FAILED"
+                elif existing.get("state") in {"CANCELLED", "FAILED"}:
+                    final_state = str(existing["state"])
+                elif existing.get("cancel_requested") and (
+                        (return_code is not None and return_code < 0 and status is not AgentStatus.PROCESS_TIMEOUT)
+                        or (job is not None and return_code in windows_cancel_exit_codes())):
+                    final_state = "CANCELLED"
+                else:
+                    final_state = "FINISHED"
+                final_record = dict(existing or {})
+                final_record.update({"state": final_state, "return_code": return_code,
+                                     "finished_at": timestamp()})
+                _atomic_json(control, final_record)
         return RuntimeProcessResult(request.task_id, status, True, True, return_code, pid, pgid,
                                     started_at, timestamp(), time.monotonic() - timer, diagnostic)
     except (OSError, ProtocolError) as error:
         return _result(request, AgentStatus.INTERNAL_AGENT_ERROR, str(error), started=False, finished=False)
     finally:
+        if job is not None:
+            job.close()
+        if process is not None and os.name == "nt" and hasattr(process, "close"):
+            process.close()
         for stream in (stdin, stdout, stderr):
             if stream is not None: stream.close()
 
@@ -327,44 +474,248 @@ def task_status(task_id: str, *, task_control_root: str = DEFAULT_TASK_CONTROL_R
 
 
 def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: str = DEFAULT_TASK_CONTROL_ROOT) -> dict[str, object]:
-    task_id = _safe_task_id(task_id); record = _read_control(task_id, task_control_root)
-    if record is None: return {"schema_version": 1, "status": AgentStatus.TASK_NOT_FOUND.value, "task_id": task_id}
-    if not _record_alive(record):
-        # A native Windows wrapper can finish between the caller's running
-        # status observation and this check while its owned control record is
-        # still RUNNING.  Preserve the user-requested lifecycle transition;
-        # the executing agent will retain CANCELLED when it finalizes.
-        if record.get("state") == "RUNNING":
-            record = dict(record)
-            record.update({"state": "CANCELLED", "cancelled_at": timestamp(), "cancellation_outcome": "TERMINATED"})
-            _atomic_json(_control_path(task_id, task_control_root), record)
-            return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLED.value, "task_id": task_id, "outcome": "TERMINATED"}
-        return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
-    pgid = int(record["pgid"])
+    task_id = _safe_task_id(task_id)
     try:
-        _signal_group(pgid, signal.SIGTERM)
-        deadline = time.monotonic() + max(0.0, float(grace_seconds))
-        while time.monotonic() < deadline and _record_alive(record): time.sleep(0.03)
-        outcome = "TERMINATED"
-        if _record_alive(record):
-            # Windows has no SIGKILL.  Its SIGTERM os.kill fallback is a
-            # process-termination operation, so it provides the required
-            # forced-cancellation step on that platform.
-            _signal_group(pgid, getattr(signal, "SIGKILL", signal.SIGTERM)); outcome = "KILLED_AFTER_GRACE"
-        record = dict(record); record.update({"state": "CANCELLED", "cancelled_at": timestamp(), "cancellation_outcome": outcome})
-        _atomic_json(_control_path(task_id, task_control_root), record)
-        return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLED.value, "task_id": task_id, "outcome": outcome}
-    except (OSError, ValueError) as error:
+        force_sent = False
+        with _task_record_lock(task_id, task_control_root):
+            record = _read_control(task_id, task_control_root)
+            if record is None:
+                return {"schema_version": 1, "status": AgentStatus.TASK_NOT_FOUND.value, "task_id": task_id}
+            state = str(record.get("state", ""))
+            if state == "CANCELLED":
+                return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLED.value,
+                        "task_id": task_id, "outcome": record.get("cancellation_outcome", "ALREADY_CANCELLED")}
+            if state in {"FINISHED", "FAILED"}:
+                return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
+            if state == "CANCELLING":
+                return {"schema_version": 1, "status": AgentStatus.TASK_RUNNING.value,
+                        "task_id": task_id, "outcome": "CANCELLATION_IN_PROGRESS"}
+            if state != "RUNNING":
+                return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                        "diagnostic": "Managed task state is not cancellable."}
+            ownership = str(record.get("ownership_token", ""))
+            if not re.fullmatch(r"[0-9a-f]{32}", ownership):
+                return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                        "diagnostic": "Managed task ownership could not be verified."}
+            cancel_token = uuid.uuid4().hex
+            pid = int(record.get("pid", 0))
+            if os.name == "nt":
+                from .windows_job import WindowsJob
+                name = str(record.get("job_name", ""))
+                if (record.get("boundary_type") != "windows_job_object+process_group"
+                        or not re.fullmatch(r"Local\\QSRuntime-([0-9a-f]{32})", name)
+                        or name.rsplit("-", 1)[-1] != ownership):
+                    return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                            "diagnostic": "Managed Windows process ownership could not be verified."}
+                job = WindowsJob(name, create=False)
+                try:
+                    if job.active_processes() == 0:
+                        finished = dict(record); finished.update({"state": "FINISHED", "finished_at": timestamp()})
+                        _atomic_json(_control_path(task_id, task_control_root), finished)
+                        return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
+                    creation = int(str(record.get("process_creation_time", "")))
+                    if not job.is_process_member(pid, creation):
+                        return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                                "diagnostic": "Managed process identity changed; no signal was sent."}
+                    cancelling = dict(record); cancelling.update({"state": "CANCELLING", "cancel_requested": True,
+                                                                  "cancel_token": cancel_token,
+                                                                  "cancel_started_at": timestamp()})
+                    _atomic_json(_control_path(task_id, task_control_root), cancelling)
+                    event_sent = job.send_ctrl_break(pid, creation, current_pid=os.getpid())
+                finally:
+                    job.close()
+            else:
+                # POSIX keeps its new session/process group and verifies the
+                # recorded process identity before requesting cancellation.
+                pgid = int(record.get("pgid", 0))
+                if not _record_alive(record):
+                    finished = dict(record); finished.update({"state": "FINISHED", "finished_at": timestamp()})
+                    _atomic_json(_control_path(task_id, task_control_root), finished)
+                    return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
+                cancelling = dict(record); cancelling.update({"state": "CANCELLING", "cancel_requested": True,
+                                                              "cancel_token": cancel_token,
+                                                              "cancel_started_at": timestamp()})
+                _atomic_json(_control_path(task_id, task_control_root), cancelling)
+                _signal_group(pgid, signal.SIGTERM)
         if os.name == "nt":
-            # The native wrapper may exit between the liveness check and the
-            # forced termination call.  That is successful cancellation, not
-            # a failed scientific task.
-            record = dict(record)
-            record.update({"state": "CANCELLED", "cancelled_at": timestamp(), "cancellation_outcome": "KILLED_AFTER_GRACE"})
-            _atomic_json(_control_path(task_id, task_control_root), record)
-            return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLED.value, "task_id": task_id,
-                    "outcome": "KILLED_AFTER_GRACE", "diagnostic": str(error)}
-        return {"schema_version": 1, "status": "FAILED", "task_id": task_id, "diagnostic": str(error)}
+            # Wait outside the record lock so natural completion can win.
+            if event_sent:
+                deadline = time.monotonic() + max(0.0, float(grace_seconds))
+                while True:
+                    with _task_record_lock(task_id, task_control_root):
+                        latest = _read_control(task_id, task_control_root)
+                        if not latest or latest.get("ownership_token") != ownership:
+                            return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                                    "diagnostic": "Managed task ownership changed during graceful cancellation."}
+                        if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                            return _cancel_terminal_result(task_id, latest)
+                        if latest.get("state") != "CANCELLING" or latest.get("cancel_token") != cancel_token:
+                            return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                                    "diagnostic": "Managed cancellation ownership changed."}
+                        with WindowsJob(name, create=False) as wait_job:
+                            active = wait_job.active_processes()
+                    remaining = deadline - time.monotonic()
+                    if active == 0 or remaining <= 0:
+                        break
+                    time.sleep(min(0.02, remaining))
+            with _task_record_lock(task_id, task_control_root):
+                latest = _read_control(task_id, task_control_root)
+                if not latest or latest.get("ownership_token") != ownership:
+                    return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                            "diagnostic": "Managed task ownership changed during cancellation."}
+                if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                    return _cancel_terminal_result(task_id, latest)
+                if latest.get("cancel_token") != cancel_token or latest.get("state") != "CANCELLING":
+                    return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                            "diagnostic": "Managed task state changed during cancellation."}
+                with WindowsJob(name, create=False) as job:
+                    if job.active_processes() == 0:
+                        from .windows_job import process_exit_code, windows_cancel_exit_codes, windows_graceful_exit_codes
+                        code = process_exit_code(pid, creation)
+                        cancelled = event_sent and code in windows_cancel_exit_codes()
+                        final_state = "CANCELLED" if cancelled else "FINISHED"
+                        outcome = "GRACEFUL" if cancelled and code in windows_graceful_exit_codes() else (
+                            "TERMINATED" if cancelled else "ALREADY_EXITED")
+                    else:
+                        job.terminate()
+                        final_state, outcome = "CANCELLING", "TERMINATED"
+            if final_state == "CANCELLING":
+                deadline = time.monotonic() + 5.0
+                while True:
+                    with _task_record_lock(task_id, task_control_root):
+                        latest = _read_control(task_id, task_control_root)
+                        if not latest or latest.get("ownership_token") != ownership:
+                            return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                                    "diagnostic": "Managed task ownership changed during termination."}
+                        if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                            return _cancel_terminal_result(task_id, latest)
+                        if latest.get("cancel_token") != cancel_token:
+                            return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                                    "diagnostic": "Managed cancellation ownership changed."}
+                        with WindowsJob(name, create=False) as wait_job:
+                            active = wait_job.active_processes()
+                    remaining = deadline - time.monotonic()
+                    if active == 0 or remaining <= 0:
+                        break
+                    time.sleep(min(0.02, remaining))
+                emptied = active == 0
+                with _task_record_lock(task_id, task_control_root):
+                    latest = _read_control(task_id, task_control_root)
+                    if not latest or latest.get("ownership_token") != ownership:
+                        return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                                "diagnostic": "Managed task ownership changed during termination."}
+                    if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                        return _cancel_terminal_result(task_id, latest)
+                    if latest.get("cancel_token") != cancel_token:
+                        return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                                "diagnostic": "Managed cancellation ownership changed."}
+                    with WindowsJob(name, create=False) as job:
+                        if not emptied or job.active_processes():
+                            job.terminate(0xD1F3)
+                            outcome = "KILLED_AFTER_GRACE"
+                deadline = time.monotonic() + 5.0
+                while True:
+                    with _task_record_lock(task_id, task_control_root):
+                        latest = _read_control(task_id, task_control_root)
+                        if not latest or latest.get("ownership_token") != ownership:
+                            return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                                    "diagnostic": "Managed task ownership changed during force termination."}
+                        if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                            return _cancel_terminal_result(task_id, latest)
+                        if latest.get("cancel_token") != cancel_token:
+                            return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                                    "diagnostic": "Managed cancellation ownership changed."}
+                        with WindowsJob(name, create=False) as wait_job:
+                            active = wait_job.active_processes()
+                    remaining = deadline - time.monotonic()
+                    if active == 0:
+                        break
+                    if remaining <= 0:
+                        raise TimeoutError("Owned Windows task did not exit after bounded force termination.")
+                    time.sleep(min(0.02, remaining))
+                final_state = "CANCELLED"
+            with _task_record_lock(task_id, task_control_root):
+                latest = _read_control(task_id, task_control_root)
+                if latest and latest.get("ownership_token") == ownership and latest.get("cancel_token") == cancel_token and latest.get("state") == "CANCELLING":
+                    final = dict(latest); final.update({"state": final_state,
+                                                        "cancellation_outcome": outcome,
+                                                        "cancelled_at": timestamp() if final_state == "CANCELLED" else None})
+                    _atomic_json(_control_path(task_id, task_control_root), final)
+                else:
+                    final = latest or {}
+            return _cancel_terminal_result(task_id, final)
+        deadline = time.monotonic() + max(0.0, float(grace_seconds))
+        while time.monotonic() < deadline:
+            with _task_record_lock(task_id, task_control_root):
+                latest = _read_control(task_id, task_control_root)
+                if not latest or latest.get("ownership_token") != ownership or latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                    return _cancel_terminal_result(task_id, latest or {})
+                if latest.get("cancel_token") != cancel_token:
+                    return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                            "diagnostic": "Managed cancellation ownership changed."}
+                alive = _record_alive(latest)
+            if not alive:
+                break
+            time.sleep(min(0.03, max(0.0, deadline-time.monotonic())))
+        with _task_record_lock(task_id, task_control_root):
+            latest = _read_control(task_id, task_control_root)
+            if not latest or latest.get("ownership_token") != ownership or latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                return _cancel_terminal_result(task_id, latest or {})
+            if latest.get("cancel_token") != cancel_token:
+                return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                        "diagnostic": "Managed cancellation ownership changed."}
+            if _record_alive(latest):
+                _signal_group(pgid, signal.SIGKILL)
+                outcome = "KILLED_AFTER_GRACE"
+                force_sent = True
+        if force_sent:
+            deadline = time.monotonic() + 5.0
+            while True:
+                with _task_record_lock(task_id, task_control_root):
+                    latest = _read_control(task_id, task_control_root)
+                    if not latest or latest.get("ownership_token") != ownership:
+                        return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                                "diagnostic": "Managed task ownership changed during force termination."}
+                    if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                        return _cancel_terminal_result(task_id, latest)
+                    if latest.get("cancel_token") != cancel_token:
+                        return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                                "diagnostic": "Managed cancellation ownership changed."}
+                    alive = _record_alive(latest)
+                if not alive:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Owned POSIX task did not exit after bounded force termination.")
+                time.sleep(min(0.03, remaining))
+        with _task_record_lock(task_id, task_control_root):
+            latest = _read_control(task_id, task_control_root)
+            if not latest or latest.get("ownership_token") != ownership:
+                return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                        "diagnostic": "Managed task ownership changed before finalization."}
+            if latest.get("state") in {"FINISHED", "FAILED", "CANCELLED"}:
+                return _cancel_terminal_result(task_id, latest)
+            if latest.get("cancel_token") != cancel_token or latest.get("state") != "CANCELLING":
+                return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                        "diagnostic": "Managed cancellation ownership changed before finalization."}
+            final = dict(latest); final.update({"state": "CANCELLED", "cancellation_outcome": outcome,
+                                                "cancelled_at": timestamp()})
+            _atomic_json(_control_path(task_id, task_control_root), final)
+        return _cancel_terminal_result(task_id, final)
+    except (OSError, ValueError, RuntimeError, TimeoutError, KeyError) as error:
+        return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                "diagnostic": type(error).__name__}
+
+
+def _cancel_terminal_result(task_id: str, record: Mapping[str, object]) -> dict[str, object]:
+    state = str(record.get("state", ""))
+    if state == "CANCELLED":
+        return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLED.value,
+                "task_id": task_id, "outcome": record.get("cancellation_outcome", "TERMINATED")}
+    if state in {"FINISHED", "FAILED"}:
+        return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
+    return {"schema_version": 1, "status": AgentStatus.TASK_RUNNING.value,
+            "task_id": task_id, "outcome": "CANCELLATION_IN_PROGRESS"}
 
 
 def _read_json_stdin() -> Mapping[str, object]:

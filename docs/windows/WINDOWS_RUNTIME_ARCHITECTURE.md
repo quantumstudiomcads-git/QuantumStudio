@@ -41,6 +41,47 @@ W5 transfer operations are narrow runtime-agent operations: `stage-in` streams a
 
 The runtime agent now records managed task IDs, PID/PGID, start discriminator, executable and cwd in atomically written records under `/var/lib/quantumstudio/runtime/tasks`. `status` and `cancel` accept a validated task ID only. Cancellation signals the recorded owned process group with SIGTERM, then SIGKILL after a grace period; it never accepts a host-provided PID. Recovery does not rerun tasks; a missing/non-live owned task is interrupted unless durable terminal evidence exists.
 
+### Managed process cancellation ownership
+
+On Windows, each managed launch creates a named Job Object and configures
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` before process creation. It then calls the
+documented `CreateProcessW` API with `CREATE_SUSPENDED` and
+`CREATE_NEW_PROCESS_GROUP`, using `STARTUPINFOEX` with a restricted standard
+handle list so unrelated inheritable handles are not passed to the child. The
+returned primary-thread and process handles are non-inheritable. The suspended
+process is assigned to the Job Object and verified with its process creation
+time and job membership before the retained primary-thread handle is resumed
+with documented `ResumeThread`. If creation, assignment, or resume fails, the
+launching code terminates and reaps only that suspended process/job and closes
+the handles it owns.
+
+The Job Object is the owned process-tree boundary; the launcher PID alone does
+not represent every interpreter or descendant. The task record binds the job
+name to a random ownership token and records the launched process creation
+time. The execution thread retains the original Job Object handle for the
+task lifetime. Cancellation opens a temporary handle to that same named job,
+checks the token, process creation identity and job membership, and closes only
+its temporary handle. The job remains reopenable while its execution-owner
+handle is open; that final owner handle triggers `KILL_ON_JOB_CLOSE` when the
+task finishes. Job and process handles are not inherited by the child.
+
+Cancellation sends `CTRL_BREAK_EVENT` only to the explicitly created,
+nonzero child group after verifying membership. It rereads the authoritative
+task record during bounded grace polling and before each termination or final
+state update. If the graceful request is unavailable or ignored, it terminates
+the token-bound Job Object and waits with a bounded deadline. Terminal state
+wins over a stale cancellation snapshot; repeated and concurrent requests do
+not signal again. No process-name-based termination is used.
+
+POSIX launches retain their separate session and process-group behavior, with
+the process start discriminator and group checked before signalling. On both
+platforms, task-record transitions are serialized. Cancellation rereads the
+authoritative state before escalation, stops when the task is terminal, and
+allows only one cancellation request to own the bounded grace/termination
+sequence. Natural completion is preserved if it wins the race. Job/process
+waits are bounded, and repeated cancellation is idempotent; unrelated
+processes remain outside the managed ownership boundary.
+
 Result parsing remains host-side: only collected host paths are handed to `ResultService` and `ResultStore`, so Analyze can show persisted results without WSL. W5 preserves the existing distinction between a zero process exit (`COMPLETED`) and parser result validity (`PARSE_FAILED` is not an engine failure).
 
 PUBLIC ENGINE PACK DISTRIBUTION LEGAL REVIEW: **PENDING**. W5 contains no third-party engine binaries, no downloader, no package-manager calls, and no real Windows/QE validation.

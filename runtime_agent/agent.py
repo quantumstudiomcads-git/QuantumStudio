@@ -229,6 +229,52 @@ def _result(request: RuntimeProcessRequest | None, status: AgentStatus, diagnost
     return RuntimeProcessResult(request.task_id if request else "", status, **values, diagnostic=diagnostic)
 
 
+def _cancellation_action_evidence(record: Mapping[str, object], *, ownership: str,
+                                  request_id: str, pid: int,
+                                  creation_time: int) -> str | None:
+    """Return a verified action only when its evidence binds to this task process."""
+    evidence = record.get("cancellation_action_evidence")
+    if (not isinstance(evidence, dict)
+            or type(evidence.get("version")) is not int
+            or evidence.get("version") != 1
+            or not re.fullmatch(r"[0-9a-f]{32}", request_id)):
+        return None
+    action = evidence.get("action")
+    if not isinstance(action, str) or action not in {"graceful", "terminated", "forced"}:
+        return None
+    if (record.get("cancel_requested") is not True
+            or not isinstance(record.get("task_id"), str)
+            or not record.get("task_id")
+            or evidence.get("task_id") != record.get("task_id")
+            or record.get("cancel_token") != request_id
+            or evidence.get("request_id") != request_id
+            or evidence.get("ownership_token") != ownership
+            or evidence.get("pid") != pid
+            or evidence.get("process_creation_time") != str(creation_time)
+            or not isinstance(evidence.get("action_at"), str)
+            or not evidence.get("action_at")):
+        return None
+    return str(action)
+
+
+def _with_cancellation_action(record: Mapping[str, object], *, action: str,
+                              ownership: str, request_id: str, pid: int,
+                              creation_time: int) -> dict[str, object]:
+    updated = dict(record)
+    updated["cancellation_action_evidence"] = {
+        "version": 1,
+        "task_id": updated.get("task_id"),
+        "request_id": request_id,
+        "ownership_token": ownership,
+        "pid": pid,
+        "process_creation_time": str(creation_time),
+        "action": action,
+        "action_at": timestamp(),
+    }
+    updated["cancellation_outcome"] = action
+    return updated
+
+
 def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=DEFAULT_EXECUTABLE_ROOTS,
                     trusted_working_roots=DEFAULT_WORKING_ROOTS, task_control_root: str = DEFAULT_TASK_CONTROL_ROOT,
                     enable_task_control: bool = False) -> RuntimeProcessResult:
@@ -348,19 +394,30 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
             job.terminate(0xD1F2)
             job.wait_empty(5.0)
         if control is not None:
-            from .windows_job import windows_cancel_exit_codes
             with _task_record_lock(request.task_id, task_control_root):
                 existing = _read_control(request.task_id, task_control_root)
                 if not existing or existing.get("ownership_token") != ownership_token:
                     final_state = "FAILED"
-                elif existing.get("state") in {"CANCELLED", "FAILED"}:
-                    final_state = str(existing["state"])
-                elif existing.get("cancel_requested") and (
-                        (return_code is not None and return_code < 0 and status is not AgentStatus.PROCESS_TIMEOUT)
-                        or (job is not None and return_code in windows_cancel_exit_codes())):
-                    final_state = "CANCELLED"
                 else:
-                    final_state = "FINISHED"
+                    if job is not None:
+                        action = _cancellation_action_evidence(
+                            existing, ownership=ownership_token,
+                            request_id=str(existing.get("cancel_token", "")), pid=pid,
+                            creation_time=int(process_creation_time or 0))
+                        if action:
+                            final_state = "CANCELLED"
+                        elif existing.get("state") in {"FINISHED", "FAILED"}:
+                            final_state = str(existing["state"])
+                        else:
+                            final_state = "FINISHED"
+                    else:
+                        # Keep the existing POSIX cancellation result policy.
+                        if existing.get("state") in {"CANCELLED", "FINISHED", "FAILED"}:
+                            final_state = str(existing["state"])
+                        else:
+                            final_state = ("CANCELLED" if existing.get("cancel_requested")
+                                           and return_code is not None and return_code < 0
+                                           and status is not AgentStatus.PROCESS_TIMEOUT else "FINISHED")
                 final_record = dict(existing or {})
                 final_record.update({"state": final_state, "return_code": return_code,
                                      "finished_at": timestamp()})
@@ -500,7 +557,7 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
             cancel_token = uuid.uuid4().hex
             pid = int(record.get("pid", 0))
             if os.name == "nt":
-                from .windows_job import WindowsJob
+                from .windows_job import WindowsJob, process_exit_state
                 name = str(record.get("job_name", ""))
                 if (record.get("boundary_type") != "windows_job_object+process_group"
                         or not re.fullmatch(r"Local\\QSRuntime-([0-9a-f]{32})", name)
@@ -510,18 +567,39 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                 job = WindowsJob(name, create=False)
                 try:
                     if job.active_processes() == 0:
-                        finished = dict(record); finished.update({"state": "FINISHED", "finished_at": timestamp()})
-                        _atomic_json(_control_path(task_id, task_control_root), finished)
                         return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
                     creation = int(str(record.get("process_creation_time", "")))
+                    process_state = process_exit_state(pid, creation)
+                    if process_state is None:
+                        return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                                "diagnostic": "Managed process exit state could not be verified; no signal was sent."}
+                    if process_state:
+                        return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
                     if not job.is_process_member(pid, creation):
                         return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
                                 "diagnostic": "Managed process identity changed; no signal was sent."}
                     cancelling = dict(record); cancelling.update({"state": "CANCELLING", "cancel_requested": True,
                                                                   "cancel_token": cancel_token,
-                                                                  "cancel_started_at": timestamp()})
+                                                                   "cancel_requested_at": timestamp(),
+                                                                   "cancel_started_at": timestamp()})
                     _atomic_json(_control_path(task_id, task_control_root), cancelling)
+                    process_state = process_exit_state(pid, creation)
+                    if process_state is None:
+                        return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
+                                "diagnostic": "Managed process exit state could not be verified; no signal was sent."}
+                    if process_state:
+                        finished = dict(cancelling)
+                        finished.update({"state": "FINISHED", "finished_at": timestamp(),
+                                         "cancellation_outcome": "lost_natural_completion_race"})
+                        _atomic_json(_control_path(task_id, task_control_root), finished)
+                        return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value,
+                                "task_id": task_id}
                     event_sent = job.send_ctrl_break(pid, creation, current_pid=os.getpid())
+                    if event_sent:
+                        acted = _with_cancellation_action(
+                            cancelling, action="graceful", ownership=ownership,
+                            request_id=cancel_token, pid=pid, creation_time=creation)
+                        _atomic_json(_control_path(task_id, task_control_root), acted)
                 finally:
                     job.close()
             else:
@@ -570,15 +648,27 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                             "diagnostic": "Managed task state changed during cancellation."}
                 with WindowsJob(name, create=False) as job:
                     if job.active_processes() == 0:
-                        from .windows_job import process_exit_code, windows_cancel_exit_codes, windows_graceful_exit_codes
+                        from .windows_job import process_exit_code
                         code = process_exit_code(pid, creation)
-                        cancelled = event_sent and code in windows_cancel_exit_codes()
+                        action = _cancellation_action_evidence(
+                            latest, ownership=ownership, request_id=cancel_token,
+                            pid=pid, creation_time=creation)
+                        cancelled = action is not None
                         final_state = "CANCELLED" if cancelled else "FINISHED"
-                        outcome = "GRACEFUL" if cancelled and code in windows_graceful_exit_codes() else (
-                            "TERMINATED" if cancelled else "ALREADY_EXITED")
+                        outcome = action or "lost_natural_completion_race"
                     else:
-                        job.terminate()
-                        final_state, outcome = "CANCELLING", "TERMINATED"
+                        terminated = job.terminate()
+                        if terminated:
+                            acted = _with_cancellation_action(
+                                latest, action="terminated", ownership=ownership,
+                                request_id=cancel_token, pid=pid, creation_time=creation)
+                            _atomic_json(_control_path(task_id, task_control_root), acted)
+                            outcome = "terminated"
+                        else:
+                            outcome = _cancellation_action_evidence(
+                                latest, ownership=ownership, request_id=cancel_token,
+                                pid=pid, creation_time=creation) or "lost_natural_completion_race"
+                        final_state = "CANCELLING"
             if final_state == "CANCELLING":
                 deadline = time.monotonic() + 5.0
                 while True:
@@ -611,8 +701,12 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                                 "diagnostic": "Managed cancellation ownership changed."}
                     with WindowsJob(name, create=False) as job:
                         if not emptied or job.active_processes():
-                            job.terminate(0xD1F3)
-                            outcome = "KILLED_AFTER_GRACE"
+                            if job.terminate(0xD1F3):
+                                latest = _with_cancellation_action(
+                                    latest, action="forced", ownership=ownership,
+                                    request_id=cancel_token, pid=pid, creation_time=creation)
+                                _atomic_json(_control_path(task_id, task_control_root), latest)
+                                outcome = "forced"
                 deadline = time.monotonic() + 5.0
                 while True:
                     with _task_record_lock(task_id, task_control_root):
@@ -637,6 +731,13 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
             with _task_record_lock(task_id, task_control_root):
                 latest = _read_control(task_id, task_control_root)
                 if latest and latest.get("ownership_token") == ownership and latest.get("cancel_token") == cancel_token and latest.get("state") == "CANCELLING":
+                    action = _cancellation_action_evidence(
+                        latest, ownership=ownership, request_id=cancel_token,
+                        pid=pid, creation_time=creation)
+                    if action is not None:
+                        final_state, outcome = "CANCELLED", action
+                    elif final_state == "CANCELLED":
+                        final_state, outcome = "FINISHED", "lost_natural_completion_race"
                     final = dict(latest); final.update({"state": final_state,
                                                         "cancellation_outcome": outcome,
                                                         "cancelled_at": timestamp() if final_state == "CANCELLED" else None})

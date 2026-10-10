@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from runtime_agent.windows_job import (
-    SuspendedProcess, WindowsJob, process_creation_time, process_exit_code, process_has_exited,
+    SuspendedProcess, WindowsJob, process_creation_time, process_exit_code, process_has_exited, process_exit_state,
     windows_cancel_exit_codes, windows_creation_flags,
 )
 
@@ -17,6 +17,13 @@ from runtime_agent.windows_job import (
 class WindowsJobOwnershipTests(unittest.TestCase):
     def test_all_job_termination_phases_are_classified_as_cancellation(self):
         self.assertTrue({0xD1F1, 0xD1F2, 0xD1F3}.issubset(windows_cancel_exit_codes()))
+
+    def test_native_void_declaration_and_minimum_process_query_access(self):
+        import runtime_agent.windows_job as windows_job
+        kernel = windows_job._kernel32()
+        self.assertIsNone(kernel.DeleteProcThreadAttributeList.restype)
+        self.assertEqual(kernel.DeleteProcThreadAttributeList.argtypes, [windows_job.ctypes.c_void_p])
+        self.assertFalse(hasattr(windows_job, "_SYNCHRONIZE"))
 
     def _launch_suspended(self, marker: Path):
         code = f"from pathlib import Path; import time; Path({str(marker)!r}).write_text('ready'); time.sleep(60)"
@@ -32,6 +39,7 @@ class WindowsJobOwnershipTests(unittest.TestCase):
             job = WindowsJob()
             try:
                 created = process_creation_time(process.pid)
+                self.assertIs(process_exit_state(process.pid, created), False)
                 self.assertFalse(marker.exists())
                 self.assertFalse(job.is_process_member(os.getpid(), process_creation_time(os.getpid())))
                 self.assertEqual(job.assign_suspended_process(process), created)

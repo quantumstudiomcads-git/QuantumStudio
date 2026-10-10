@@ -65,13 +65,27 @@ its temporary handle. The job remains reopenable while its execution-owner
 handle is open; that final owner handle triggers `KILL_ON_JOB_CLOSE` when the
 task finishes. Job and process handles are not inherited by the child.
 
+The execution owner retains the lifetime Job handle until the managed task is
+reaped. If the runtime-agent process exits unexpectedly, Windows closes that
+handle and `KILL_ON_JOB_CLOSE` terminates any remaining managed Job members.
+This is intentional containment: in-flight managed work does not survive an
+unexpected runtime-agent exit. On the next startup, task records require
+reconciliation; the agent does not claim to recover or resume that work.
+
 Cancellation sends `CTRL_BREAK_EVENT` only to the explicitly created,
-nonzero child group after verifying membership. It rereads the authoritative
-task record during bounded grace polling and before each termination or final
-state update. If the graceful request is unavailable or ignored, it terminates
-the token-bound Job Object and waits with a bounded deadline. Terminal state
-wins over a stale cancellation snapshot; repeated and concurrent requests do
-not signal again. No process-name-based termination is used.
+nonzero child group after verifying membership. Under the task-record lock it
+records a versioned, non-secret action receipt bound to the cancellation
+request, ownership token, PID, and process creation time after each successful
+native action. The execution thread uses that receipt when committing exit
+state, so a handled graceful request followed by exit code 0 is `CANCELLED`.
+A request flag without a successful action receipt does not classify an exit
+as cancelled. Natural completion committed first remains `FINISHED` or
+`FAILED`. The agent rereads authoritative state during bounded grace polling
+and before each termination or final state update. If graceful delivery is
+unavailable or ignored, it terminates the token-bound Job Object and waits
+with a bounded deadline. Terminal state wins over a stale cancellation
+snapshot; repeated and concurrent requests do not signal again. No
+process-name-based termination is used.
 
 POSIX launches retain their separate session and process-group behavior, with
 the process start discriminator and group checked before signalling. On both

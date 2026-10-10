@@ -21,7 +21,6 @@ _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
 _JOB_OBJECT_TERMINATE = 0x0008
 _JOB_OBJECT_QUERY = 0x0004
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-_SYNCHRONIZE = 0x00100000
 _WAIT_OBJECT_0 = 0
 _WAIT_TIMEOUT = 258
 _STARTF_USESTDHANDLES = 0x00000100
@@ -164,6 +163,7 @@ def _kernel32():
                                                  ctypes.POINTER(ctypes.c_size_t)]
     kernel.UpdateProcThreadAttribute.restype = wintypes.BOOL
     kernel.DeleteProcThreadAttributeList.argtypes = [ctypes.c_void_p]
+    kernel.DeleteProcThreadAttributeList.restype = None
     kernel.ResumeThread.argtypes = [wintypes.HANDLE]
     kernel.ResumeThread.restype = wintypes.DWORD
     kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
@@ -179,7 +179,7 @@ def _winerror(operation: str) -> OSError:
 
 def process_creation_time(pid: int) -> int:
     kernel = _kernel32()
-    handle = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION | _SYNCHRONIZE, False, int(pid))
+    handle = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
     if not handle:
         raise _winerror("OpenProcess")
     try:
@@ -194,7 +194,7 @@ def process_creation_time(pid: int) -> int:
 
 def process_exit_code(pid: int, creation_time: int) -> int | None:
     kernel = _kernel32()
-    handle = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION | _SYNCHRONIZE, False, int(pid))
+    handle = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
     if not handle:
         return None
     try:
@@ -213,21 +213,28 @@ def process_exit_code(pid: int, creation_time: int) -> int | None:
 
 
 def process_has_exited(pid: int, creation_time: int) -> bool:
-    """Check a specific process generation through its synchronized handle."""
+    """Check a specific process generation through a query-only handle."""
+    return process_exit_state(pid, creation_time) is not False
+
+
+def process_exit_state(pid: int, creation_time: int) -> bool | None:
+    """Return exited/live for the exact process generation, or None if unverifiable."""
     kernel = _kernel32()
-    handle = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION | _SYNCHRONIZE, False, int(pid))
+    handle = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
     if not handle:
-        return True
+        return None
     try:
         created, exited, kernel_time, user_time = _FileTime(), _FileTime(), _FileTime(), _FileTime()
         if not kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
                                       ctypes.byref(kernel_time), ctypes.byref(user_time)):
-            return False
+            return None
         identity = (created.high << 32) | created.low
         if identity != int(creation_time):
-            return True
+            return None
         code = wintypes.DWORD()
-        return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code)) and code.value != 259)
+        if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return None
+        return code.value != 259
     finally:
         kernel.CloseHandle(handle)
 
@@ -401,7 +408,7 @@ class WindowsJob:
         except OSError:
             return False
         kernel = self._kernel
-        process = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION | _SYNCHRONIZE, False, int(pid))
+        process = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
         if not process:
             return False
         try:
@@ -413,7 +420,7 @@ class WindowsJob:
             kernel.CloseHandle(process)
 
     def contains_process(self, pid: int) -> bool:
-        process = self._kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION | _SYNCHRONIZE, False, int(pid))
+        process = self._kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
         if not process:
             return False
         try:
@@ -442,9 +449,12 @@ class WindowsJob:
             return False
         return True
 
-    def terminate(self, exit_code: int = _CANCEL_EXIT_CODE) -> None:
-        if self.active_processes() and not self._kernel.TerminateJobObject(self.handle, int(exit_code)):
+    def terminate(self, exit_code: int = _CANCEL_EXIT_CODE) -> bool:
+        if not self.active_processes():
+            return False
+        if not self._kernel.TerminateJobObject(self.handle, int(exit_code)):
             raise _winerror("TerminateJobObject")
+        return True
 
     def wait_empty(self, timeout: float) -> bool:
         deadline = time.monotonic() + max(0.0, timeout)

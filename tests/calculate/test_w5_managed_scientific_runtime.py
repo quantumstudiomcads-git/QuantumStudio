@@ -102,7 +102,7 @@ class AgentTransferAndControlTests(unittest.TestCase):
             cancelled = cancel_task("owned-task", grace_seconds=.05, task_control_root=str(records))
             self.assertEqual(cancelled["status"], AgentStatus.TASK_CANCELLED.value)
             thread.join(3); self.assertFalse(thread.is_alive())
-            self.assertEqual(cancelled["outcome"], "TERMINATED" if os.name == "nt" else "KILLED_AFTER_GRACE")
+            self.assertEqual(cancelled["outcome"], "terminated" if os.name == "nt" else "KILLED_AFTER_GRACE")
             allowed_codes = (-9, None, 15, 0xC000013A, 0xD1F1) if os.name == "nt" else (-9, None)
             self.assertIn(result[0].return_code, allowed_codes); self.assertIn(result[0].status, {AgentStatus.PROCESS_EXITED, AgentStatus.INTERNAL_AGENT_ERROR}, result[0].diagnostic)
             self.assertEqual(task_status("owned-task", task_control_root=str(records))["status"], AgentStatus.TASK_CANCELLED.value)
@@ -110,6 +110,146 @@ class AgentTransferAndControlTests(unittest.TestCase):
             self.assertEqual(repeated["status"], AgentStatus.TASK_CANCELLED.value)
             self.assertEqual(repeated["outcome"], cancelled["outcome"])
             with self.assertRaises(Exception): cancel_task("../not-a-task", task_control_root=str(records))
+
+    @unittest.skipUnless(os.name == "nt", "Windows graceful cancellation outcome test")
+    def test_handled_ctrl_break_code_zero_is_recorded_as_cancelled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); engines, work, records = root / "engines", root / "workflows", root / "tasks"
+            engines.mkdir(); cwd = work / "task"; cwd.mkdir(parents=True)
+            grandchild_ready, grandchild_event = cwd / "grandchild-ready", cwd / "grandchild-break"
+            child_ready, child_event = cwd / "child-ready", cwd / "child-break"
+            grandchild = write_python_fixture(engines / "graceful_grandchild.py", f"""import signal, time
+from pathlib import Path
+ready = Path({str(grandchild_ready)!r})
+event = Path({str(grandchild_event)!r})
+def stop(sig, frame):
+    event.write_text('handled')
+    raise SystemExit(0)
+signal.signal(signal.SIGBREAK, stop)
+ready.write_text('ready')
+while True: time.sleep(.02)
+""")
+            child = write_python_fixture(engines / "graceful_child.py", f"""import signal, subprocess, sys, time
+from pathlib import Path
+ready = Path({str(child_ready)!r})
+event = Path({str(child_event)!r})
+def stop(sig, frame):
+    event.write_text('handled')
+    raise SystemExit(0)
+signal.signal(signal.SIGBREAK, stop)
+subprocess.Popen([sys.executable, {str(grandchild)!r}], shell=False)
+deadline = time.monotonic() + 5
+while not Path({str(grandchild_ready)!r}).exists() and time.monotonic() < deadline:
+    time.sleep(.01)
+ready.write_text('ready')
+while True: time.sleep(.02)
+""")
+            request = RuntimeProcessRequest("graceful-zero", RuntimePath(runtime_path(sys.executable)),
+                (runtime_path(child),),
+                RuntimePath(runtime_path(cwd)), {})
+            results = []
+            worker = threading.Thread(target=lambda: results.append(execute_request(
+                request, trusted_executable_roots=(runtime_path(Path(sys.executable).parent),),
+                trusted_working_roots=(runtime_path(work),), task_control_root=str(records),
+                enable_task_control=True)), daemon=True)
+            worker.start()
+            try:
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    if child_ready.exists(): break
+                    time.sleep(.02)
+                self.assertTrue(child_ready.exists(),
+                    f"synthetic process tree did not become ready; results={results!r}; records={list(records.glob('*'))!r}")
+                result = cancel_task("graceful-zero", grace_seconds=3, task_control_root=str(records))
+                worker.join(8)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(result["status"], AgentStatus.TASK_CANCELLED.value)
+                self.assertEqual(result["outcome"], "graceful")
+                self.assertTrue(child_event.exists())
+                self.assertTrue(grandchild_event.exists())
+                record = json.loads((records / "graceful-zero.json").read_text(encoding="utf-8"))
+                self.assertEqual(record["state"], "CANCELLED")
+                self.assertEqual(record["return_code"], 0)
+                self.assertEqual(record["cancellation_outcome"], "graceful")
+                evidence = record["cancellation_action_evidence"]
+                self.assertEqual(evidence["action"], "graceful")
+                self.assertEqual(evidence["pid"], record["pid"])
+                self.assertEqual(evidence["process_creation_time"], record["process_creation_time"])
+            finally:
+                if worker.is_alive():
+                    cancel_task("graceful-zero", grace_seconds=.1, task_control_root=str(records))
+                    worker.join(5)
+
+    def test_cancellation_action_evidence_requires_matching_request_and_process(self):
+        from runtime_agent.agent import _cancellation_action_evidence
+        record = {"task_id": "evidence-task", "cancel_requested": True, "cancel_token": "a" * 32}
+        record["cancellation_action_evidence"] = {
+            "version": 1, "task_id": "evidence-task", "request_id": "a" * 32, "ownership_token": "b" * 32,
+            "pid": 123, "process_creation_time": "456", "action": "graceful", "action_at": "now"}
+        kwargs = {"ownership": "b" * 32, "request_id": "a" * 32, "pid": 123, "creation_time": 456}
+        self.assertEqual(_cancellation_action_evidence(record, **kwargs), "graceful")
+        self.assertIsNone(_cancellation_action_evidence(record, **{**kwargs, "pid": 124}))
+        self.assertIsNone(_cancellation_action_evidence(record, **{**kwargs, "creation_time": 457}))
+        self.assertIsNone(_cancellation_action_evidence(record, **{**kwargs, "request_id": "c" * 32}))
+        copied = dict(record); copied["task_id"] = "another-task"
+        self.assertIsNone(_cancellation_action_evidence(copied, **kwargs))
+        malformed = dict(record); malformed["cancellation_action_evidence"] = {"version": 1, "action": "graceful"}
+        self.assertIsNone(_cancellation_action_evidence(malformed, **kwargs))
+
+    @unittest.skipUnless(os.name == "nt", "Windows natural-exit cancellation race test")
+    def test_failed_graceful_delivery_and_natural_exit_are_not_classified_cancelled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); task_id = "delivery-lost-race"; token = "d" * 32
+            record = {"schema_version": 1, "task_id": task_id, "state": "RUNNING",
+                      "pid": os.getpid(), "ownership_token": token,
+                      "boundary_type": "windows_job_object+process_group",
+                      "job_name": "Local\\QSRuntime-" + token, "process_creation_time": "1236"}
+            (root / f"{task_id}.json").write_text(json.dumps(record), encoding="utf-8")
+            class ExitingJob:
+                def __init__(self, *_args, **_kwargs): pass
+                def active_processes(self): return 1
+                def is_process_member(self, *_args): return True
+                def send_ctrl_break(self, *_args, **_kwargs): raise AssertionError("exited process must not be signalled")
+                def terminate(self, *_args): raise AssertionError("natural exit must not be terminated")
+                def close(self): pass
+                def __enter__(self): return self
+                def __exit__(self, *_args): self.close()
+            with patch("runtime_agent.windows_job.WindowsJob", ExitingJob), \
+                    patch("runtime_agent.windows_job.process_exit_state", side_effect=[False, True]):
+                result = cancel_task(task_id, grace_seconds=0, task_control_root=str(root))
+            final = json.loads((root / f"{task_id}.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], AgentStatus.TASK_FINISHED.value)
+            self.assertEqual(final["state"], "FINISHED")
+            self.assertNotIn("cancellation_action_evidence", final)
+            self.assertEqual(final["cancellation_outcome"], "lost_natural_completion_race")
+
+    @unittest.skipUnless(os.name == "nt", "Windows cancellation escalation race test")
+    def test_empty_job_during_terminate_does_not_create_cancellation_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_id = "empty-job-race"; token = "e" * 32; root = Path(tmp)
+            record = {"schema_version": 1, "task_id": task_id, "state": "RUNNING",
+                      "pid": os.getpid(), "ownership_token": token,
+                      "boundary_type": "windows_job_object+process_group",
+                      "job_name": "Local\\QSRuntime-" + token, "process_creation_time": "1237"}
+            (root / f"{task_id}.json").write_text(json.dumps(record), encoding="utf-8")
+            class EmptyingJob:
+                active_checks = iter((1, 1, 0, 0, 0, 0))
+                def __init__(self, *_args, **_kwargs): pass
+                def active_processes(self): return next(type(self).active_checks)
+                def is_process_member(self, *_args): return True
+                def send_ctrl_break(self, *_args, **_kwargs): return False
+                def terminate(self, *_args): return self.active_processes() > 0
+                def close(self): pass
+                def __enter__(self): return self
+                def __exit__(self, *_args): self.close()
+            with patch("runtime_agent.windows_job.WindowsJob", EmptyingJob), \
+                    patch("runtime_agent.windows_job.process_exit_state", return_value=False):
+                result = cancel_task(task_id, grace_seconds=0, task_control_root=str(root))
+            final = json.loads((root / f"{task_id}.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], AgentStatus.TASK_FINISHED.value)
+            self.assertEqual(final["state"], "FINISHED")
+            self.assertNotIn("cancellation_action_evidence", final)
+            self.assertEqual(final["cancellation_outcome"], "lost_natural_completion_race")
 
     def test_terminal_task_records_are_never_signalled_again(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -157,14 +297,15 @@ class AgentTransferAndControlTests(unittest.TestCase):
                 def is_process_member(self, *_args): return False
                 def send_ctrl_break(self, *_args, **_kwargs): raise AssertionError("signal must not be sent")
                 def close(self): pass
-            with patch("runtime_agent.windows_job.WindowsJob", NonMemberJob):
+            with patch("runtime_agent.windows_job.WindowsJob", NonMemberJob), \
+                    patch("runtime_agent.windows_job.process_exit_state", return_value=False):
                 result = cancel_task(task_id, task_control_root=str(root))
             self.assertEqual(result["status"], "FAILED")
             self.assertIn("identity", result["diagnostic"].lower())
             self.assertEqual(json.loads((root / f"{task_id}.json").read_text(encoding="utf-8")), record)
 
     @unittest.skipUnless(os.name == "nt", "Windows cancellation terminal-race test")
-    def test_natural_terminal_state_between_graceful_request_and_escalation_wins(self):
+    def test_graceful_action_preceding_clean_exit_finalization_classifies_cancelled(self):
         import runtime_agent.agent as agent
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); task_id = "natural-finish-race"; token = "b" * 32
@@ -187,20 +328,24 @@ class AgentTransferAndControlTests(unittest.TestCase):
                 event.wait(2)
                 with agent._task_record_lock(task_id, str(root)):
                     latest = agent._read_control(task_id, str(root))
-                    latest.update({"state": "FINISHED", "return_code": 0})
+                    action = agent._cancellation_action_evidence(
+                        latest, ownership=token, request_id=str(latest.get("cancel_token", "")),
+                        pid=int(latest["pid"]), creation_time=1234)
+                    latest.update({"state": "CANCELLED" if action else "FINISHED", "return_code": 0})
                     agent._atomic_json(agent._control_path(task_id, str(root)), latest)
             publisher = threading.Thread(target=publish_finished, daemon=True)
-            with patch("runtime_agent.windows_job.WindowsJob", RacingJob):
+            with patch("runtime_agent.windows_job.WindowsJob", RacingJob), \
+                    patch("runtime_agent.windows_job.process_exit_state", return_value=False):
                 publisher.start()
                 result = cancel_task(task_id, grace_seconds=.3, task_control_root=str(root))
                 publisher.join(2)
                 self.assertFalse(publisher.is_alive())
-            self.assertEqual(result["status"], AgentStatus.TASK_FINISHED.value)
+            self.assertEqual(result["status"], AgentStatus.TASK_CANCELLED.value)
             self.assertEqual(calls, {"graceful": 1, "terminate": 0})
-            self.assertEqual(json.loads((root / f"{task_id}.json").read_text(encoding="utf-8"))["state"], "FINISHED")
+            self.assertEqual(json.loads((root / f"{task_id}.json").read_text(encoding="utf-8"))["state"], "CANCELLED")
 
     @unittest.skipUnless(os.name == "nt", "Windows cancellation terminal-race test")
-    def test_failed_state_between_graceful_request_and_escalation_wins(self):
+    def test_graceful_action_preceding_nonzero_exit_finalization_classifies_cancelled(self):
         import runtime_agent.agent as agent
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); task_id = "failed-cancel-race"; token = "c" * 32
@@ -222,17 +367,21 @@ class AgentTransferAndControlTests(unittest.TestCase):
                 event.wait(2)
                 with agent._task_record_lock(task_id, str(root)):
                     latest = agent._read_control(task_id, str(root))
-                    latest.update({"state": "FAILED", "return_code": 9})
+                    action = agent._cancellation_action_evidence(
+                        latest, ownership=token, request_id=str(latest.get("cancel_token", "")),
+                        pid=int(latest["pid"]), creation_time=1235)
+                    latest.update({"state": "CANCELLED" if action else "FAILED", "return_code": 9})
                     agent._atomic_json(agent._control_path(task_id, str(root)), latest)
             publisher = threading.Thread(target=publish_failed, daemon=True)
-            with patch("runtime_agent.windows_job.WindowsJob", RacingJob):
+            with patch("runtime_agent.windows_job.WindowsJob", RacingJob), \
+                    patch("runtime_agent.windows_job.process_exit_state", return_value=False):
                 publisher.start()
                 result = cancel_task(task_id, grace_seconds=.3, task_control_root=str(root))
                 publisher.join(2)
                 self.assertFalse(publisher.is_alive())
             final = json.loads((root / f"{task_id}.json").read_text(encoding="utf-8"))
-            self.assertEqual(result["status"], AgentStatus.TASK_FINISHED.value)
-            self.assertEqual(final["state"], "FAILED")
+            self.assertEqual(result["status"], AgentStatus.TASK_CANCELLED.value)
+            self.assertEqual(final["state"], "CANCELLED")
             self.assertEqual(calls, {"graceful": 1, "terminate": 0})
 
     @unittest.skipUnless(os.name == "nt", "Windows process-group safety test")

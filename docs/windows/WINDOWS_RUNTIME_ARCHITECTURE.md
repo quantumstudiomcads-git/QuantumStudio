@@ -147,6 +147,12 @@ sequence. Natural completion is preserved if it wins the race. Job/process
 waits are bounded, and repeated cancellation is idempotent; unrelated
 processes remain outside the managed ownership boundary.
 
+Persisted POSIX process IDs and process-group IDs must be genuine integers in
+the inclusive range 1 through 2,147,483,647. Zero, negative, non-integer and
+oversized identities fail closed before native signalling and cannot validate
+cancellation evidence, even when the task record, intent and receipt agree.
+This stable protocol bound does not replace validation on a real Linux host.
+
 Result parsing remains host-side: only collected host paths are handed to `ResultService` and `ResultStore`, so Analyze can show persisted results without WSL. A verified natural zero exit is `COMPLETED`; parser result validity remains separate (`PARSE_FAILED` is not an engine failure).
 
 PUBLIC ENGINE PACK DISTRIBUTION LEGAL REVIEW: **PENDING**. W5 contains no third-party engine binaries, no downloader, no package-manager calls, and no real Windows/QE validation.

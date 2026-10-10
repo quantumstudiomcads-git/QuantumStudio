@@ -12,6 +12,14 @@ from typing import Any, Mapping
 PROTOCOL_SCHEMA_VERSION = 1
 # Schema 1 remains extensible: W5 adds named capabilities without changing W4 run requests.
 AGENT_VERSION = "2"
+POSIX_PROCESS_ID_MIN = 1
+POSIX_PROCESS_ID_MAX = 2_147_483_647
+
+
+def is_valid_posix_process_identity(value: object) -> bool:
+    """Return whether value is a serialized positive signed-32-bit POSIX PID/PGID."""
+    return (type(value) is int
+            and POSIX_PROCESS_ID_MIN <= value <= POSIX_PROCESS_ID_MAX)
 
 
 class ProtocolError(ValueError):

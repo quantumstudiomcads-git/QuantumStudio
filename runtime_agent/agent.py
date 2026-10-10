@@ -20,7 +20,9 @@ from datetime import datetime, timezone
 import uuid
 from typing import BinaryIO, Iterable, Mapping
 
-from .protocol import AGENT_VERSION, AgentStatus, ProtocolError, RuntimeAgentHealth, RuntimePath, RuntimeProcessRequest, RuntimeProcessResult, timestamp
+from .protocol import (AGENT_VERSION, AgentStatus, ProtocolError, RuntimeAgentHealth,
+                       RuntimePath, RuntimeProcessRequest, RuntimeProcessResult,
+                       is_valid_posix_process_identity, timestamp)
 
 DEFAULT_EXECUTABLE_ROOTS = ("/opt/quantumstudio/engines", "/opt/quantumstudio/runtime/bin")
 DEFAULT_WORKING_ROOTS = ("/var/lib/quantumstudio/workflows", "/var/lib/quantumstudio/staging")
@@ -185,11 +187,14 @@ def _record_alive(record: Mapping[str, object]) -> bool:
     if str(record.get("state", "")) not in {"RUNNING", "CANCELLING"}:
         return False
     try:
-        pid, pgid = int(record["pid"]), int(record["pgid"])
         expected = str(record.get("process_start_ticks", ""))
     except (KeyError, TypeError, ValueError):
         return False
     if os.name == "nt":
+        try:
+            pid, pgid = int(record["pid"]), int(record["pgid"])
+        except (KeyError, TypeError, ValueError):
+            return False
         name = str(record.get("job_name", ""))
         token = str(record.get("ownership_token", ""))
         if (record.get("boundary_type") != "windows_job_object+process_group"
@@ -208,6 +213,10 @@ def _record_alive(record: Mapping[str, object]) -> bool:
                 return True
         except (OSError, ValueError, RuntimeError):
             return False
+    pid, pgid = record.get("pid"), record.get("pgid")
+    if (not is_valid_posix_process_identity(pid)
+            or not is_valid_posix_process_identity(pgid)):
+        return False
     if not expected or _proc_start_ticks(pid) != expected:
         return False
     try:
@@ -219,11 +228,17 @@ def _record_alive(record: Mapping[str, object]) -> bool:
     return True
 
 
+def _posix_record_process_ids_valid(record: Mapping[str, object]) -> bool:
+    return (is_valid_posix_process_identity(record.get("pid"))
+            and is_valid_posix_process_identity(record.get("pgid")))
+
+
 def _signal_group(pgid: int, sig: signal.Signals) -> None:
     """Signal a verified POSIX task group; Windows uses Job Objects."""
     if os.name == "nt":
         raise RuntimeError("Windows cancellation must use the recorded Job Object.")
-    if pgid <= 1 or pgid == os.getpgrp():
+    if (not is_valid_posix_process_identity(pgid)
+            or pgid <= 1 or pgid == os.getpgrp()):
         raise ValueError("Refusing to signal an unowned or current process group.")
     os.killpg(pgid, sig)
 
@@ -242,10 +257,9 @@ def _process_boundary_identity(record: Mapping[str, object]) -> tuple[str, str] 
             return None
         return kind, name
     if kind == "posix_session":
-        pgid = record.get("pgid")
-        if type(pgid) is not int or pgid <= 1:
+        if not _posix_record_process_ids_valid(record):
             return None
-        return kind, str(pgid)
+        return kind, str(record["pgid"])
     return None
 
 
@@ -456,6 +470,9 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
                                            stdout=stdout or subprocess.DEVNULL, stderr=stderr or subprocess.DEVNULL,
                                            env=environment, shell=False, start_new_session=True)
             pid, pgid = process.pid, os.getpgid(process.pid) if hasattr(os, "getpgid") else process.pid
+            if os.name != "nt" and (not is_valid_posix_process_identity(pid)
+                                     or not is_valid_posix_process_identity(pgid)):
+                raise ValueError("Launched POSIX process identity is outside the protocol range.")
             if enable_task_control:
                 control = _control_path(request.task_id, task_control_root)
                 record = {"schema_version": 1, "task_id": request.task_id, "pid": pid, "pgid": pgid,
@@ -684,6 +701,11 @@ def task_status(task_id: str, *, task_control_root: str = DEFAULT_TASK_CONTROL_R
                                 "finished_at": timestamp()})
             elif _has_unresolved_action_intent(record):
                 updated = _mark_cancellation_indeterminate(record, error_type="restart_reconciliation")
+            elif os.name != "nt" and not _posix_record_process_ids_valid(record):
+                updated = dict(record)
+                updated.update({"state": "OUTCOME_INDETERMINATE",
+                                "failure_code": "task_process_identity_unproven",
+                                "finished_at": timestamp()})
             elif alive:
                 updated = None
             elif action is not None:
@@ -789,6 +811,14 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                 if state != "CANCELLATION_INDETERMINATE":
                     record = _mark_cancellation_indeterminate(record, error_type="cancel_reconciliation")
                     _atomic_json(_control_path(task_id, task_control_root), record)
+                return _cancel_terminal_result(task_id, record)
+            if os.name != "nt" and state in {"RUNNING", "CANCELLING"} \
+                    and not _posix_record_process_ids_valid(record):
+                record = dict(record)
+                record.update({"state": "OUTCOME_INDETERMINATE",
+                               "failure_code": "task_process_identity_unproven",
+                               "finished_at": timestamp()})
+                _atomic_json(_control_path(task_id, task_control_root), record)
                 return _cancel_terminal_result(task_id, record)
             if state == "CANCELLING":
                 if not _record_alive(record):

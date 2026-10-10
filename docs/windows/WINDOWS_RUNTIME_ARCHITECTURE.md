@@ -74,18 +74,37 @@ reconciliation; the agent does not claim to recover or resume that work.
 
 Cancellation sends `CTRL_BREAK_EVENT` only to the explicitly created,
 nonzero child group after verifying membership. Under the task-record lock it
-records a versioned, non-secret action receipt bound to the cancellation
-request, ownership token, PID, and process creation time after each successful
-native action. The execution thread uses that receipt when committing exit
-state, so a handled graceful request followed by exit code 0 is `CANCELLED`.
-A request flag without a successful action receipt does not classify an exit
-as cancelled. Natural completion committed first remains `FINISHED` or
-`FAILED`. The agent rereads authoritative state during bounded grace polling
-and before each termination or final state update. If graceful delivery is
-unavailable or ignored, it terminates the token-bound Job Object and waits
-with a bounded deadline. Terminal state wins over a stale cancellation
+first persists a versioned, non-secret prepared action intent bound to the
+cancellation request, unique attempt ID, ownership token, PID, process
+creation time, action, and UTC ISO-8601 timestamp. Only then does it invoke
+the native action. A successful action is followed by an atomically persisted
+version-1 receipt bound to that same attempt and identity; receipt timestamps
+must be valid timezone-aware UTC values. A valid receipt is required to record
+`CANCELLED`, including when a handled graceful request exits with code 0. A
+request flag or prepared intent alone is insufficient. A definite native
+action failure is recorded as a failed attempt and allows natural completion
+to retain its normal `FINISHED` or `FAILED` result.
+
+The operating-system action and its durable receipt cannot be committed in
+one transaction. If the agent exits or receipt persistence fails after an
+intent was prepared but before a valid receipt or definite failure is
+durable, the task is marked `CANCELLATION_INDETERMINATE` with failure code
+`cancellation_action_outcome_unproven`; it is neither successful completion
+nor confirmed cancellation. The agent does not blindly repeat an unresolved
+attempt, retarget a PID, resume scientific work, or perform a destructive
+reset. On restart, unresolved records remain visibly indeterminate and may
+require operator review; no automatic action is inferred from process exit,
+return code, an empty Job, or the request flag. The actual return code is
+preserved when known.
+
+The agent rereads authoritative state during bounded grace polling and before
+each termination or final state update. If graceful delivery is unavailable
+or ignored, it prepares a distinct bounded escalation attempt for the
+token-bound Job Object. Terminal state wins over a stale cancellation
 snapshot; repeated and concurrent requests do not signal again. No
-process-name-based termination is used.
+process-name-based termination is used. The historical managed-runtime
+`KeyboardInterrupt` sender remains unresolved; this cancellation policy does
+not claim to explain or suppress it.
 
 POSIX launches retain their separate session and process-group behavior, with
 the process start discriminator and group checked before signalling. On both

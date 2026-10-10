@@ -16,6 +16,7 @@ import sys
 import time
 import threading
 import contextlib
+from datetime import datetime, timezone
 import uuid
 from typing import BinaryIO, Iterable, Mapping
 
@@ -27,6 +28,7 @@ DEFAULT_TRANSFER_ROOTS = DEFAULT_WORKING_ROOTS + ("/var/lib/quantumstudio/pseudo
 DEFAULT_TASK_CONTROL_ROOT = "/var/lib/quantumstudio/runtime/tasks"
 CAPABILITIES = ("run", "status", "cancel", "stage_in", "stage_out", "install_engine_pack")
 _TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)\Z")
 
 
 def _under(path: RuntimePath, roots: Iterable[str]) -> bool:
@@ -233,44 +235,132 @@ def _cancellation_action_evidence(record: Mapping[str, object], *, ownership: st
                                   request_id: str, pid: int,
                                   creation_time: int) -> str | None:
     """Return a verified action only when its evidence binds to this task process."""
-    evidence = record.get("cancellation_action_evidence")
-    if (not isinstance(evidence, dict)
-            or type(evidence.get("version")) is not int
-            or evidence.get("version") != 1
-            or not re.fullmatch(r"[0-9a-f]{32}", request_id)):
+    attempts = record.get("cancellation_action_attempts", [])
+    receipts = record.get("cancellation_action_receipts", [])
+    if not isinstance(attempts, list) or not isinstance(receipts, list):
         return None
-    action = evidence.get("action")
-    if not isinstance(action, str) or action not in {"graceful", "terminated", "forced"}:
+    if isinstance(record.get("cancellation_action_intent"), dict):
+        current_intent = record["cancellation_action_intent"]
+        if current_intent.get("state") in {"prepared", "confirmed"}:
+            attempts = [current_intent]
+        else:
+            attempts = [*attempts, current_intent]
+    if isinstance(record.get("cancellation_action_evidence"), dict):
+        receipts = [*receipts, record["cancellation_action_evidence"]]
+    if (not re.fullmatch(r"[0-9a-f]{32}", request_id)
+            or record.get("cancel_requested") is not True
+            or record.get("cancel_token") != request_id):
         return None
-    if (record.get("cancel_requested") is not True
-            or not isinstance(record.get("task_id"), str)
-            or not record.get("task_id")
-            or evidence.get("task_id") != record.get("task_id")
-            or record.get("cancel_token") != request_id
-            or evidence.get("request_id") != request_id
-            or evidence.get("ownership_token") != ownership
-            or evidence.get("pid") != pid
-            or evidence.get("process_creation_time") != str(creation_time)
-            or not isinstance(evidence.get("action_at"), str)
-            or not evidence.get("action_at")):
+    for evidence in reversed(receipts):
+        if not isinstance(evidence, dict):
+            continue
+        action = evidence.get("action")
+        if not isinstance(action, str) or action not in {"graceful", "terminated", "forced"}:
+            continue
+        for intent in reversed(attempts):
+            if not isinstance(intent, dict) or intent.get("state") != "confirmed":
+                continue
+            prepared_at = _parse_utc_timestamp(intent.get("prepared_at"))
+            action_at = _parse_utc_timestamp(evidence.get("action_at"))
+            if (type(evidence.get("version")) is int and evidence.get("version") == 1
+                    and type(intent.get("version")) is int and intent.get("version") == 1
+                    and isinstance(record.get("task_id"), str) and record.get("task_id")
+                    and evidence.get("task_id") == record.get("task_id") == intent.get("task_id")
+                    and evidence.get("request_id") == intent.get("request_id") == request_id
+                    and evidence.get("attempt_id") == intent.get("attempt_id")
+                    and isinstance(intent.get("attempt_id"), str)
+                    and re.fullmatch(r"[0-9a-f]{32}", intent["attempt_id"])
+                    and evidence.get("ownership_token") == intent.get("ownership_token") == ownership
+                    and evidence.get("pid") == intent.get("pid") == pid
+                    and evidence.get("process_creation_time") == intent.get("process_creation_time") == str(creation_time)
+                    and evidence.get("action") == intent.get("action")
+                    and prepared_at is not None and action_at is not None and action_at >= prepared_at):
+                return action
+    return None
+
+
+def _parse_utc_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or len(value) > 32 or not _UTC_TIMESTAMP.fullmatch(value):
         return None
-    return str(action)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+        return None
+    return parsed
+
+
+def _valid_utc_timestamp(value: object) -> bool:
+    return _parse_utc_timestamp(value) is not None
+
+
+def _prepare_cancellation_action(record: Mapping[str, object], *, action: str,
+                                 ownership: str, request_id: str, pid: int,
+                                 creation_time: int) -> dict[str, object]:
+    updated = dict(record)
+    intent = {
+        "version": 1, "state": "prepared", "task_id": updated.get("task_id"),
+        "request_id": request_id, "attempt_id": uuid.uuid4().hex,
+        "ownership_token": ownership, "pid": pid,
+        "process_creation_time": str(creation_time), "action": action,
+        "prepared_at": timestamp(),
+    }
+    updated["cancellation_action_intent"] = intent
+    updated["cancellation_action_attempts"] = [
+        *[item for item in updated.get("cancellation_action_attempts", []) if isinstance(item, dict)], intent]
+    return updated
+
+
+def _finish_cancellation_intent(record: Mapping[str, object], *, state: str) -> dict[str, object]:
+    updated = dict(record)
+    intent = updated.get("cancellation_action_intent")
+    if isinstance(intent, dict):
+        intent = dict(intent); intent["state"] = state
+        updated["cancellation_action_intent"] = intent
+        attempts = updated.get("cancellation_action_attempts", [])
+        if isinstance(attempts, list):
+            updated["cancellation_action_attempts"] = [
+                intent if isinstance(item, dict) and item.get("attempt_id") == intent.get("attempt_id") else item
+                for item in attempts]
+    return updated
+
+
+def _persist_cancellation_action_receipt(path: Path, payload: Mapping[str, object]) -> None:
+    """Retry only bounded Windows sharing violations; never resend the action."""
+    for attempt in range(3):
+        try:
+            _atomic_json(path, payload)
+            return
+        except OSError as error:
+            sharing_violation = getattr(error, "winerror", None) in {32, 33}
+            if not sharing_violation or attempt == 2:
+                raise
+            time.sleep(0.02)
 
 
 def _with_cancellation_action(record: Mapping[str, object], *, action: str,
                               ownership: str, request_id: str, pid: int,
                               creation_time: int) -> dict[str, object]:
     updated = dict(record)
+    intent = updated.get("cancellation_action_intent")
+    if not isinstance(intent, dict) or intent.get("state") != "prepared" or intent.get("action") != action:
+        raise ValueError("Cancellation action has no matching prepared intent.")
     updated["cancellation_action_evidence"] = {
         "version": 1,
         "task_id": updated.get("task_id"),
         "request_id": request_id,
+        "attempt_id": intent.get("attempt_id"),
         "ownership_token": ownership,
         "pid": pid,
         "process_creation_time": str(creation_time),
         "action": action,
         "action_at": timestamp(),
     }
+    updated = _finish_cancellation_intent(updated, state="confirmed")
+    updated["cancellation_action_receipts"] = [
+        *[item for item in updated.get("cancellation_action_receipts", []) if isinstance(item, dict)],
+        updated["cancellation_action_evidence"]]
     updated["cancellation_outcome"] = action
     return updated
 
@@ -406,6 +496,9 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
                             creation_time=int(process_creation_time or 0))
                         if action:
                             final_state = "CANCELLED"
+                        elif (isinstance(existing.get("cancellation_action_intent"), dict)
+                              and existing["cancellation_action_intent"].get("state") != "failed"):
+                            final_state = "CANCELLATION_INDETERMINATE"
                         elif existing.get("state") in {"FINISHED", "FAILED"}:
                             final_state = str(existing["state"])
                         else:
@@ -421,6 +514,8 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
                 final_record = dict(existing or {})
                 final_record.update({"state": final_state, "return_code": return_code,
                                      "finished_at": timestamp()})
+                if final_state == "CANCELLATION_INDETERMINATE":
+                    final_record["failure_code"] = "cancellation_action_outcome_unproven"
                 _atomic_json(control, final_record)
         return RuntimeProcessResult(request.task_id, status, True, True, return_code, pid, pgid,
                                     started_at, timestamp(), time.monotonic() - timer, diagnostic)
@@ -524,10 +619,72 @@ def install_engine_pack(request: Mapping[str, object], *, engine_root: str = "/o
 
 
 def task_status(task_id: str, *, task_control_root: str = DEFAULT_TASK_CONTROL_ROOT) -> dict[str, object]:
-    record = _read_control(_safe_task_id(task_id), task_control_root)
-    if record is None: return {"schema_version": 1, "status": AgentStatus.TASK_NOT_FOUND.value, "task_id": task_id}
-    state = AgentStatus.TASK_RUNNING if _record_alive(record) else (AgentStatus.TASK_CANCELLED if record.get("state") == "CANCELLED" else AgentStatus.TASK_FINISHED)
+    task_id = _safe_task_id(task_id)
+    with _task_record_lock(task_id, task_control_root):
+        record = _read_control(task_id, task_control_root)
+        if record is None:
+            return {"schema_version": 1, "status": AgentStatus.TASK_NOT_FOUND.value, "task_id": task_id}
+        if _has_unresolved_action_intent(record) and record.get("state") != "CANCELLATION_INDETERMINATE":
+            indeterminate = _mark_cancellation_indeterminate(record, error_type="restart_reconciliation")
+            try:
+                _atomic_json(_control_path(task_id, task_control_root), indeterminate)
+                record = indeterminate
+            except (OSError, TypeError, ValueError):
+                return {"schema_version": 1,
+                        "status": AgentStatus.TASK_CANCELLATION_INDETERMINATE.value,
+                        "task_id": task_id,
+                        "failure_code": "cancellation_action_outcome_unproven",
+                        "record": record}
+        if record.get("state") == "CANCELLATION_INDETERMINATE":
+            state = AgentStatus.TASK_CANCELLATION_INDETERMINATE
+        else:
+            try:
+                action = _cancellation_action_evidence(
+                    record, ownership=str(record.get("ownership_token", "")),
+                    request_id=str(record.get("cancel_token", "")),
+                    pid=int(record.get("pid", 0)),
+                    creation_time=int(str(record.get("process_creation_time", "0"))))
+            except (TypeError, ValueError):
+                action = None
+            alive = _record_alive(record)
+            if record.get("state") == "CANCELLING" and not alive and action is not None:
+                record = dict(record)
+                record.update({"state": "CANCELLED", "cancellation_outcome": action,
+                               "cancelled_at": timestamp()})
+                _atomic_json(_control_path(task_id, task_control_root), record)
+                state = AgentStatus.TASK_CANCELLED
+            else:
+                state = AgentStatus.TASK_RUNNING if alive else (
+                    AgentStatus.TASK_CANCELLED if record.get("state") == "CANCELLED"
+                    else AgentStatus.TASK_FINISHED)
     return {"schema_version": 1, "status": state.value, "task_id": task_id, "record": record}
+
+
+def _has_unresolved_action_intent(record: Mapping[str, object]) -> bool:
+    attempts = record.get("cancellation_action_attempts", [])
+    intent = record.get("cancellation_action_intent")
+    if isinstance(intent, dict):
+        attempts = [*attempts, intent] if isinstance(attempts, list) else [intent]
+    if not isinstance(attempts, list) or not any(isinstance(item, dict) for item in attempts):
+        return False
+    try:
+        if _cancellation_action_evidence(
+                record, ownership=str(record.get("ownership_token", "")),
+                request_id=str(record.get("cancel_token", "")),
+                pid=int(record.get("pid", 0)),
+                creation_time=int(str(record.get("process_creation_time", "0")))) is not None:
+            return False
+    except (TypeError, ValueError, KeyError):
+        pass
+    return any(isinstance(item, dict) and item.get("state") != "failed" for item in attempts)
+
+
+def _mark_cancellation_indeterminate(record: Mapping[str, object], *, error_type: str) -> dict[str, object]:
+    final = dict(record)
+    final.update({"state": "CANCELLATION_INDETERMINATE",
+                  "failure_code": "cancellation_action_outcome_unproven",
+                  "cancellation_persistence_error": error_type})
+    return final
 
 
 def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: str = DEFAULT_TASK_CONTROL_ROOT) -> dict[str, object]:
@@ -544,6 +701,9 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                         "task_id": task_id, "outcome": record.get("cancellation_outcome", "ALREADY_CANCELLED")}
             if state in {"FINISHED", "FAILED"}:
                 return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value, "task_id": task_id}
+            if state == "CANCELLATION_INDETERMINATE" or _has_unresolved_action_intent(record):
+                return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLATION_INDETERMINATE.value,
+                        "task_id": task_id, "failure_code": "cancellation_action_outcome_unproven"}
             if state == "CANCELLING":
                 return {"schema_version": 1, "status": AgentStatus.TASK_RUNNING.value,
                         "task_id": task_id, "outcome": "CANCELLATION_IN_PROGRESS"}
@@ -594,12 +754,20 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                         _atomic_json(_control_path(task_id, task_control_root), finished)
                         return {"schema_version": 1, "status": AgentStatus.TASK_FINISHED.value,
                                 "task_id": task_id}
+                    prepared = _prepare_cancellation_action(
+                        cancelling, action="graceful", ownership=ownership,
+                        request_id=cancel_token, pid=pid, creation_time=creation)
+                    _atomic_json(_control_path(task_id, task_control_root), prepared)
+                    cancelling = prepared
                     event_sent = job.send_ctrl_break(pid, creation, current_pid=os.getpid())
                     if event_sent:
                         acted = _with_cancellation_action(
                             cancelling, action="graceful", ownership=ownership,
                             request_id=cancel_token, pid=pid, creation_time=creation)
-                        _atomic_json(_control_path(task_id, task_control_root), acted)
+                        _persist_cancellation_action_receipt(_control_path(task_id, task_control_root), acted)
+                    else:
+                        failed = _finish_cancellation_intent(cancelling, state="failed")
+                        _atomic_json(_control_path(task_id, task_control_root), failed)
                 finally:
                     job.close()
             else:
@@ -657,14 +825,22 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                         final_state = "CANCELLED" if cancelled else "FINISHED"
                         outcome = action or "lost_natural_completion_race"
                     else:
+                        prepared = _prepare_cancellation_action(
+                            latest, action="terminated", ownership=ownership,
+                            request_id=cancel_token, pid=pid, creation_time=creation)
+                        _atomic_json(_control_path(task_id, task_control_root), prepared)
+                        latest = prepared
                         terminated = job.terminate()
                         if terminated:
                             acted = _with_cancellation_action(
                                 latest, action="terminated", ownership=ownership,
                                 request_id=cancel_token, pid=pid, creation_time=creation)
-                            _atomic_json(_control_path(task_id, task_control_root), acted)
+                            _persist_cancellation_action_receipt(_control_path(task_id, task_control_root), acted)
                             outcome = "terminated"
                         else:
+                            failed = _finish_cancellation_intent(latest, state="failed")
+                            _atomic_json(_control_path(task_id, task_control_root), failed)
+                            latest = failed
                             outcome = _cancellation_action_evidence(
                                 latest, ownership=ownership, request_id=cancel_token,
                                 pid=pid, creation_time=creation) or "lost_natural_completion_race"
@@ -701,12 +877,21 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                                 "diagnostic": "Managed cancellation ownership changed."}
                     with WindowsJob(name, create=False) as job:
                         if not emptied or job.active_processes():
+                            prepared = _prepare_cancellation_action(
+                                latest, action="forced", ownership=ownership,
+                                request_id=cancel_token, pid=pid, creation_time=creation)
+                            _atomic_json(_control_path(task_id, task_control_root), prepared)
+                            latest = prepared
                             if job.terminate(0xD1F3):
                                 latest = _with_cancellation_action(
                                     latest, action="forced", ownership=ownership,
                                     request_id=cancel_token, pid=pid, creation_time=creation)
-                                _atomic_json(_control_path(task_id, task_control_root), latest)
+                                _persist_cancellation_action_receipt(_control_path(task_id, task_control_root), latest)
                                 outcome = "forced"
+                            else:
+                                failed = _finish_cancellation_intent(latest, state="failed")
+                                _atomic_json(_control_path(task_id, task_control_root), failed)
+                                latest = failed
                 deadline = time.monotonic() + 5.0
                 while True:
                     with _task_record_lock(task_id, task_control_root):
@@ -736,11 +921,15 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                         pid=pid, creation_time=creation)
                     if action is not None:
                         final_state, outcome = "CANCELLED", action
+                    elif _has_unresolved_action_intent(latest):
+                        final_state, outcome = "CANCELLATION_INDETERMINATE", "cancellation_action_outcome_unproven"
                     elif final_state == "CANCELLED":
                         final_state, outcome = "FINISHED", "lost_natural_completion_race"
                     final = dict(latest); final.update({"state": final_state,
                                                         "cancellation_outcome": outcome,
                                                         "cancelled_at": timestamp() if final_state == "CANCELLED" else None})
+                    if final_state == "CANCELLATION_INDETERMINATE":
+                        final["failure_code"] = "cancellation_action_outcome_unproven"
                     _atomic_json(_control_path(task_id, task_control_root), final)
                 else:
                     final = latest or {}
@@ -803,13 +992,35 @@ def cancel_task(task_id: str, *, grace_seconds: float = 2.0, task_control_root: 
                                                 "cancelled_at": timestamp()})
             _atomic_json(_control_path(task_id, task_control_root), final)
         return _cancel_terminal_result(task_id, final)
-    except (OSError, ValueError, RuntimeError, TimeoutError, KeyError) as error:
+    except (OSError, ValueError, RuntimeError, TimeoutError, KeyError, TypeError) as error:
+        try:
+            with _task_record_lock(task_id, task_control_root):
+                latest = _read_control(task_id, task_control_root)
+                if latest and _has_unresolved_action_intent(latest):
+                    indeterminate = _mark_cancellation_indeterminate(
+                        latest, error_type=type(error).__name__)
+                    try:
+                        _atomic_json(_control_path(task_id, task_control_root), indeterminate)
+                    except (OSError, TypeError, ValueError):
+                        # The durable prepared intent still prevents ordinary
+                        # completion on finalization/restart; retain its record.
+                        pass
+                    return {"schema_version": 1,
+                            "status": AgentStatus.TASK_CANCELLATION_INDETERMINATE.value,
+                            "task_id": task_id,
+                            "failure_code": "cancellation_action_outcome_unproven",
+                            "diagnostic": type(error).__name__}
+        except (OSError, ValueError, RuntimeError, TimeoutError, KeyError, TypeError):
+            pass
         return {"schema_version": 1, "status": "FAILED", "task_id": task_id,
                 "diagnostic": type(error).__name__}
 
 
 def _cancel_terminal_result(task_id: str, record: Mapping[str, object]) -> dict[str, object]:
     state = str(record.get("state", ""))
+    if state == "CANCELLATION_INDETERMINATE" or _has_unresolved_action_intent(record):
+        return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLATION_INDETERMINATE.value,
+                "task_id": task_id, "failure_code": "cancellation_action_outcome_unproven"}
     if state == "CANCELLED":
         return {"schema_version": 1, "status": AgentStatus.TASK_CANCELLED.value,
                 "task_id": task_id, "outcome": record.get("cancellation_outcome", "TERMINATED")}

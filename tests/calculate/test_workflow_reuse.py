@@ -9,6 +9,21 @@ class WorkflowReuseTests(unittest.TestCase):
     def setUp(self):
         self.parent = {"structure_fingerprint":"s", "pseudo_sha256":"p", "functional":"pbe", "cutoffs":(60,240), "spin":"scalar", "charge":0, "scf_mesh":(8,8,8), "occupations":"mp:.04", "coarse_k_mesh":(12,12,12), "coarse_q_mesh":(3,3,3), "nbnd":14, "num_wann":9, "subspace_method":"SCDM_ERFC", "scdm_fit_identity":"fit", "wannier_engine":"QE_EP6/W90-3.1"}
 
+    def test_indeterminate_parent_cannot_branch_into_new_attempt(self):
+        from types import SimpleNamespace
+        from backend.execution.branch import BranchExecutionBuilder, BranchExecutionError
+        from backend.execution.models import TaskExecutionRecord, TaskState, WorkflowExecutionRecord
+        with tempfile.TemporaryDirectory() as value:
+            parent = WorkflowExecutionRecord("request", value,
+                {"task": TaskExecutionRecord("task", state=TaskState.INDETERMINATE,
+                                              error_type="cancellation_action_outcome_unproven")},
+                execution_id="parent")
+            child = Path(value) / "child"
+            plan = SimpleNamespace(parent_execution_id="parent")
+            with self.assertRaises(BranchExecutionError):
+                BranchExecutionBuilder().create(None, plan, parent, None, branch_root=child)
+            self.assertFalse(child.exists())
+
     def test_q_change_reuses_electronic_and_wannier_but_invalidates_phonon(self):
         child = {**self.parent, "coarse_q_mesh":(6,6,6)}
         plan = ReusePlanner().plan(parent_execution_id="p", child_request_id="c", parent_identity=self.parent, child_identity=child, source_tasks={"scf":"scf", "electronic":"electronic", "wannier":"wannier", "dfpt":"dfpt"})

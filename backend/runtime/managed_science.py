@@ -339,6 +339,36 @@ def _runtime_relative(directory: RuntimePath, relative: str) -> RuntimePath:
     return RuntimePath(str(PurePosixPath(str(directory), candidate)))
 
 
+def _managed_task_outcome(status_payload: object, process_return_code: int | None = None,
+                          expected_task_id: str | None = None) -> tuple[str, str, int | None]:
+    """Translate authoritative agent state without making unknown work retryable."""
+    payload = status_payload if isinstance(status_payload, dict) else {}
+    record = payload.get("record") if isinstance(payload.get("record"), dict) else {}
+    if expected_task_id is not None and (payload.get("task_id") != expected_task_id
+                                         or record.get("task_id") != expected_task_id):
+        return "INDETERMINATE", "task_control_identity_unproven", process_return_code
+    code = record.get("return_code", payload.get("return_code"))
+    if (type(code) is int and type(process_return_code) is int and code != process_return_code):
+        return "INDETERMINATE", "task_return_code_mismatch", process_return_code
+    if type(code) is not int:
+        code = process_return_code if type(process_return_code) is int else None
+    failure = record.get("failure_code", payload.get("failure_code"))
+    status = payload.get("status")
+    if status == "TASK_CANCELLATION_INDETERMINATE":
+        return "INDETERMINATE", str(failure or "cancellation_action_outcome_unproven"), code
+    if status == "TASK_OUTCOME_INDETERMINATE":
+        return "INDETERMINATE", str(failure or "task_exit_outcome_unproven"), code
+    if status == "TASK_CANCELLED":
+        return "CANCELLED", "", code
+    if status == "TASK_FAILED":
+        return "FAILED", str(failure or "EXECUTION_FAILED"), code
+    if status == "TASK_FINISHED" and record.get("state") == "FINISHED" and code is not None:
+        return ("COMPLETED" if code == 0 else "FAILED"), ("" if code == 0 else "EXECUTION_FAILED"), code
+    if status == "TASK_RUNNING" and process_return_code is None:
+        return "RUNNING", "", code
+    return "INDETERMINATE", "task_control_outcome_unproven", code
+
+
 class ManagedScientificExecutionService:
     required_agent_capabilities = frozenset({"run", "stage_in", "stage_out", "status", "cancel"})
 
@@ -372,6 +402,8 @@ class ManagedScientificExecutionService:
         execution_id = (record.execution_id if record else "") or "managed-" + _identifier(workflow.request_id, "workflow id")
         records = record.tasks if record is not None else {task.task_id: TaskExecutionRecord(task.task_id) for task in workflow.tasks}
         record = record or WorkflowExecutionRecord(workflow.request_id, str(root), records, execution_id=execution_id)
+        if any(item.state in {TaskState.INDETERMINATE, TaskState.CANCELLED} for item in records.values()):
+            raise ManagedTaskControlError("Indeterminate or cancelled managed execution is terminal; it cannot resume.")
         record.started_at = record.started_at or now(); record.provider_provenance.update(self.runtime.runtime_provenance())
         for task in workflow.tasks:
             item = records[task.task_id]
@@ -390,25 +422,55 @@ class ManagedScientificExecutionService:
                 stdin_path = _runtime_relative(runtime_dir, task.command.stdin_file) if task.command.stdin_file else None
                 stdout_name, stderr_name = task.command.stdout_file or "stdout.log", task.command.stderr_file or "stderr.log"
                 stdout_path, stderr_path = _runtime_relative(runtime_dir, stdout_name), _runtime_relative(runtime_dir, stderr_name)
-                from runtime_agent.protocol import RuntimeProcessRequest
+                from runtime_agent.protocol import AgentStatus, RuntimeProcessRequest
                 request = RuntimeProcessRequest(task.task_id, executable, tuple(task.command.arguments), runtime_dir,
                                                 dict(task.command.environment), stdin_path, stdout_path, stderr_path,
                                                 task.timeout_seconds)
-                item.state = TaskState.RUNNING; item.started_at = now(); item.resolved_executable = str(executable); item.command_argv = [str(executable), *task.command.arguments]
+                item.state = TaskState.RUNNING; item.started_at = now(); item.error_type = ""; item.error_message = ""
+                item.resolved_executable = str(executable); item.command_argv = [str(executable), *task.command.arguments]
                 bridge = self.runtime.execute_runtime_task(request, record=record)
                 process = bridge.process
                 if process is None or not process.started:
                     item.state = TaskState.FAILED; item.error_type = "WSL_TRANSPORT_FAILED"; item.error_message = bridge.diagnostic
                 else:
                     item.process_id = process.runtime_pid; item.return_code = process.return_code
+                    if process.status is AgentStatus.TASK_CONTROL_PERSISTENCE_FAILED:
+                        # A prior record cannot establish the outcome of this launch
+                        # when its control state could not be committed.
+                        authoritative = {"status": "TASK_OUTCOME_INDETERMINATE",
+                                         "task_id": task.task_id,
+                                         "record": {"task_id": task.task_id},
+                                         "failure_code": "task_control_persistence_failed"}
+                    else:
+                        try:
+                            authoritative = self.transport.task_status(task.task_id)
+                        except (ManagedScienceError, OSError, ValueError, TypeError):
+                            authoritative = {"status": "TASK_OUTCOME_INDETERMINATE",
+                                             "failure_code": "task_control_outcome_unproven"}
+                    state, failure, code = _managed_task_outcome(authoritative, process.return_code,
+                                                                 expected_task_id=task.task_id)
+                    item.state = TaskState(state)
+                    item.return_code = code
+                    if item.state is TaskState.INDETERMINATE:
+                        item.error_type = failure
+                        item.error_message = "Managed task outcome is unproven; operator review is required."
+                    elif item.state is TaskState.FAILED:
+                        item.error_type = failure
+                        item.error_message = process.diagnostic or f"Process exited with code {code}."
+                    elif item.state is TaskState.CANCELLED:
+                        item.error_message = "Managed task cancellation was confirmed."
                     item.stdout_path = str(root / task.working_directory / stdout_name); item.stderr_path = str(root / task.working_directory / stderr_name)
-                    self.transport.stage_out(StageOutArtifact(stdout_path, Path(item.stdout_path), ArtifactRole.LOG, required=False), host_root=root)
-                    self.transport.stage_out(StageOutArtifact(stderr_path, Path(item.stderr_path), ArtifactRole.LOG, required=False), host_root=root)
-                    for output in task.artifact_outputs:
-                        runtime_output = _runtime_relative(runtime_dir, output)
-                        self.transport.stage_out(StageOutArtifact(runtime_output, root / task.working_directory / output, ArtifactRole.PARSER_INPUT, required=False), host_root=root)
-                    item.state = TaskState.COMPLETED if process.return_code == 0 else TaskState.FAILED
-                    if item.state is TaskState.FAILED: item.error_type = "EXECUTION_FAILED"; item.error_message = process.diagnostic or f"Process exited with code {process.return_code}."
+                    try:
+                        self.transport.stage_out(StageOutArtifact(stdout_path, Path(item.stdout_path), ArtifactRole.LOG, required=False), host_root=root)
+                        self.transport.stage_out(StageOutArtifact(stderr_path, Path(item.stderr_path), ArtifactRole.LOG, required=False), host_root=root)
+                        for output in task.artifact_outputs:
+                            runtime_output = _runtime_relative(runtime_dir, output)
+                            self.transport.stage_out(StageOutArtifact(runtime_output, root / task.working_directory / output, ArtifactRole.PARSER_INPUT, required=False), host_root=root)
+                    except (ManagedScienceError, OSError) as stage_error:
+                        if item.state not in {TaskState.INDETERMINATE, TaskState.CANCELLED}:
+                            item.state = TaskState.FAILED
+                            item.error_type = "STAGING_FAILED"
+                            item.error_message = str(stage_error)
             except (ManagedScienceError, OSError, ExecutionPreflightError) as error:
                 item.state = TaskState.FAILED; item.error_type = "STAGING_FAILED"; item.error_message = str(error)
             item.finished_at = now()
@@ -424,9 +486,16 @@ class ManagedScientificExecutionService:
     def cancel(self, task_id: str) -> dict[str, object]:
         return self.transport.cancel(task_id)
 
-    def recover_running(self, task_id: str) -> str:
-        status = str(self.transport.task_status(task_id).get("status", ""))
-        return "RUNNING" if status == "TASK_RUNNING" else "INTERRUPTED"
+    def recover_running(self, task_id: str) -> dict[str, object]:
+        try:
+            payload = self.transport.task_status(task_id)
+        except (ManagedScienceError, OSError, ValueError, TypeError):
+            payload = {"status": "TASK_OUTCOME_INDETERMINATE",
+                       "failure_code": "task_control_outcome_unproven"}
+        state, failure, code = _managed_task_outcome(payload, expected_task_id=task_id)
+        return {"state": state, "failure_code": failure or None, "return_code": code,
+                "diagnostic": ("Operator review is required before any new attempt."
+                               if state == "INDETERMINATE" else "")}
 
 
 class ManagedEnginePackDeployment:

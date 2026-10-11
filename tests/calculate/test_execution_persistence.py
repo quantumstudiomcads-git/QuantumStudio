@@ -8,6 +8,10 @@ from backend.core.execution_contract import CommandSpec
 from backend.execution import (ExecutionStore, GeneratedTask, GeneratedWorkflow,
                                LocalExecutionManager, LocalToolConfiguration,
                                RecoveryState, TaskState)
+from backend.execution.errors import ExecutionPreflightError
+from backend.execution.models import WorkflowState
+from backend.execution.persistence import ExecutionStoreError
+from backend.execution.recovery import IllegalTaskTransition, require_task_transition
 
 
 def task(task_id, dependencies=(), code="print('ok')"):
@@ -28,6 +32,45 @@ def manager():
 
 
 class ExecutionPersistenceTests(unittest.TestCase):
+    def test_confirmed_cancellation_is_not_an_automatic_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            flow = workflow(tmp, (task("a"),))
+            store = ExecutionStore(tmp); record = store.create(flow)
+            record.tasks["a"].state = TaskState.CANCELLED
+            store.save(record)
+            self.assertEqual(store.assess(flow).state, RecoveryState.CANCELLED)
+            with self.assertRaises(IllegalTaskTransition):
+                require_task_transition(TaskState.CANCELLED, TaskState.RUNNING, new_attempt=True)
+            with self.assertRaises(ExecutionPreflightError): manager().resume(flow, record, store)
+            with self.assertRaises(ExecutionStoreError): store.invalidate_downstream(flow, record, "a")
+
+    def test_indeterminate_execution_is_terminal_and_cannot_allocate_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            flow = workflow(tmp, (task("a"),))
+            store = ExecutionStore(tmp)
+            record = store.create(flow)
+            runtime = record.tasks["a"]
+            runtime.state = TaskState.INDETERMINATE
+            runtime.error_type = "cancellation_action_outcome_unproven"
+            runtime.return_code = 0
+            runtime.attempt_count = 1
+            store.save(record)
+            assessment = store.assess(flow)
+            self.assertEqual(assessment.state, RecoveryState.MANUAL_REVIEW)
+            self.assertEqual(assessment.record.state, WorkflowState.INDETERMINATE)
+            self.assertEqual((assessment.record.tasks["a"].error_type,
+                              assessment.record.tasks["a"].return_code),
+                             ("cancellation_action_outcome_unproven", 0))
+            with self.assertRaises(IllegalTaskTransition):
+                require_task_transition(TaskState.INDETERMINATE, TaskState.RUNNING, new_attempt=True)
+            with self.assertRaises(ExecutionStoreError): store.create(flow)
+            with self.assertRaises(ExecutionStoreError): store.invalidate_downstream(flow, record, "a")
+            with self.assertRaises(ExecutionPreflightError): manager().execute(flow, record, store)
+            with self.assertRaises(ExecutionPreflightError): manager().resume(flow, record, store)
+            with self.assertRaises(ExecutionPreflightError): manager().restart_task(flow, record, "a", store)
+            self.assertEqual(runtime.attempt_count, 1)
+            self.assertEqual(store.list(), (record.execution_id,))
+
     def test_roundtrip_stale_running_and_corrupt_sidecar(self):
         with tempfile.TemporaryDirectory() as tmp:
             flow = workflow(tmp, (task("a"),)); store = ExecutionStore(tmp); record = store.create(flow, request_fingerprint="request-fp")

@@ -41,7 +41,133 @@ W5 transfer operations are narrow runtime-agent operations: `stage-in` streams a
 
 The runtime agent now records managed task IDs, PID/PGID, start discriminator, executable and cwd in atomically written records under `/var/lib/quantumstudio/runtime/tasks`. `status` and `cancel` accept a validated task ID only. Cancellation signals the recorded owned process group with SIGTERM, then SIGKILL after a grace period; it never accepts a host-provided PID. Recovery does not rerun tasks; a missing/non-live owned task is interrupted unless durable terminal evidence exists.
 
-Result parsing remains host-side: only collected host paths are handed to `ResultService` and `ResultStore`, so Analyze can show persisted results without WSL. W5 preserves the existing distinction between a zero process exit (`COMPLETED`) and parser result validity (`PARSE_FAILED` is not an engine failure).
+### Managed process cancellation ownership
+
+On Windows, each managed launch creates a named Job Object and configures
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` before process creation. It then calls the
+documented `CreateProcessW` API with `CREATE_SUSPENDED` and
+`CREATE_NEW_PROCESS_GROUP`, using `STARTUPINFOEX` with a restricted standard
+handle list so unrelated inheritable handles are not passed to the child. The
+returned primary-thread and process handles are non-inheritable. The suspended
+process is assigned to the Job Object and verified with its process creation
+time and job membership before the retained primary-thread handle is resumed
+with documented `ResumeThread`. If creation, assignment, or resume fails, the
+launching code terminates and reaps only that suspended process/job and closes
+the handles it owns.
+
+The Job Object is the owned process-tree boundary; the launcher PID alone does
+not represent every interpreter or descendant. The task record binds the job
+name to a random ownership token and records the launched process creation
+time. The execution thread retains the original Job Object handle for the
+task lifetime. Cancellation opens a temporary handle to that same named job,
+checks the token, process creation identity and job membership, and closes only
+its temporary handle. The job remains reopenable while its execution-owner
+handle is open; that final owner handle triggers `KILL_ON_JOB_CLOSE` when the
+task finishes. Job and process handles are not inherited by the child.
+
+The execution owner retains the lifetime Job handle until the managed task is
+reaped. If the runtime-agent process exits unexpectedly, Windows closes that
+handle and `KILL_ON_JOB_CLOSE` terminates any remaining managed Job members.
+This is intentional containment: in-flight managed work does not survive an
+unexpected runtime-agent exit. On the next startup, task records require
+reconciliation; the agent does not claim to recover or resume that work.
+
+Cancellation sends `CTRL_BREAK_EVENT` only to the explicitly created,
+nonzero child group after verifying membership. Under the task-record lock it
+first persists a versioned, non-secret prepared action intent bound to the
+cancellation request, unique attempt ID, ownership token, PID, process
+creation time, canonical process-boundary type and identity, action, and UTC
+ISO-8601 timestamp. The Windows identity is the exact token-bound Job Object
+name; the POSIX representation uses the numeric process-group identity when
+evidence is recorded. Only then does it invoke
+the native action. A successful action is followed by an atomically persisted
+version-2 receipt bound to that same attempt and identity; receipt timestamps
+must be valid timezone-aware UTC values. A valid receipt is required to record
+`CANCELLED`, including when a handled graceful request exits with code 0. A
+request flag or prepared intent alone is insufficient. A definite native
+action failure is recorded as a failed attempt and allows natural completion
+to retain its normal `FINISHED` or `FAILED` result.
+
+The operating-system action and its durable receipt cannot be committed in
+one transaction. If the agent exits or receipt persistence fails after an
+intent was prepared but before a valid receipt or definite failure is
+durable, the task is marked `CANCELLATION_INDETERMINATE` with failure code
+`cancellation_action_outcome_unproven`; it is neither successful completion
+nor confirmed cancellation. The agent does not blindly repeat an unresolved
+attempt, retarget a PID, resume scientific work, or perform a destructive
+reset. On restart, unresolved records remain visibly indeterminate and may
+require operator review; no automatic action is inferred from process exit,
+return code, an empty Job, or the request flag. The actual return code is
+preserved when known.
+
+Version-1 intents and receipts remain readable as historical task data, but
+they lack a proven boundary identity and cannot newly authorize `CANCELLED`.
+An unresolved historical intent is reconciled as indeterminate. The agent
+compares the boundary fields in both version-2 records with the authoritative
+task record, rather than trusting agreement between the intent and receipt.
+
+`task_status` commits dead `CANCELLING` records to a durable terminal state
+under the record lock before returning. A confirmed receipt yields `CANCELLED`;
+an unresolved intent yields `CANCELLATION_INDETERMINATE`. After a durably
+failed action or without action evidence, a trustworthy return code yields
+`FINISHED` for zero or `FAILED` for nonzero. If the exit outcome cannot be
+verified, `OUTCOME_INDETERMINATE` with `task_exit_outcome_unproven` requires
+operator review rather than fabricated success. Repeated status and cancel
+calls observe the committed state.
+
+The managed-science service reads authoritative task status after execution.
+It maps confirmed cancellation to `CANCELLED`, unresolved cancellation or
+unknown outcome to terminal `INDETERMINATE`, and natural completion according
+to the verified return code. Code 0 cannot override an indeterminate task.
+Execution sidecars retain the typed failure code and known return code.
+If launch-state persistence fails, managed execution retains terminal manual
+review with `task_control_persistence_failed`; an older task record cannot
+prove that launch completed or supply its missing return code.
+Recovery assessment exposes `MANUAL_REVIEW`; resume, retry, branch creation,
+and new attempts in that workflow are blocked until an operator resolves the
+uncertainty outside the automatic recovery path. `INTERRUPTED` remains the
+separate retryable state for stale work without this evidence.
+
+The agent rereads authoritative state during bounded grace polling and before
+each termination or final state update. If graceful delivery is unavailable
+or ignored, it prepares a distinct bounded escalation attempt for the
+token-bound Job Object. Terminal state wins over a stale cancellation
+snapshot; repeated and concurrent requests do not signal again. No
+process-name-based termination is used. The historical managed-runtime
+`KeyboardInterrupt` sender remains unresolved; this cancellation policy does
+not claim to explain or suppress it.
+
+POSIX launches retain their separate session and process-group behavior, with
+the process start discriminator and group checked before signalling. POSIX
+SIGTERM and SIGKILL attempts also persist a version-2 prepared intent before
+the signal and a matching receipt after a successful call; signal failure is
+recorded explicitly. POSIX cancellation is never inferred from the request
+flag or a negative return code alone. On both
+platforms, task-record transitions are serialized. Cancellation rereads the
+authoritative state before escalation, stops when the task is terminal, and
+allows only one cancellation request to own the bounded grace/termination
+sequence. Natural completion is preserved if it wins the race. Job/process
+waits are bounded, and repeated cancellation is idempotent; unrelated
+processes remain outside the managed ownership boundary.
+
+Persisted POSIX process IDs and process-group IDs must be genuine integers in
+the inclusive range 1 through 2,147,483,647. Zero, negative, non-integer and
+oversized identities fail closed before native signalling and cannot validate
+cancellation evidence, even when the task record, intent and receipt agree.
+This stable protocol bound does not replace validation on a real Linux host.
+At launch, the POSIX `Popen.pid` is validated before `os.getpgid`, process
+creation-time or `/proc` lookup, liveness checks, or any PID-derived cleanup.
+Invalid launch PIDs also disable Popen's implicit
+destructor polling, so garbage collection cannot perform PID-based reaping.
+The returned process-group ID is independently validated and must match the
+new-session launcher before the ownership boundary is recorded. An invalid or
+unprovable launch identity is stored as terminal `OUTCOME_INDETERMINATE` for
+operator review; the raw identifier is omitted and is never used for cleanup.
+The Windows launch path retains suspended creation, PID validation against its
+positive DWORD range, Job assignment, identity verification, and resume order;
+Windows IDs do not use the POSIX signed-32-bit limit.
+
+Result parsing remains host-side: only collected host paths are handed to `ResultService` and `ResultStore`, so Analyze can show persisted results without WSL. A verified natural zero exit is `COMPLETED`; parser result validity remains separate (`PARSE_FAILED` is not an engine failure).
 
 PUBLIC ENGINE PACK DISTRIBUTION LEGAL REVIEW: **PENDING**. W5 contains no third-party engine binaries, no downloader, no package-manager calls, and no real Windows/QE validation.
 

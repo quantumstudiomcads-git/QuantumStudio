@@ -19,6 +19,8 @@ SCHEMA_VERSION = "0.1"
 class RecoveryState(str, Enum):
     NEVER_RUN = "NEVER_RUN"
     RECOVERABLE = "RECOVERABLE"
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+    CANCELLED = "CANCELLED"
     COMPLETE = "COMPLETE"
     INCOMPATIBLE = "INCOMPATIBLE"
     CORRUPT_RUNTIME_RECORD = "CORRUPT_RUNTIME_RECORD"
@@ -81,6 +83,10 @@ class ExecutionStore:
         return path
 
     def create(self, workflow, *, request_fingerprint="", structure_fingerprint="", provider_provenance=None):
+        for execution_id in self.list():
+            historical = self.load(execution_id)
+            if any(item.state is TaskState.INDETERMINATE for item in historical.tasks.values()):
+                raise ExecutionStoreError("Indeterminate execution requires operator review; no new attempt may be created in this workflow.")
         fingerprint, inputs, manifest = workflow_fingerprint(workflow)
         execution_id = uuid.uuid4().hex
         tasks = {task.task_id: TaskExecutionRecord(task.task_id) for task in workflow.tasks}
@@ -153,6 +159,9 @@ class ExecutionStore:
         if not ids: return RecoveryAssessment(RecoveryState.NEVER_RUN, "No execution sidecar exists.")
         try: record = self.load(execution_id or ids[-1])
         except ExecutionStoreError as error: return RecoveryAssessment(RecoveryState.CORRUPT_RUNTIME_RECORD, str(error))
+        if any(task.state is TaskState.INDETERMINATE for task in record.tasks.values()):
+            return RecoveryAssessment(RecoveryState.MANUAL_REVIEW,
+                "Execution outcome is indeterminate; operator review is required before new work.", record)
         if Path(record.workflow_root).resolve() != self.root:
             return RecoveryAssessment(RecoveryState.INCOMPATIBLE, "Execution workspace root changed.", record)
         if (request_id and record.request_id != request_id) or (request_fingerprint and record.request_fingerprint and record.request_fingerprint != request_fingerprint):
@@ -170,6 +179,9 @@ class ExecutionStore:
             elif runtime.state is TaskState.COMPLETED and (not runtime.stdout_path or not Path(runtime.stdout_path).is_file()):
                 runtime.state = TaskState.FAILED; runtime.error_message = "Completed task log is unavailable."; changed = True
         if changed: self.save(record)
+        if any(task.state is TaskState.CANCELLED for task in record.tasks.values()):
+            return RecoveryAssessment(RecoveryState.CANCELLED,
+                "Execution was cancelled; it cannot be resumed as the same attempt.", record)
         state = RecoveryState.COMPLETE if record.state.value == "COMPLETED" else RecoveryState.RECOVERABLE
         return RecoveryAssessment(state, "Execution record is valid.", record)
 
@@ -180,6 +192,8 @@ class ExecutionStore:
             for task in workflow.tasks:
                 if task.task_id not in descendants and any(dep in descendants for dep in task.dependencies):
                     descendants.add(task.task_id); changed = True
+        if any(runtime.state in {TaskState.INDETERMINATE, TaskState.CANCELLED} for runtime in record.tasks.values()):
+            raise ExecutionStoreError("Indeterminate or cancelled execution is terminal; it cannot create another attempt.")
         for item in descendants:
             runtime = record.tasks[item]
             runtime.state = TaskState.PENDING; runtime.error_message = ""; runtime.return_code = None; runtime.finished_at = None

@@ -12,6 +12,22 @@ from typing import Any, Mapping
 PROTOCOL_SCHEMA_VERSION = 1
 # Schema 1 remains extensible: W5 adds named capabilities without changing W4 run requests.
 AGENT_VERSION = "2"
+POSIX_PROCESS_ID_MIN = 1
+POSIX_PROCESS_ID_MAX = 2_147_483_647
+WINDOWS_PROCESS_ID_MIN = 1
+WINDOWS_PROCESS_ID_MAX = 4_294_967_295
+
+
+def is_valid_posix_process_identity(value: object) -> bool:
+    """Return whether value is a serialized positive signed-32-bit POSIX PID/PGID."""
+    return (type(value) is int
+            and POSIX_PROCESS_ID_MIN <= value <= POSIX_PROCESS_ID_MAX)
+
+
+def is_valid_windows_process_identity(value: object) -> bool:
+    """Return whether value is a genuine positive Windows DWORD process ID."""
+    return (type(value) is int
+            and WINDOWS_PROCESS_ID_MIN <= value <= WINDOWS_PROCESS_ID_MAX)
 
 
 class ProtocolError(ValueError):
@@ -36,7 +52,11 @@ class AgentStatus(str, Enum):
     TASK_NOT_FOUND = "TASK_NOT_FOUND"
     TASK_RUNNING = "TASK_RUNNING"
     TASK_FINISHED = "TASK_FINISHED"
+    TASK_FAILED = "TASK_FAILED"
     TASK_CANCELLED = "TASK_CANCELLED"
+    TASK_CANCELLATION_INDETERMINATE = "TASK_CANCELLATION_INDETERMINATE"
+    TASK_OUTCOME_INDETERMINATE = "TASK_OUTCOME_INDETERMINATE"
+    TASK_CONTROL_PERSISTENCE_FAILED = "TASK_CONTROL_PERSISTENCE_FAILED"
 
 
 @dataclass(frozen=True)

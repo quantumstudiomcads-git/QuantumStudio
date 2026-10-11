@@ -35,11 +35,12 @@ class RecoveryAction(str, Enum):
 LEGAL_TASK_TRANSITIONS = {
     TaskState.PENDING: {TaskState.READY, TaskState.CANCELLED, TaskState.BLOCKED},
     TaskState.READY: {TaskState.RUNNING, TaskState.CANCELLED, TaskState.BLOCKED},
-    TaskState.RUNNING: {TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED, TaskState.INTERRUPTED},
+    TaskState.RUNNING: {TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED, TaskState.INTERRUPTED, TaskState.INDETERMINATE},
     TaskState.FAILED: set(),
     TaskState.CANCELLED: set(),
     TaskState.BLOCKED: set(),
     TaskState.INTERRUPTED: set(),
+    TaskState.INDETERMINATE: set(),
     TaskState.COMPLETED: set(),
 }
 
@@ -53,7 +54,7 @@ def require_task_transition(current: TaskState, target: TaskState, *, new_attemp
     current, target = TaskState(current), TaskState(target)
     if current == target:
         return
-    if current in {TaskState.FAILED, TaskState.CANCELLED, TaskState.INTERRUPTED} and target in {TaskState.READY, TaskState.RUNNING} and new_attempt:
+    if current in {TaskState.FAILED, TaskState.INTERRUPTED} and target in {TaskState.READY, TaskState.RUNNING} and new_attempt:
         return
     if target not in LEGAL_TASK_TRANSITIONS[current]:
         raise IllegalTaskTransition(f"Illegal task transition {current.value} -> {target.value}.")

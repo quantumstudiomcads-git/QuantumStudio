@@ -17,7 +17,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QMessageBox
 
 from backend.licensing.canonical import b64url_decode, b64url_encode
 from backend.licensing.models import ImplementationState
@@ -856,6 +856,129 @@ class LicenceManagerTests(unittest.TestCase):
         (staging / "operator_tools" / "licence_manager" / "crypto.py").write_text("pass")
         self.assertTrue(customer_package_exclusion_findings(staging))
         self.assertIn("operator_tools/licence_manager/crypto.py", audit_package_contents(staging)["forbidden"])
+        app.processEvents()
+
+    def test_operator_navigation_search_and_sensitive_details(self):
+        app = QApplication.instance() or QApplication([])
+        window = LicenceManagerWindow(test_mode=True, database=self.db, authority=EphemeralAuthority())
+        self.addCleanup(window.close)
+        self.assertEqual([window.nav.item(i).text() for i in range(window.nav.count())],
+                         ["Overview", "Applications", "Activation Requests", "Licences", "Audit Log", "Settings"])
+        self.assertEqual(window.pages.count(), 6)
+        window.nav.setCurrentRow(1)
+        self.assertEqual(window.pages.currentWidget(), window.page_widgets["Applications"])
+        self.assertEqual(window.applications_table.selectionBehavior(),
+                         QAbstractItemView.SelectRows)
+        self.assertNotIn(self.applicant["email"], window.applications_table.item(0, 0).text())
+        self.assertNotIn(self.applicant["full_name"], window.applications_table.item(0, 0).text())
+        window.application_search.setText("absent-fixture")
+        self.assertTrue(window.applications_table.isRowHidden(0))
+        window.application_search.setText(self.application_id)
+        self.assertFalse(window.applications_table.isRowHidden(0))
+        window.applications_table.selectRow(0)
+        window.show_selected_details()
+        self.assertIn(self.applicant["email"], window.details.toPlainText())
+        self.assertEqual(window.nav.currentItem().text(), "Applications")
+        window.application_search.setText("absent-fixture")
+        self.assertIsNone(window._selected_id(window.applications_table))
+        app.processEvents()
+
+    def test_operator_review_confirmation_and_status_filter(self):
+        app = QApplication.instance() or QApplication([])
+        window = LicenceManagerWindow(test_mode=True, database=self.db, authority=EphemeralAuthority())
+        self.addCleanup(window.close)
+        window.applications_table.selectRow(0)
+        with patch("operator_tools.licence_manager.main_window.QMessageBox.question", return_value=QMessageBox.No):
+            window.transition_selected("APPROVED")
+        self.assertEqual(self.db.connection.execute("SELECT status FROM applicants").fetchone()[0], "APPLIED")
+        window.transition_selected("UNDER_REVIEW")
+        with patch("operator_tools.licence_manager.main_window.QMessageBox.question", return_value=QMessageBox.Yes):
+            window.transition_selected("APPROVED")
+        self.assertEqual(self.db.connection.execute("SELECT status FROM applicants").fetchone()[0], "APPROVED")
+        window.application_filter.setCurrentText("APPLIED")
+        self.assertTrue(window.applications_table.isRowHidden(0))
+        window.application_filter.setCurrentText("APPROVED")
+        self.assertFalse(window.applications_table.isRowHidden(0))
+        app.processEvents()
+
+    def test_refresh_explicitly_records_maintenance(self):
+        app = QApplication.instance() or QApplication([])
+        window = LicenceManagerWindow(test_mode=True, database=self.db, authority=EphemeralAuthority())
+        self.addCleanup(window.close)
+        before = self.db.connection.execute(
+            "SELECT COUNT(*) FROM audit_events WHERE event_type='signing_authority_status'").fetchone()[0]
+        window.refresh()
+        after = self.db.connection.execute(
+            "SELECT COUNT(*) FROM audit_events WHERE event_type='signing_authority_status'").fetchone()[0]
+        self.assertEqual(after, before + 1)
+        self.assertIn("recorded in the audit log", window.feedback.text())
+        self.assertIn("Refresh records licence expiries", window.maintenance_note.text())
+        self.assertEqual(window.audit_table.rowCount(),
+                         self.db.connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0])
+        app.processEvents()
+
+    def test_refresh_failure_is_redacted_and_not_reported_as_complete(self):
+        app = QApplication.instance() or QApplication([])
+        window = LicenceManagerWindow(test_mode=True, database=self.db, authority=EphemeralAuthority())
+        self.addCleanup(window.close)
+        with patch("operator_tools.licence_manager.main_window.record_expiries",
+                   side_effect=OSError("private-path-internal-error")):
+            window.refresh()
+        self.assertIn("could not be completed", window.feedback.text())
+        self.assertNotIn("private-path-internal-error", window.feedback.text())
+        self.assertNotIn("recorded in the audit log", window.feedback.text())
+        app.processEvents()
+
+    def test_operator_error_message_redacts_raw_exception(self):
+        app = QApplication.instance() or QApplication([])
+        window = LicenceManagerWindow(test_mode=True, database=self.db, authority=EphemeralAuthority())
+        self.addCleanup(window.close)
+        shown = []
+        with patch("operator_tools.licence_manager.main_window.QFileDialog.getOpenFileName",
+                   return_value=(str(self.root / "synthetic.json"), "")), \
+             patch("operator_tools.licence_manager.main_window.import_applicants_json",
+                   side_effect=ImportRejected("secret-path-and-private-value")), \
+             patch("operator_tools.licence_manager.main_window.QMessageBox.critical",
+                   side_effect=lambda *args: shown.append(args[2])):
+            window.import_applicants()
+        self.assertEqual(len(shown), 1)
+        self.assertNotIn("secret-path-and-private-value", shown[0])
+        self.assertNotIn(str(self.root), shown[0])
+        self.assertIn("rejected", shown[0].lower())
+        app.processEvents()
+
+    def test_operator_export_and_revocation_require_confirmation(self):
+        self.import_request()
+        self.authorize()
+        authority = EphemeralAuthority()
+        envelope, _ = issue_for_request_for_testing(
+            self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
+        app = QApplication.instance() or QApplication([])
+        window = LicenceManagerWindow(test_mode=True, database=self.db, authority=authority)
+        self.addCleanup(window.close)
+        self.assertEqual(window.requests_table.item(0, 2).text(), "Issued")
+        window.licences_table.selectRow(0)
+        destination = self.root / "ui-export"
+        with patch("operator_tools.licence_manager.main_window.QFileDialog.getExistingDirectory",
+                   return_value=str(destination)), \
+             patch("operator_tools.licence_manager.main_window.QMessageBox.question",
+                   return_value=QMessageBox.No):
+            window.export_selected()
+            window.revoke_selected()
+        self.assertFalse(destination.exists())
+        self.assertIsNone(self.db.connection.execute(
+            "SELECT revoked_at FROM licences WHERE licence_id=?", (envelope["licence_id"],)).fetchone()[0])
+        with patch("operator_tools.licence_manager.main_window.QFileDialog.getExistingDirectory",
+                   return_value=str(destination)), \
+             patch("operator_tools.licence_manager.main_window.QMessageBox.question",
+                   return_value=QMessageBox.Yes), \
+             patch("operator_tools.licence_manager.main_window.QMessageBox.information"):
+            window.export_selected()
+            window.revoke_selected()
+        self.assertTrue((destination / envelope["licence_id"] / "licence.json").is_file())
+        self.assertIsNotNone(self.db.connection.execute(
+            "SELECT revoked_at FROM licences WHERE licence_id=?", (envelope["licence_id"],)).fetchone()[0])
+        self.assertIn("Offline copies may remain usable", window.feedback.text())
         app.processEvents()
 
     def test_ui_mode_never_falls_back_between_production_and_test_authorities(self):

@@ -120,6 +120,9 @@ It maps confirmed cancellation to `CANCELLED`, unresolved cancellation or
 unknown outcome to terminal `INDETERMINATE`, and natural completion according
 to the verified return code. Code 0 cannot override an indeterminate task.
 Execution sidecars retain the typed failure code and known return code.
+If launch-state persistence fails, managed execution retains terminal manual
+review with `task_control_persistence_failed`; an older task record cannot
+prove that launch completed or supply its missing return code.
 Recovery assessment exposes `MANUAL_REVIEW`; resume, retry, branch creation,
 and new attempts in that workflow are blocked until an operator resolves the
 uncertainty outside the automatic recovery path. `INTERRUPTED` remains the
@@ -154,6 +157,8 @@ cancellation evidence, even when the task record, intent and receipt agree.
 This stable protocol bound does not replace validation on a real Linux host.
 At launch, the POSIX `Popen.pid` is validated before `os.getpgid`, process
 creation-time or `/proc` lookup, liveness checks, or any PID-derived cleanup.
+Invalid launch PIDs also disable Popen's implicit
+destructor polling, so garbage collection cannot perform PID-based reaping.
 The returned process-group ID is independently validated and must match the
 new-session launcher before the ownership boundary is recorded. An invalid or
 unprovable launch identity is stored as terminal `OUTCOME_INDETERMINATE` for

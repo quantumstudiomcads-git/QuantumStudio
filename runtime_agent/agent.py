@@ -525,6 +525,11 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
                 # API, /proc lookup, or cleanup can interpret it as a PID.
                 pid = process.pid
                 if not is_valid_posix_process_identity(pid):
+                    # CPython's Popen destructor otherwise polls waitpid(pid)
+                    # and may enqueue the object for later PID-based reaping.
+                    # No process identity is trusted here. Disable that implicit
+                    # cleanup without inventing a return code or signalling.
+                    process._child_created = False
                     return _indeterminate_launch_result(
                         request, task_control_root=task_control_root, started_at=started_at,
                         timer=timer, failure_code="invalid_launch_process_identity")

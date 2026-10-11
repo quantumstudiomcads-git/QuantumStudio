@@ -422,7 +422,7 @@ class ManagedScientificExecutionService:
                 stdin_path = _runtime_relative(runtime_dir, task.command.stdin_file) if task.command.stdin_file else None
                 stdout_name, stderr_name = task.command.stdout_file or "stdout.log", task.command.stderr_file or "stderr.log"
                 stdout_path, stderr_path = _runtime_relative(runtime_dir, stdout_name), _runtime_relative(runtime_dir, stderr_name)
-                from runtime_agent.protocol import RuntimeProcessRequest
+                from runtime_agent.protocol import AgentStatus, RuntimeProcessRequest
                 request = RuntimeProcessRequest(task.task_id, executable, tuple(task.command.arguments), runtime_dir,
                                                 dict(task.command.environment), stdin_path, stdout_path, stderr_path,
                                                 task.timeout_seconds)
@@ -434,11 +434,19 @@ class ManagedScientificExecutionService:
                     item.state = TaskState.FAILED; item.error_type = "WSL_TRANSPORT_FAILED"; item.error_message = bridge.diagnostic
                 else:
                     item.process_id = process.runtime_pid; item.return_code = process.return_code
-                    try:
-                        authoritative = self.transport.task_status(task.task_id)
-                    except (ManagedScienceError, OSError, ValueError, TypeError):
+                    if process.status is AgentStatus.TASK_CONTROL_PERSISTENCE_FAILED:
+                        # A prior record cannot establish the outcome of this launch
+                        # when its control state could not be committed.
                         authoritative = {"status": "TASK_OUTCOME_INDETERMINATE",
-                                         "failure_code": "task_control_outcome_unproven"}
+                                         "task_id": task.task_id,
+                                         "record": {"task_id": task.task_id},
+                                         "failure_code": "task_control_persistence_failed"}
+                    else:
+                        try:
+                            authoritative = self.transport.task_status(task.task_id)
+                        except (ManagedScienceError, OSError, ValueError, TypeError):
+                            authoritative = {"status": "TASK_OUTCOME_INDETERMINATE",
+                                             "failure_code": "task_control_outcome_unproven"}
                     state, failure, code = _managed_task_outcome(authoritative, process.return_code,
                                                                  expected_task_id=task.task_id)
                     item.state = TaskState(state)

@@ -107,3 +107,25 @@ class ManagedIndeterminateExecutionTests(unittest.TestCase):
             record = service.execute(workflow)
             self.assertEqual(record.tasks["task"].state, TaskState.INDETERMINATE)
             self.assertEqual(record.tasks["task"].error_type, "cancellation_action_outcome_unproven")
+
+    def test_launch_persistence_failure_cannot_adopt_a_previous_task_outcome(self):
+        for status in ("TASK_FINISHED", "TASK_RUNNING", "TASK_CANCELLED"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                workflow, runtime, service = self._fixture(Path(tmp), 0, status)
+                def execute(request, record=None):
+                    runtime.launches += 1
+                    return SimpleNamespace(process=RuntimeProcessResult(
+                        request.task_id, AgentStatus.TASK_CONTROL_PERSISTENCE_FAILED,
+                        True, False, None, None), diagnostic="")
+                runtime.execute_runtime_task = execute
+                parsed = []
+                result = service.execute(workflow,
+                    result_service=SimpleNamespace(parse=lambda *args: parsed.append(args)))
+                task = result.tasks["task"]
+                self.assertEqual(task.state, TaskState.INDETERMINATE)
+                self.assertEqual(task.error_type, "task_control_persistence_failed")
+                self.assertIsNone(task.return_code)
+                self.assertEqual(parsed, [])
+                with self.assertRaises(ManagedTaskControlError):
+                    service.execute(workflow, record=result)
+                self.assertEqual(runtime.launches, 1)

@@ -105,12 +105,21 @@ class LaunchIdentityOrderingTests(unittest.TestCase):
         atomic = inspect.getclosurevars(agent._atomic_json).nonlocals.get(
             "original_atomic", agent._atomic_json)
         process_type = agent.subprocess.Popen
+        launched = []
 
         class FakePopen(process_type):
             def __init__(self, *_args, **_kwargs):
                 self.pid = pid
+                self._child_created = True
+                self.returncode = None
                 self.return_code = 0
                 self.poll_calls = self.kill_calls = self.wait_calls = 0
+                launched.append(self)
+
+            def _internal_poll(self, **kwargs):
+                # Exercise the real inherited Popen destructor without an OS call.
+                native.destructor_polls += 1
+                self.returncode = 0
 
             def poll(self):
                 self.poll_calls += 1
@@ -123,7 +132,7 @@ class LaunchIdentityOrderingTests(unittest.TestCase):
                 self.wait_calls += 1
                 return self.return_code
 
-        process = FakePopen()
+        native.destructor_polls = 0
         patches = [
             patch.object(agent, "os", native),
             patch.object(agent, "_under", return_value=True),
@@ -142,6 +151,9 @@ class LaunchIdentityOrderingTests(unittest.TestCase):
                 self._request(task_id), trusted_executable_roots=("/safe",),
                 trusted_working_roots=("/safe",), task_control_root=str(root),
                 enable_task_control=True)
+        process = launched.pop()
+        if not is_valid_posix_process_identity(pid):
+            process.__del__()
         return result, process, native, start_calls
 
     def test_launch_pid_matrix_is_validated_before_any_pid_native_or_cleanup_use(self):
@@ -153,6 +165,7 @@ class LaunchIdentityOrderingTests(unittest.TestCase):
                     result, process, native, start_calls = self._run(
                         tmp, f"pid-matrix-{index}", pid, pgid=pgid)
                     if not valid:
+                        self.assertEqual(native.destructor_polls, 0)
                         self.assertEqual(result.status, AgentStatus.TASK_OUTCOME_INDETERMINATE)
                         self.assertEqual(native.getpgid_calls, [])
                         self.assertEqual(native.getpgrp_calls, 0)

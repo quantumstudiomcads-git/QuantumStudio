@@ -152,6 +152,15 @@ the inclusive range 1 through 2,147,483,647. Zero, negative, non-integer and
 oversized identities fail closed before native signalling and cannot validate
 cancellation evidence, even when the task record, intent and receipt agree.
 This stable protocol bound does not replace validation on a real Linux host.
+At launch, the POSIX `Popen.pid` is validated before `os.getpgid`, process
+creation-time or `/proc` lookup, liveness checks, or any PID-derived cleanup.
+The returned process-group ID is independently validated and must match the
+new-session launcher before the ownership boundary is recorded. An invalid or
+unprovable launch identity is stored as terminal `OUTCOME_INDETERMINATE` for
+operator review; the raw identifier is omitted and is never used for cleanup.
+The Windows launch path retains suspended creation, PID validation against its
+positive DWORD range, Job assignment, identity verification, and resume order;
+Windows IDs do not use the POSIX signed-32-bit limit.
 
 Result parsing remains host-side: only collected host paths are handed to `ResultService` and `ResultStore`, so Analyze can show persisted results without WSL. A verified natural zero exit is `COMPLETED`; parser result validity remains separate (`PARSE_FAILED` is not an engine failure).
 

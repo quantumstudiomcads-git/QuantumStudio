@@ -22,7 +22,8 @@ from typing import BinaryIO, Iterable, Mapping
 
 from .protocol import (AGENT_VERSION, AgentStatus, ProtocolError, RuntimeAgentHealth,
                        RuntimePath, RuntimeProcessRequest, RuntimeProcessResult,
-                       is_valid_posix_process_identity, timestamp)
+                       is_valid_posix_process_identity,
+                       is_valid_windows_process_identity, timestamp)
 
 DEFAULT_EXECUTABLE_ROOTS = ("/opt/quantumstudio/engines", "/opt/quantumstudio/runtime/bin")
 DEFAULT_WORKING_ROOTS = ("/var/lib/quantumstudio/workflows", "/var/lib/quantumstudio/staging")
@@ -191,9 +192,9 @@ def _record_alive(record: Mapping[str, object]) -> bool:
     except (KeyError, TypeError, ValueError):
         return False
     if os.name == "nt":
-        try:
-            pid, pgid = int(record["pid"]), int(record["pgid"])
-        except (KeyError, TypeError, ValueError):
+        pid, pgid = record.get("pid"), record.get("pgid")
+        if (not is_valid_windows_process_identity(pid)
+                or not is_valid_windows_process_identity(pgid)):
             return False
         name = str(record.get("job_name", ""))
         token = str(record.get("ownership_token", ""))
@@ -247,13 +248,50 @@ def _result(request: RuntimeProcessRequest | None, status: AgentStatus, diagnost
     return RuntimeProcessResult(request.task_id if request else "", status, **values, diagnostic=diagnostic)
 
 
+def _indeterminate_launch_result(request: RuntimeProcessRequest, *, task_control_root: str,
+                                 started_at: str, timer: float, failure_code: str) -> RuntimeProcessResult:
+    """Persist a redacted terminal result without using an unproven process ID."""
+    finished_at = timestamp()
+    record = {"schema_version": 1, "task_id": request.task_id,
+              "state": "OUTCOME_INDETERMINATE", "failure_code": failure_code,
+              "started_at": started_at, "finished_at": finished_at}
+    try:
+        with _task_record_lock(request.task_id, task_control_root):
+            existing = _read_control(request.task_id, task_control_root)
+            if existing is not None:
+                raise ProtocolError("TASK_CONTROL_PERSISTENCE_FAILED",
+                                    "An authoritative task record already exists.")
+            path = _control_path(request.task_id, task_control_root)
+            _atomic_json(path, record)
+            committed = _read_control(request.task_id, task_control_root)
+            if committed != record:
+                raise ProtocolError("TASK_CONTROL_PERSISTENCE_FAILED",
+                                    "The indeterminate launch result could not be verified after writing.")
+    except ProtocolError as error:
+        return _result(request, AgentStatus.TASK_CONTROL_PERSISTENCE_FAILED,
+                       "task_control_persistence_failed", started=True, finished=False,
+                       return_code=None, started_at=started_at, finished_at="",
+                       duration_seconds=time.monotonic() - timer)
+    except (OSError, TypeError, ValueError, OverflowError) as error:
+        return _result(request, AgentStatus.TASK_CONTROL_PERSISTENCE_FAILED,
+                       "task_control_persistence_failed", started=True, finished=False,
+                       return_code=None, started_at=started_at, finished_at="",
+                       duration_seconds=time.monotonic() - timer)
+    return _result(request, AgentStatus.TASK_OUTCOME_INDETERMINATE,
+                   "Process identity could not be proven; operator review is required.",
+                   started=True, finished=True, return_code=None,
+                   started_at=started_at, finished_at=finished_at,
+                   duration_seconds=time.monotonic() - timer)
+
+
 def _process_boundary_identity(record: Mapping[str, object]) -> tuple[str, str] | None:
     """Canonical, restart-stable identity of the owned process boundary."""
     kind = record.get("boundary_type")
     if kind == "windows_job_object+process_group":
         ownership, name = record.get("ownership_token"), record.get("job_name")
         if (not isinstance(ownership, str) or not re.fullmatch(r"[0-9a-f]{32}", ownership)
-                or not isinstance(name, str) or name != "Local\\QSRuntime-" + ownership):
+                or not isinstance(name, str) or name != "Local\\QSRuntime-" + ownership
+                or not is_valid_windows_process_identity(record.get("pid"))):
             return None
         return kind, name
     if kind == "posix_session":
@@ -456,6 +494,7 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
                 else: stderr = target_path.open("wb")
         started_at, timer = timestamp(), time.monotonic()
         environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", **request.environment}
+        process_start_ticks = ""
         try:
             if os.name == "nt":
                 from .windows_job import WindowsJob, SuspendedProcess, windows_creation_flags
@@ -464,19 +503,61 @@ def execute_request(request: RuntimeProcessRequest, *, trusted_executable_roots=
                     str(executable), tuple(_host_argument(value) for value in request.argv), str(cwd), environment,
                     stdin or subprocess.DEVNULL, stdout or subprocess.DEVNULL, stderr or subprocess.DEVNULL,
                     windows_creation_flags())
+                pid = process.pid
+                if not is_valid_windows_process_identity(pid):
+                    # The process handle is authoritative here; never use the
+                    # malformed PID for cleanup or for a native lookup.
+                    try:
+                        process.terminate()
+                        process.wait(timeout=5)
+                    except OSError:
+                        pass
+                    return _indeterminate_launch_result(
+                        request, task_control_root=task_control_root, started_at=started_at,
+                        timer=timer, failure_code="invalid_launch_process_identity")
                 process_creation_time = job.assign_suspended_process(process)
+                pgid = pid
             else:
                 process = subprocess.Popen([str(executable), *(_host_argument(value) for value in request.argv)], cwd=str(cwd), stdin=stdin or subprocess.DEVNULL,
                                            stdout=stdout or subprocess.DEVNULL, stderr=stderr or subprocess.DEVNULL,
                                            env=environment, shell=False, start_new_session=True)
-            pid, pgid = process.pid, os.getpgid(process.pid) if hasattr(os, "getpgid") else process.pid
-            if os.name != "nt" and (not is_valid_posix_process_identity(pid)
-                                     or not is_valid_posix_process_identity(pgid)):
-                raise ValueError("Launched POSIX process identity is outside the protocol range.")
+                # Validate the value as returned by Popen before any native
+                # API, /proc lookup, or cleanup can interpret it as a PID.
+                pid = process.pid
+                if not is_valid_posix_process_identity(pid):
+                    return _indeterminate_launch_result(
+                        request, task_control_root=task_control_root, started_at=started_at,
+                        timer=timer, failure_code="invalid_launch_process_identity")
+                try:
+                    pgid = os.getpgid(pid)
+                except (OSError, TypeError, ValueError, OverflowError):
+                    return _indeterminate_launch_result(
+                        request, task_control_root=task_control_root, started_at=started_at,
+                        timer=timer, failure_code="launch_process_group_identity_unproven")
+                if not is_valid_posix_process_identity(pgid):
+                    return _indeterminate_launch_result(
+                        request, task_control_root=task_control_root, started_at=started_at,
+                        timer=timer, failure_code="launch_process_group_identity_unproven")
+                # start_new_session=True must make the child its own session
+                # and process-group leader. Refuse a mismatched or unsafe group.
+                try:
+                    if pgid <= 1 or pgid != pid or pgid == os.getpgrp():
+                        return _indeterminate_launch_result(
+                            request, task_control_root=task_control_root, started_at=started_at,
+                            timer=timer, failure_code="launch_process_group_identity_unproven")
+                except (OSError, TypeError, ValueError, OverflowError):
+                    return _indeterminate_launch_result(
+                        request, task_control_root=task_control_root, started_at=started_at,
+                        timer=timer, failure_code="launch_process_group_identity_unproven")
+                process_start_ticks = _proc_start_ticks(pid)
+                if not process_start_ticks:
+                    return _indeterminate_launch_result(
+                        request, task_control_root=task_control_root, started_at=started_at,
+                        timer=timer, failure_code="launch_process_creation_identity_unproven")
             if enable_task_control:
                 control = _control_path(request.task_id, task_control_root)
                 record = {"schema_version": 1, "task_id": request.task_id, "pid": pid, "pgid": pgid,
-                          "process_start_ticks": _proc_start_ticks(pid), "state": "RUNNING", "started_at": started_at,
+                          "process_start_ticks": process_start_ticks or _proc_start_ticks(pid), "state": "RUNNING", "started_at": started_at,
                           "cwd": str(request.cwd), "executable": str(request.executable),
                           "ownership_token": ownership_token}
                 if job is not None:

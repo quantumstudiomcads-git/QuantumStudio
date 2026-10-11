@@ -214,7 +214,8 @@ while True: time.sleep(.02)
                     "boundary_id": "Local\\QSRuntime-" + "b" * 32}
         base = {"task_id": "timestamp-task", "cancel_requested": True, "cancel_token": "a" * 32,
                 "ownership_token": "b" * 32, "boundary_type": boundary["boundary_type"],
-                "job_name": boundary["boundary_id"], "pid": 12, "process_creation_time": "34",
+                "job_name": boundary["boundary_id"], "pid": 12, "pgid": 12,
+                "process_creation_time": "34",
                 "cancellation_action_intent": {"version": 2, "state": "confirmed", "task_id": "timestamp-task",
                     "request_id": "a" * 32, "attempt_id": "c" * 32, "ownership_token": "b" * 32,
                     "pid": 12, "process_creation_time": "34", "action": "graceful",

@@ -13,6 +13,8 @@ import subprocess
 import time
 import uuid
 
+from .protocol import is_valid_windows_process_identity
+
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 _CREATE_SUSPENDED = 0x00000004
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
@@ -178,8 +180,10 @@ def _winerror(operation: str) -> OSError:
 
 
 def process_creation_time(pid: int) -> int:
+    if not is_valid_windows_process_identity(pid):
+        raise ValueError("Windows process identity is outside the DWORD range.")
     kernel = _kernel32()
-    handle = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    handle = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not handle:
         raise _winerror("OpenProcess")
     try:
@@ -193,8 +197,10 @@ def process_creation_time(pid: int) -> int:
 
 
 def process_exit_code(pid: int, creation_time: int) -> int | None:
+    if not is_valid_windows_process_identity(pid):
+        return None
     kernel = _kernel32()
-    handle = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    handle = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not handle:
         return None
     try:
@@ -219,8 +225,10 @@ def process_has_exited(pid: int, creation_time: int) -> bool:
 
 def process_exit_state(pid: int, creation_time: int) -> bool | None:
     """Return exited/live for the exact process generation, or None if unverifiable."""
+    if not is_valid_windows_process_identity(pid):
+        return None
     kernel = _kernel32()
-    handle = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    handle = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not handle:
         return None
     try:
@@ -377,6 +385,8 @@ class WindowsJob:
                 raise _winerror("OpenJobObjectW")
 
     def assign_suspended_process(self, process: subprocess.Popen) -> int:
+        if not is_valid_windows_process_identity(getattr(process, "pid", None)):
+            raise ValueError("Windows process identity is outside the DWORD range.")
         if os.name != "nt" or process.poll() is not None:
             raise RuntimeError("Managed Windows process is not live and suspended.")
         handle = getattr(process, "_handle", None)
@@ -402,13 +412,15 @@ class WindowsJob:
         process._thread_handle = None
 
     def is_process_member(self, pid: int, creation_time: int) -> bool:
+        if not is_valid_windows_process_identity(pid):
+            return False
         try:
             if process_creation_time(pid) != int(creation_time):
                 return False
         except OSError:
             return False
         kernel = self._kernel
-        process = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        process = kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not process:
             return False
         try:
@@ -420,7 +432,9 @@ class WindowsJob:
             kernel.CloseHandle(process)
 
     def contains_process(self, pid: int) -> bool:
-        process = self._kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not is_valid_windows_process_identity(pid):
+            return False
+        process = self._kernel.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not process:
             return False
         try:
@@ -439,7 +453,8 @@ class WindowsJob:
 
     def send_ctrl_break(self, pid: int, creation_time: int, *, current_pid: int) -> bool:
         """Send only to the verified group created with the process boundary."""
-        if pid <= 1 or pid == current_pid or not self.is_process_member(pid, creation_time):
+        if (not is_valid_windows_process_identity(pid) or pid <= 1
+                or pid == current_pid or not self.is_process_member(pid, creation_time)):
             return False
         # CREATE_NEW_PROCESS_GROUP makes the process PID the group ID. The
         # group target is never zero and cannot be the caller's new group.

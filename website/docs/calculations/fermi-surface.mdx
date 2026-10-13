@@ -1,0 +1,18 @@
+---
+title: Fermi Surface
+sidebar_position: 11
+---
+
+# Fermi Surface
+
+**Current status:** `READY`
+
+The Fermi surface is defined by
+
+$$
+\epsilon_{n\mathbf k}=E_F.
+$$
+
+A Fermi surface requires a dense **uniform reciprocal-space mesh**, not a conventional line-mode band path.
+
+Quantum Studio uses a private uniform NSCF followed by QE `fs.x`, parses BXSF data, and preserves the original BXSF artifact for export.

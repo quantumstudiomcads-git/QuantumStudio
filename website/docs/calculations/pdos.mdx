@@ -1,0 +1,23 @@
+---
+title: Projected Density of States
+sidebar_position: 5
+---
+
+# Projected Density of States
+
+**Current status:** `READY`
+
+A projected DOS is
+
+$$
+D_\alpha(E)
+=
+\sum_{n\mathbf k}
+w_{\mathbf k}
+|\langle\phi_\alpha|\psi_{n\mathbf k}\rangle|^2
+\delta(E-\epsilon_{n\mathbf k}).
+$$
+
+For collinear spin, separate up/down channels are meaningful.
+
+For SOC, Quantum Studio must not invent conventional spin-up/down channels from a noncollinear spinor calculation. See [SOC PDOS](./soc-pdos).

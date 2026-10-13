@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Quantum Studio professor technical preview">
+  <rect width="1200" height="630" fill="#ffffff"/>
+  <rect x="80" y="80" width="1040" height="470" fill="#f6f8fa" stroke="#d8e0e7"/>
+  <image href="quantum-studio-v0.1.svg" x="150" y="205" width="220" height="220" preserveAspectRatio="xMidYMid meet"/>
+  <line x1="445" y1="226" x2="985" y2="226" stroke="#d8e0e7" stroke-width="2"/>
+  <text x="445" y="300" fill="#17212b" font-family="Arial, sans-serif" font-size="72" font-weight="700">Quantum Studio</text>
+  <text x="449" y="354" fill="#176f9f" font-family="Arial, sans-serif" font-size="28" font-weight="700" letter-spacing="3">PROFESSOR TECHNICAL PREVIEW</text>
+  <text x="449" y="414" fill="#4a5968" font-family="Arial, sans-serif" font-size="30">Atomistic and electronic-structure research software</text>
+  <text x="449" y="465" fill="#647484" font-family="Arial, sans-serif" font-size="23">Quantum Studio 0.2.0 · Controlled technical beta</text>
+</svg>

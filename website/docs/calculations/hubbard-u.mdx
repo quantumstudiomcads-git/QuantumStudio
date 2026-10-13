@@ -1,0 +1,26 @@
+---
+title: Hubbard U Determination
+sidebar_position: 19
+---
+
+# Hubbard U Determination
+
+**Current status:** `READY`
+
+Hubbard U Determination is a separate linear-response workflow using QE `hp.x`.
+
+In simplified notation,
+
+$$
+U
+=
+(\chi_0^{-1}-\chi^{-1})_{II}.
+$$
+
+The actual value depends on structure, pseudopotentials, projector definition, k/q meshes, and the correlated subspace.
+
+A finite $U$ from a smoke test validates software integration but is not automatically a physically converged material parameter.
+
+:::warning Do not confuse the two U workflows
+“DFT+U with U = 3 eV” means the user supplied a correction. “Hubbard U Determination” means Quantum Studio computes a response-based $U$.
+:::

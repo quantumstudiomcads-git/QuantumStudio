@@ -1,0 +1,29 @@
+---
+title: Manual DFT+U
+sidebar_position: 18
+---
+
+# Manual DFT+U
+
+**Current status:** `READY`
+
+Quantum Studio uses modern Quantum ESPRESSO Hubbard-card syntax.
+
+A representative rotationally invariant correction is
+
+$$
+E_U
+=
+\frac{U_{\mathrm{eff}}}{2}
+\sum_{I,\sigma}
+\mathrm{Tr}
+\left[
+n^{I\sigma}
+-
+(n^{I\sigma})^2
+\right].
+$$
+
+The user chooses species, manifold, $U$, and projector type.
+
+This is a **prescribed-U** calculation.

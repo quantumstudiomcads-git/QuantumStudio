@@ -1,0 +1,22 @@
+---
+title: Density of States
+sidebar_position: 4
+---
+
+# Density of States
+
+**Current status:** `READY`
+
+The total DOS is
+
+$$
+D(E)
+=
+\sum_{n\mathbf k}
+w_{\mathbf k}
+\delta(E-\epsilon_{n\mathbf k}).
+$$
+
+Quantum Studio automatically constructs the required private electronic stages and returns a terminal `DOSResult`.
+
+Analyze provides the total DOS, Fermi marker, plotting, filtering where relevant, and export.

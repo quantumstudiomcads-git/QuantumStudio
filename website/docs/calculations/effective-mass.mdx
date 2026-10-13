@@ -1,0 +1,34 @@
+---
+title: Effective Mass
+sidebar_position: 3
+---
+
+# Effective Mass
+
+**Current status:** `READY`
+
+Near a parabolic extremum,
+
+$$
+E(\mathbf k)
+\approx
+E_0
++
+\frac{\hbar^2}{2}
+(\mathbf k-\mathbf k_0)^T
+(m^*)^{-1}
+(\mathbf k-\mathbf k_0),
+$$
+
+so
+
+$$
+(m^{*-1})_{ij}
+=
+\frac{1}{\hbar^2}
+\frac{\partial^2E}{\partial k_i\partial k_j}.
+$$
+
+The user chooses electron/hole and CBM/VBM behavior. Analyze shows the source data and fitted parabola.
+
+Insufficient sampling returns an explicit diagnostic rather than a zero or NaN mass.

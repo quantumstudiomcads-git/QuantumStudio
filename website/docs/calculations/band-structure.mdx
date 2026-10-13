@@ -1,0 +1,22 @@
+---
+title: Band Structure
+sidebar_position: 1
+---
+
+# Band Structure
+
+**Current status:** `READY`
+
+A band structure displays $\epsilon_{n\mathbf k}$ along an ordered path through reciprocal space.
+
+Quantum Studio keeps the k-point path metadata with the structured `BandStructureResult` so Analyze can label and plot the dispersion correctly.
+
+## Scientific interpretation
+
+A line-mode path samples selected reciprocal-space directions. It should not be confused with a dense Brillouin-zone mesh.
+
+## Workflow
+
+```text
+Structure → SCF → Bands workflow → BandStructureResult → Analyze
+```

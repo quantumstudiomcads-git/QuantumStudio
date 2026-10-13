@@ -1,0 +1,22 @@
+name = "quantum-studio-website"
+pages_build_output_dir = "./build"
+compatibility_date = "2026-09-20"
+send_metrics = false
+
+# Replace the database ID only after an operator creates the D1 database in the
+# intended Cloudflare account. The all-zero value is deliberately non-production.
+[[d1_databases]]
+binding = "BETA_DB"
+database_name = "quantum-studio-beta"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[vars]
+# Public/non-secret deployment settings. Review before any deployment.
+BETA_ALLOWED_ORIGIN = "https://replace-before-deployment.example"
+BETA_PRIVACY_VERSION = "draft-0.1"
+BETA_TERMS_VERSION = "draft-0.1"
+BETA_ENVIRONMENT = "production"
+BETA_TURNSTILE_TEST_MODE = "false"
+AUTH_EMAIL_TEST_MODE = "false"
+AUTH_OTP_PEPPER = "replace-with-strong-server-secret"

@@ -1,0 +1,35 @@
+---
+title: SOC PDOS
+sidebar_position: 22
+---
+
+# SOC PDOS
+
+**Current status:** `PARTIAL`
+
+SOC PDOS must preserve the fully relativistic projector basis.
+
+Conceptually,
+
+$$
+D_{a l j m_j}(E)
+=
+\sum_{n\mathbf k}
+w_{\mathbf k}
+|\langle
+\phi_{a l j m_j}
+|
+\psi_{n\mathbf k}
+\rangle|^2
+\delta(E-\epsilon_{n\mathbf k}).
+$$
+
+## User-facing rule
+
+The SOC PDOS selector should expose the exact QE projector identity: atom/species and relativistic labels such as $l$, $j$, and $m_j$ (or the precise QE equivalent).
+
+It must not relabel these projectors as collinear “spin up” and “spin down”.
+
+If the source format cannot be represented exactly, Quantum Studio should block the calculation rather than display scientifically misleading labels.
+
+A suitable validation material is trigonal Te with a fully relativistic PBE pseudopotential.

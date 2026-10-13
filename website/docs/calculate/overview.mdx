@@ -1,0 +1,26 @@
+---
+title: Calculate Overview
+sidebar_position: 1
+---
+
+# Calculate
+
+Calculate converts an atomistic structure and a calculation specification into an executable scientific workflow.
+
+```mermaid
+flowchart TD
+    A[Structure] --> B[Calculation specification]
+    B --> C[Pseudopotential selection]
+    C --> D[Workflow compilation]
+    D --> E[Preflight]
+    E --> F[Execution]
+    F --> G[Scientific parser]
+    G --> H[Persisted result]
+```
+
+## Design principles
+
+1. Generated engine inputs remain inspectable.
+2. Pseudopotentials carry provenance and integrity information.
+3. Execution success and scientific parsing success are distinct states.
+4. Engine-specific parsing does not belong in generic GUI or executor code.

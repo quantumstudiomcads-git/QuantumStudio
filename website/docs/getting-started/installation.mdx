@@ -1,0 +1,25 @@
+---
+title: Installation
+sidebar_position: 1
+---
+
+# Installation
+
+Quantum Studio 0.2.0 is a controlled technical beta. Technical-preview packages
+are available only after approval when controlled artifact hosting is configured.
+The Windows installer is GUI-only and does not include the Engine Pack. The Linux
+x86_64 AppImage described on the Technical Preview page remains a staging artifact.
+
+## Current development platform
+
+Windows packaging and GUI-only installer lifecycle validation have passed. A
+genuine Linux x86_64 staging AppImage has also been built and audited. Neither
+fact represents a public production release.
+
+## Calculation engines
+
+Quantum Studio is designed so computational engines remain separable from the GUI. Quantum ESPRESSO can be invoked as an external executable; proprietary engines such as VASP must be supplied by users under their own licences.
+
+:::info Why this matters
+A calculation remains inspectable outside the GUI: generated inputs, execution outputs and parsed scientific results retain their own provenance.
+:::

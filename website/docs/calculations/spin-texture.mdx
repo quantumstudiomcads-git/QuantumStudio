@@ -1,0 +1,31 @@
+---
+title: Spin Texture
+sidebar_position: 21
+---
+
+# Spin Texture
+
+**Current status:** `PARTIAL`
+
+This partial Spin Texture workflow is based on exact Quantum ESPRESSO spin expectation outputs.
+
+The physical quantity is
+
+$$
+S_i(n,\mathbf k)
+=
+\frac{\hbar}{2}
+\langle
+\psi_{n\mathbf k}
+|
+\sigma_i
+|
+\psi_{n\mathbf k}
+\rangle,
+\qquad
+i=x,y,z.
+$$
+
+Analyze should allow inspection of $S_x$, $S_y$, $S_z$, and optionally $|S|$ along the sampled band path or mesh.
+
+These values must come from the engine's spin-operator expectations, **not** from PDOS differences.

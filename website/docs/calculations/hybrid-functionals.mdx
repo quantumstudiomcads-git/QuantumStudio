@@ -1,0 +1,26 @@
+---
+title: Hybrid Functional Electronic Structure
+sidebar_position: 20
+---
+
+# Hybrid Functional Electronic Structure
+
+**Current status:** `READY`
+
+HSE06 and B3LYP are represented as hybrid functionals.
+
+HSE range separation is
+
+$$
+\frac{1}{r}
+=
+\frac{\mathrm{erfc}(\omega r)}{r}
++
+\frac{\mathrm{erf}(\omega r)}{r}.
+$$
+
+For HSE06, the implemented QE contract uses exact-exchange fraction **0.25** and screening parameter **0.106 bohr$^{-1}$**.
+
+HSE06 SCF and Bands are runtime-validated. Method-specific B3LYP status is retained by the application.
+
+Quantum Studio preflights hybrid k-point capacity and rejects oversized combinations instead of silently changing the user's q mesh or path.

@@ -1,0 +1,23 @@
+---
+title: Atomic Charge Transfer (Bader)
+sidebar_position: 14
+---
+
+# Atomic Charge Transfer (Bader)
+
+**Current status:** `READY`
+
+Quantum Studio defines pseudopotential-referenced net atomic charge as
+
+$$
+q_i
+=
+Z_{\mathrm{val},i}
+-
+N_{\mathrm{Bader},i}.
+$$
+
+- Positive $q_i$ means electron deficiency.
+- Negative $q_i$ means electron accumulation.
+
+Atomic Charge Transfer is a derived result from the same Bader result; it does not rerun Bader.

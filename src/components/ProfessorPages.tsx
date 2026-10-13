@@ -3,6 +3,7 @@ import Layout from '@theme/Layout';
 import Link from '@docusaurus/Link';
 import useBaseUrl from '@docusaurus/useBaseUrl';
 import BetaAccessForm from './BetaAccessForm';
+import {betaAccessDestination, getAuthSession} from '../lib/auth-client';
 
 type Status = 'READY' | 'PARTIAL' | 'PLANNED' | 'EXTERNAL BACKEND REQUIRED';
 
@@ -28,6 +29,19 @@ function Brand(): React.ReactNode {
   return <div className="qs-intro__brand"><img className="qs-intro__logo" src={logo} alt="Quantum Studio" /><div className="qs-intro__wordmark">Quantum <span>Studio</span></div></div>;
 }
 
+function BetaAccessLink({className, children}: {className?: string; children: React.ReactNode}): React.ReactNode {
+  const baseUrl = useBaseUrl('/');
+  const loginHref = betaAccessDestination(false, baseUrl);
+  const navigate = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    void getAuthSession()
+      .then(({authenticated}) => window.location.assign(betaAccessDestination(authenticated, baseUrl)))
+      .catch(() => window.location.assign(loginHref));
+  };
+
+  return <a className={className} href={loginHref} onClick={navigate}>{children}</a>;
+}
+
 function StatusSummary(): React.ReactNode {
   return <div className="qs-table-wrap"><table className="qs-table"><thead><tr><th scope="col">Catalogue status</th><th scope="col">Count</th><th scope="col">Meaning in this technical beta</th></tr></thead><tbody>
     <tr><td><StatusLabel status="READY" /></td><td>29</td><td>Implemented for the documented scope.</td></tr>
@@ -39,7 +53,7 @@ function StatusSummary(): React.ReactNode {
 
 export function HomePage(): React.ReactNode {
   return <Layout title="Controlled technical beta" description="Quantum Studio 0.2.0 professor technical preview"><main className="qs-page">
-    <section className="qs-intro"><div className="container qs-intro__layout"><Brand /><span className="qs-kicker">Quantum Studio 0.2.0 / controlled technical beta</span><h1>Desktop research software for atomistic systems and electronic-structure workflows.</h1><p>Quantum Studio is a desktop environment for constructing atomistic systems, preparing electronic-structure workflows, and reviewing calculated results. Professor technical-preview access is limited and reviewed manually.</p><div className="qs-actions"><Link className="qs-button qs-button--primary" to="/beta-access">Request Beta Access</Link><Link className="qs-button" to="/capabilities">Explore Capabilities</Link></div></div></section>
+    <section className="qs-intro"><div className="container qs-intro__layout"><Brand /><span className="qs-kicker">Quantum Studio 0.2.0 / controlled technical beta</span><h1>Desktop research software for atomistic systems and electronic-structure workflows.</h1><p>Quantum Studio is a desktop environment for constructing atomistic systems, preparing electronic-structure workflows, and reviewing calculated results. Professor technical-preview access is limited and reviewed manually.</p><div className="qs-actions"><BetaAccessLink className="qs-button qs-button--primary">Request Beta Access</BetaAccessLink><Link className="qs-button" to="/capabilities">Explore Capabilities</Link></div></div></section>
     <Section title="What researchers can do"><div className="qs-columns"><article><h3>Prepare structures and projects</h3><p>Organize projects, construct or import structures, and use supported crystal, slab, supercell, nanotube, heterostructure, and moiré workflows.</p></article><article><h3>Plan calculations explicitly</h3><p>Use public calculation intents with stated readiness rather than assuming every requested calculation is available.</p></article><article><h3>Review calculated results</h3><p>Move from calculation planning to structured result analysis with verification-oriented execution practices.</p></article><article><h3>Evaluate with evidence</h3><p>Inspect platform validation, limitations, and public documentation before deciding whether the beta fits a research workflow.</p></article></div></Section>
     <Section title="Project → Builder → Calculate → Analyze" tint><div className="qs-flow"><article className="qs-flow__step"><span className="qs-flow__number">01</span><h3>Project</h3><p>Organize a research task and its supporting structure data.</p></article><article className="qs-flow__step"><span className="qs-flow__number">02</span><h3>Builder</h3><p>Construct, import, and prepare supported atomistic systems.</p></article><article className="qs-flow__step"><span className="qs-flow__number">03</span><h3>Calculate</h3><p>Choose a documented intent and inspect its readiness boundary.</p></article><article className="qs-flow__step"><span className="qs-flow__number">04</span><h3>Analyze</h3><p>Review results and independently validate scientific conclusions.</p></article></div></Section>
     <Section title="Current validation status"><div className="qs-table-wrap"><table className="qs-table"><thead><tr><th scope="col">Area</th><th scope="col">Current evidence</th><th scope="col">Boundary</th></tr></thead><tbody><tr><td>Windows</td><td>Application build and GUI-only installer lifecycle validated.</td><td>A real production N → N+1 upgrade remains unproven.</td></tr><tr><td>Linux</td><td>Linux x86_64 staging AppImage built and audited in GitHub Actions.</td><td>Staging artifact; not a public production release.</td></tr><tr><td>Updater</td><td>Signed-update infrastructure exists with separate updater and licensing trust domains.</td><td>Production signing has not been activated.</td></tr></tbody></table></div></Section>
@@ -95,7 +109,7 @@ export function DocumentationPage(): React.ReactNode {
 export function TechnicalPreviewPage(): React.ReactNode {
   return <Page title="Technical Preview" eyebrow="Release engineering / controlled beta" description="Technical-preview packages are available only through approved beta access when controlled artifact hosting has been configured.">
     <Section title="0.2.0 release evidence"><div className="qs-table-wrap"><table className="qs-table"><thead><tr><th scope="col">Item</th><th scope="col">Status</th><th scope="col">Evidence or boundary</th></tr></thead><tbody><tr><td>Channel</td><td>Controlled technical beta</td><td>Access remains approval-based.</td></tr><tr><td>Windows</td><td>Validated packaging</td><td>Application build and GUI-only installer lifecycle validated; Engine Pack not included; production N → N+1 upgrade not yet proven.</td></tr><tr><td>Linux x86_64</td><td>Staging AppImage</td><td>Genuine staging build from <code>a9b7a078ad30fc744fd2aba3ef384d01e2c72a82</code>; not a public production release.</td></tr><tr><td>Linux checksum</td><td>SHA-256</td><td><code>B31AE6E5A62876B4CD8AE0E3C37F5C9940D7776DAEE3888FB884D8BD4801C2FB</code></td></tr><tr><td>Updater</td><td>Signing-ready infrastructure</td><td>Separate update and licence trust domains exist; production signing has not been activated.</td></tr><tr><td>Engine Pack</td><td>Not included</td><td>No scientific-engine binaries are bundled or represented as redistributed.</td></tr></tbody></table></div></Section>
-    <Section title="Access and known limitations" tint><div className="qs-note"><strong>No public download is presented before controlled hosting is ready.</strong><p>Request beta access for administrator-reviewed eligibility. A successful application does not issue a licence or create a public download entitlement.</p></div><div className="qs-actions"><Link className="qs-button qs-button--primary" to="/beta-access">Request Beta Access</Link></div></Section>
+    <Section title="Access and known limitations" tint><div className="qs-note"><strong>No public download is presented before controlled hosting is ready.</strong><p>Request beta access for administrator-reviewed eligibility. A successful application does not issue a licence or create a public download entitlement.</p></div><div className="qs-actions"><BetaAccessLink className="qs-button qs-button--primary">Request Beta Access</BetaAccessLink></div></Section>
   </Page>;
 }
 
@@ -129,6 +143,6 @@ export function TermsPage(): React.ReactNode {
 export function ContactPage(): React.ReactNode {
   return <Page title="Research Collaboration" eyebrow="Contact / collaboration" description="Quantum Studio is seeking carefully scoped professor and research-group feedback during the controlled technical beta.">
     <Section title="A focused evaluation conversation"><div className="qs-columns"><article><h3>Research workflow</h3><p>Describe the atomistic or electronic-structure workflow you intend to evaluate.</p></article><article><h3>Platform needs</h3><p>Indicate whether the evaluation is planned for Windows, Linux, or both.</p></article><article><h3>Validation feedback</h3><p>Share reproducibility and usability observations after approval through the controlled beta channel.</p></article></div></Section>
-    <Section title="Contact" tint><div className="qs-note"><strong>Controlled beta contact.</strong><p>Placeholder: <code>beta-access@quantumstudio.example</code>. Replace this with an approved, monitored contact method before deployment.</p></div><div className="qs-actions"><Link className="qs-button qs-button--primary" to="/beta-access">Request Beta Access</Link></div></Section>
+    <Section title="Contact" tint><div className="qs-note"><strong>Controlled beta contact.</strong><p>Placeholder: <code>beta-access@quantumstudio.example</code>. Replace this with an approved, monitored contact method before deployment.</p></div><div className="qs-actions"><BetaAccessLink className="qs-button qs-button--primary">Request Beta Access</BetaAccessLink></div></Section>
   </Page>;
 }

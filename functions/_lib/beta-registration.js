@@ -55,7 +55,7 @@ export async function emailLookupHash(normalizedEmail, pepper) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-export async function verifyTurnstile(token, env, request, fetchImpl = fetch) {
+export async function verifyTurnstile(token, env, request, fetchImpl = fetch, expectedAction = 'beta_registration') {
   if (!token || token.length > FIELD_LIMITS.turnstileToken) return {ok: false, reason: 'missing-or-invalid-token'};
   if (env.BETA_TURNSTILE_TEST_MODE === 'true' && env.BETA_ENVIRONMENT !== 'production') {
     if (token === 'test-pass') return {ok: true};
@@ -73,7 +73,7 @@ export async function verifyTurnstile(token, env, request, fetchImpl = fetch) {
     const body = await result.json();
     if (!body.success) return {ok: false, reason: Array.isArray(body['error-codes']) ? body['error-codes'][0] || 'invalid-token' : 'invalid-token'};
     if (body.hostname !== new URL(expected).hostname) return {ok: false, reason: 'hostname-mismatch'};
-    if (body.action !== 'beta_registration') return {ok: false, reason: 'action-mismatch'};
+    if (body.action !== expectedAction) return {ok: false, reason: 'action-mismatch'};
     return {ok: true};
   } catch { return {ok: false, reason: 'verification-unavailable'}; }
 }

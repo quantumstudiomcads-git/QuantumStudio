@@ -19,6 +19,10 @@
 .qs-button:hover { border-color: var(--qs-accent); color: var(--qs-accent); text-decoration: none; }
 .qs-button--primary { border-color: var(--qs-accent); color: #fff; background: var(--qs-accent); }
 .qs-button--primary:hover { border-color: #125b84; color: #fff; background: #125b84; }
+.qs-button--secondary { border-color: var(--qs-border); background: #fff; color: var(--qs-text); }
+.qs-button--secondary:hover { border-color: var(--qs-accent); color: var(--qs-accent); }
+.qs-button--link { border-color: transparent; background: transparent; color: var(--qs-accent); }
+.qs-button--link:hover { border-color: transparent; background: transparent; color: var(--qs-accent); text-decoration: underline; }
 .qs-status { display: inline-block; padding: .18rem .4rem; border: 1px solid currentColor; border-radius: 2px; font: 700 .67rem/1.25 var(--ifm-font-family-monospace); letter-spacing: .045em; white-space: nowrap; }
 .qs-status--ready { color: var(--qs-ready); }.qs-status--partial { color: var(--qs-partial); }.qs-status--planned { color: var(--qs-planned); }.qs-status--external { color: var(--qs-external); }
 .qs-table-wrap { overflow-x: auto; border-top: 1px solid var(--qs-border); border-bottom: 1px solid var(--qs-border); }

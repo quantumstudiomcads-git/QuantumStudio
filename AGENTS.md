@@ -1,3 +1,4 @@
+
 # Quantum Studio — AGENTS.md
 
 This file defines repository-wide development rules for AI coding agents working on Quantum Studio.

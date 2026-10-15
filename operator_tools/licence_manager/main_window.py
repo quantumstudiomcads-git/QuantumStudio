@@ -27,6 +27,7 @@ from .models import Profile
 from .paths import data_root
 from .signing import AuthorityState, ProductionAuthority, SigningUnavailable, TestEphemeralAuthority, public_key_record, record_public_metadata
 from .storage import StorageError, bootstrap_storage
+from .website_sync import WebsiteSyncError, sync_website_applications
 
 
 PAGES = ("Overview", "Applications", "Activation Requests", "Licences", "Audit Log", "Settings")
@@ -134,7 +135,8 @@ class LicenceManagerWindow(QMainWindow):
                 self.application_search, self.application_filter = self._filters(
                     box, self.applications_table, ("All statuses", "APPLIED", "UNDER_REVIEW", "APPROVED",
                                                    "REJECTED", "LICENCE_ISSUED", "EXPIRED", "REVOKED"), 1)
-                self._actions(box, (("Import applications…", self.import_applicants),
+                self._actions(box, (("Sync website applications", self.sync_website_applications),
+                                    ("Import applications…", self.import_applicants),
                                     ("Review", lambda: self.transition_selected("UNDER_REVIEW")),
                                     ("Approve", lambda: self.transition_selected("APPROVED")),
                                     ("Reject…", lambda: self.transition_selected("REJECTED")),
@@ -303,6 +305,8 @@ class LicenceManagerWindow(QMainWindow):
             return "Export needs operator review. Check the chosen destination before retrying."
         if isinstance(error, StorageError):
             return "Storage is unavailable. Preserve the existing data and request operator recovery."
+        if isinstance(error, WebsiteSyncError):
+            return "Website sync could not be completed. Check the configured URL and authentication."
         return f"{action} could not be completed. No diagnostic or private data is shown here."
 
     def _show_error(self, title, error, action):
@@ -409,6 +413,27 @@ class LicenceManagerWindow(QMainWindow):
             QMessageBox.information(self, "Import complete", message)
         except Exception as error:
             self._show_error("Import failed", error, "Import")
+
+    def sync_website_applications(self):
+        try:
+            result = sync_website_applications(
+                self.database,
+                operator_id=self.operator_id,
+                test_mode=self.test_mode,
+            )
+            self.refresh()
+            message = (
+                f"Fetched: {result.fetched}\n"
+                f"Imported: {result.imported}\n"
+                f"Duplicates: {result.duplicates}\n"
+                f"Rejected: {result.rejected}"
+            )
+            self._set_feedback(
+                message,
+                level="warning" if result.rejected else "success",
+            )
+        except Exception as error:
+            self._show_error("Website sync failed", error, "Website sync")
 
     def import_activation(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import Quantum Studio activation request", "", "JSON (*.json)")

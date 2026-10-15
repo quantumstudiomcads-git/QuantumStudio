@@ -11,6 +11,7 @@ AUTH_OTP_PEPPER=replace-with-a-local-development-only-otp-pepper
 GOOGLE_CLIENT_ID=replace-with-google-client-id
 GOOGLE_CLIENT_SECRET=replace-with-google-client-secret
 GOOGLE_REDIRECT_URI=http://127.0.0.1:8788/api/auth/google/callback
+OPERATOR_SYNC_TOKEN=
 
 # Public build-time values. Set these in the Pages build environment, not here.
 # TURNSTILE_SITE_KEY=replace-with-public-site-key

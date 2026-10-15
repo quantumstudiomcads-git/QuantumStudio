@@ -2,8 +2,8 @@ import React from 'react';
 import Layout from '@theme/Layout';
 import Link from '@docusaurus/Link';
 import useBaseUrl from '@docusaurus/useBaseUrl';
-import BetaAccessForm from './BetaAccessForm';
 import {betaAccessDestination, getAuthSession} from '../lib/auth-client';
+import {BetaAccessApplicationPanel} from './BetaApplicationStatus';
 
 type Status = 'READY' | 'PARTIAL' | 'PLANNED' | 'EXTERNAL BACKEND REQUIRED';
 
@@ -116,7 +116,7 @@ export function TechnicalPreviewPage(): React.ReactNode {
 export function BetaAccessPage(): React.ReactNode {
   return <Page title="Beta Access" eyebrow="Professor technical preview" description="Apply for limited, administrator-reviewed access to Quantum Studio 0.2.0. Approval is manual and any licence is temporary.">
     <Section title="Before you apply"><ul className="qs-list"><li>Engine Pack binaries are not included.</li><li>Scientific results must be independently validated by the research group.</li><li>Information is collected only to administer beta review and temporary licences.</li><li>Approval is manual; a submitted application does not issue a licence.</li></ul></Section>
-    <Section title="Application" tint><BetaAccessForm /></Section>
+    <Section title="Application" tint><BetaAccessApplicationPanel /></Section>
   </Page>;
 }
 

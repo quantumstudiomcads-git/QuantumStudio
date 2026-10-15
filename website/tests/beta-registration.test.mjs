@@ -15,7 +15,11 @@ const payload = () => ({
   academicRole: '', evaluationDescription: '', privacyAccepted: true, termsAccepted: true,
   communicationsAccepted: false, turnstileToken: 'test-pass',
 });
-class Statement { constructor(sql) { this.sql = sql; this.values = []; } bind(...values) { this.values = values; return this; } }
+class Statement {
+  constructor(sql) { this.sql = sql; this.values = []; }
+  bind(...values) { this.values = values; return this; }
+  async first() { return null; }
+}
 class FakeD1 {
   constructor({duplicate = false} = {}) { this.duplicate = duplicate; this.statements = []; }
   prepare(sql) { const statement = new Statement(sql); this.statements.push(statement); return statement; }
@@ -25,9 +29,10 @@ function request(body = payload(), headers = {}) { return new Request('http://wo
 
 describe('private beta registration endpoint', () => {
   it('creates only APPLIED and an audit event, without returning PII', async () => {
-    const db = new FakeD1(); const response = await handleApplicationPost(request(), {...env, BETA_DB: db}); const body = await response.json();
+    const db = new FakeD1(); const response = await handleApplicationPost(request(), {...env, BETA_DB: db}, {userId: 'user-1'}); const body = await response.json();
     expect(response.status).toBe(202); expect(body).toMatchObject({accepted: true}); expect(body).not.toHaveProperty('email'); expect(body).not.toHaveProperty('fullName');
     expect(db.batchStatements).toHaveLength(2); expect(db.batchStatements[0].sql).toContain("'APPLIED'"); expect(db.batchStatements[0].sql).not.toContain('LICENSE_ISSUED'); expect(db.batchStatements[1].sql).toContain('APPLICATION_SUBMITTED');
+    expect(db.batchStatements[0].sql).toContain('user_id'); expect(db.batchStatements[0].values.at(-1)).toBe('user-1');
     expect(db.batchStatements[0].values).toContain('ada@example.test');
   });
 
@@ -37,7 +42,7 @@ describe('private beta registration endpoint', () => {
     ['invalid operating system', {...payload(), operatingSystem: 'macOS'}], ['missing privacy', {...payload(), privacyAccepted: false}],
     ['missing terms', {...payload(), termsAccepted: false}], ['client licence field', {...payload(), licenceId: 'forbidden'}],
   ])('rejects %s', async (_name, body) => {
-    const response = await handleApplicationPost(request(body), {...env, BETA_DB: new FakeD1()}); expect(response.status).toBe(400);
+    const response = await handleApplicationPost(request(body), {...env, BETA_DB: new FakeD1()}, {userId: 'user-1'}); expect(response.status).toBe(400);
   });
 
   it('normalizes text and treats script-like input as data', () => {
@@ -46,14 +51,14 @@ describe('private beta registration endpoint', () => {
   });
 
   it('rejects wrong media type, origin, missing production origin, and oversized requests', async () => {
-    expect((await handleApplicationPost(request(payload(), {'Content-Type': 'text/plain'}), {...env, BETA_DB: new FakeD1()})).status).toBe(415);
-    expect((await handleApplicationPost(request(payload(), {Origin: 'https://attacker.example'}), {...env, BETA_DB: new FakeD1()})).status).toBe(403);
-    expect((await handleApplicationPost(request(), {...env, BETA_ALLOWED_ORIGIN: '', BETA_ENVIRONMENT: 'production', BETA_DB: new FakeD1()})).status).toBe(503);
-    expect((await handleApplicationPost(request('x'.repeat(16_385)), {...env, BETA_DB: new FakeD1()})).status).toBe(413);
+    expect((await handleApplicationPost(request(payload(), {'Content-Type': 'text/plain'}), {...env, BETA_DB: new FakeD1()}, {userId: 'user-1'})).status).toBe(415);
+    expect((await handleApplicationPost(request(payload(), {Origin: 'https://attacker.example'}), {...env, BETA_DB: new FakeD1()}, {userId: 'user-1'})).status).toBe(403);
+    expect((await handleApplicationPost(request(), {...env, BETA_ALLOWED_ORIGIN: '', BETA_ENVIRONMENT: 'production', BETA_DB: new FakeD1()}, {userId: 'user-1'})).status).toBe(503);
+    expect((await handleApplicationPost(request('x'.repeat(16_385)), {...env, BETA_DB: new FakeD1()}, {userId: 'user-1'})).status).toBe(413);
   });
 
   it('handles duplicates neutrally and supplies secure no-store headers', async () => {
-    const response = await handleApplicationPost(request(), {...env, BETA_DB: new FakeD1({duplicate: true})}); const body = await response.json();
+    const response = await handleApplicationPost(request(), {...env, BETA_DB: new FakeD1({duplicate: true})}, {userId: 'user-1'}); const body = await response.json();
     expect(response.status).toBe(202); expect(body.applicationId).toBeNull(); expect(response.headers.get('cache-control')).toBe('no-store'); expect(response.headers.get('x-content-type-options')).toBe('nosniff');
   });
 });

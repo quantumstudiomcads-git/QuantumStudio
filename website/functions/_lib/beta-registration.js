@@ -79,12 +79,18 @@ export async function verifyTurnstile(token, env, request, fetchImpl = fetch, ex
 }
 
 function duplicateError(error) { return String(error?.message || error).toLowerCase().includes('unique'); }
+function userApplicationDuplicateError(error) {
+  return String(error?.message || error).toLowerCase().includes('beta_applications.user_id');
+}
 
 export async function handleApplicationPost(request, env, dependencies = {}) {
   const config = validateRuntimeConfig(env);
   if (!config.ok) return errorResponse(503, 'service_unavailable', 'Beta registration is temporarily unavailable.');
   const origin = request.headers.get('Origin');
   if (origin !== config.origin) return errorResponse(403, 'origin_denied', 'This request origin is not allowed.');
+  if (typeof dependencies.userId !== 'string' || !dependencies.userId) {
+    return errorResponse(401, 'authentication_required', 'Sign in before submitting a beta application.', config.origin);
+  }
   if (!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) return errorResponse(415, 'unsupported_media_type', 'Send JSON content.', config.origin);
   const contentLength = Number(request.headers.get('Content-Length') || '0');
   if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) return errorResponse(413, 'request_too_large', 'Request is too large.', config.origin);
@@ -95,18 +101,31 @@ export async function handleApplicationPost(request, env, dependencies = {}) {
   try { raw = JSON.parse(rawText); } catch { return errorResponse(400, 'invalid_json', 'Invalid JSON request.', config.origin); }
   const validated = validateApplication(raw);
   if (!validated.ok) return errorResponse(400, 'validation_failed', 'Application details need correction.', config.origin);
+  try {
+    const currentApplication = await env.BETA_DB.prepare(
+      'SELECT application_id FROM beta_applications WHERE user_id = ? LIMIT 1',
+    ).bind(dependencies.userId).first();
+    if (currentApplication) {
+      return errorResponse(409, 'application_exists', 'Your beta application has already been submitted.', config.origin);
+    }
+  } catch {
+    return errorResponse(503, 'service_unavailable', 'Beta registration is temporarily unavailable. Please try again later.', config.origin);
+  }
   const turnstile = await (dependencies.verifyTurnstile || verifyTurnstile)(validated.value.turnstileToken, env, request);
   if (!turnstile.ok) return errorResponse(400, 'verification_failed', 'Verification expired or failed. Please try again.', config.origin);
   const applicationId = crypto.randomUUID();
   const now = new Date().toISOString();
   const hash = await emailLookupHash(validated.value.email, env.BETA_IDENTITY_PEPPER);
   try {
-    const insertApplication = env.BETA_DB.prepare(`INSERT INTO beta_applications (application_id, full_name, email, normalized_email, email_lookup_hash, institution, country, academic_role, research_area, intended_evaluation, operating_system, privacy_consent, privacy_version, terms_consent, terms_version, communications_consent, status, submitted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?, 'APPLIED', ?, ?)`)
-      .bind(applicationId, validated.value.fullName, validated.value.email, validated.value.email, hash, validated.value.institution, validated.value.country, validated.value.academicRole || null, validated.value.researchArea, validated.value.evaluationDescription || null, validated.value.operatingSystem, env.BETA_PRIVACY_VERSION, env.BETA_TERMS_VERSION, validated.value.communicationsAccepted ? 1 : 0, now, now);
+    const insertApplication = env.BETA_DB.prepare(`INSERT INTO beta_applications (application_id, full_name, email, normalized_email, email_lookup_hash, institution, country, academic_role, research_area, intended_evaluation, operating_system, privacy_consent, privacy_version, terms_consent, terms_version, communications_consent, status, submitted_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?, 'APPLIED', ?, ?, ?)`)
+      .bind(applicationId, validated.value.fullName, validated.value.email, validated.value.email, hash, validated.value.institution, validated.value.country, validated.value.academicRole || null, validated.value.researchArea, validated.value.evaluationDescription || null, validated.value.operatingSystem, env.BETA_PRIVACY_VERSION, env.BETA_TERMS_VERSION, validated.value.communicationsAccepted ? 1 : 0, now, now, dependencies.userId);
     const insertAudit = env.BETA_DB.prepare(`INSERT INTO beta_audit_events (event_id, application_id, event_type, event_timestamp, actor_reference, old_status, new_status, metadata_json) VALUES (?, ?, 'APPLICATION_SUBMITTED', ?, 'public-registration', NULL, 'APPLIED', ?)`)
       .bind(crypto.randomUUID(), applicationId, now, JSON.stringify({schema: 1}));
     await env.BETA_DB.batch([insertApplication, insertAudit]);
   } catch (error) {
+    if (userApplicationDuplicateError(error)) {
+      return errorResponse(409, 'application_exists', 'Your beta application has already been submitted.', config.origin);
+    }
     if (duplicateError(error)) return jsonResponse(202, {accepted: true, applicationId: null, message: 'Your application is queued for review. We will contact you if access is approved.'}, config.origin);
     return errorResponse(503, 'service_unavailable', 'Beta registration is temporarily unavailable. Please try again later.', config.origin);
   }

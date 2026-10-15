@@ -86,6 +86,96 @@ export class BetaSubmissionError extends Error {
 export type BetaSubmissionResult = {accepted: true; applicationId: string | null; message: string};
 type FetchLike = typeof fetch;
 
+export const betaApplicationStatuses = [
+  'APPLIED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED',
+  'LICENSE_ISSUED', 'EXPIRED', 'REVOKED',
+] as const;
+
+export type BetaApplicationStatus = typeof betaApplicationStatuses[number];
+
+export type CurrentBetaApplication = {
+  application_id: string;
+  status: BetaApplicationStatus;
+  submitted_at: string;
+  updated_at: string;
+};
+
+export class BetaStatusError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = 'BetaStatusError';
+  }
+}
+
+export function betaStatusPresentation(status: BetaApplicationStatus): {label: string; description: string} {
+  switch (status) {
+    case 'APPLIED':
+      return {label: 'Application submitted', description: 'Your beta application has been submitted and is awaiting review.'};
+    case 'UNDER_REVIEW':
+      return {label: 'Under review', description: 'Your application is currently being reviewed. No further action is required.'};
+    case 'APPROVED':
+      return {label: 'Approved', description: 'Your beta application has been approved. A licence may still need to be issued before software access is available.'};
+    case 'REJECTED':
+      return {label: 'Not approved', description: 'Your application was not approved for the current beta.'};
+    case 'LICENSE_ISSUED':
+      return {label: 'Beta access active', description: 'A beta licence has been issued for your application.'};
+    case 'EXPIRED':
+      return {label: 'Beta access expired', description: 'The beta licence associated with your application has expired.'};
+    case 'REVOKED':
+      return {label: 'Beta access revoked', description: 'The beta licence associated with your application is no longer active.'};
+  }
+}
+
+export function compactApplicationId(applicationId: string): string {
+  return applicationId.slice(0, 8);
+}
+
+export async function fetchMyBetaApplication(fetchImpl: FetchLike = fetch): Promise<CurrentBetaApplication | null> {
+  const response = await fetchImpl('/api/beta/me', {
+    credentials: 'same-origin',
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new BetaStatusError(
+      response.status,
+      response.status === 401
+        ? 'Sign in to view your beta application.'
+        : 'Beta status is temporarily unavailable. Please try again later.',
+    );
+  }
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new BetaStatusError(502, 'The beta status service returned an invalid response.');
+  }
+  if (typeof payload !== 'object' || payload === null || !('application' in payload)) {
+    throw new BetaStatusError(502, 'The beta status service returned an invalid response.');
+  }
+  const {application} = payload;
+  if (application === null) return null;
+  if (
+    typeof application !== 'object'
+    || !('application_id' in application)
+    || typeof application.application_id !== 'string'
+    || !('status' in application)
+    || typeof application.status !== 'string'
+    || !betaApplicationStatuses.includes(application.status as BetaApplicationStatus)
+    || !('submitted_at' in application)
+    || typeof application.submitted_at !== 'string'
+    || !('updated_at' in application)
+    || typeof application.updated_at !== 'string'
+  ) {
+    throw new BetaStatusError(502, 'The beta status service returned an invalid response.');
+  }
+  return {
+    application_id: application.application_id,
+    status: application.status as BetaApplicationStatus,
+    submitted_at: application.submitted_at,
+    updated_at: application.updated_at,
+  };
+}
+
 export async function submitBetaApplication(
   application: BetaApplication,
   turnstileToken: string,

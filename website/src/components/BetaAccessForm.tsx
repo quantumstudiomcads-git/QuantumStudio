@@ -16,7 +16,9 @@ declare global { interface Window { turnstile?: TurnstileApi; } }
 
 const requiredFields = new Set<BetaFieldName>(['fullName', 'email', 'institution', 'country', 'researchArea', 'operatingSystem']);
 
-export default function BetaAccessForm(): React.ReactNode {
+export default function BetaAccessForm(
+  {onSubmitted}: {onSubmitted?: () => void},
+): React.ReactNode {
   const {siteConfig} = useDocusaurusContext();
   const publicSettings = (siteConfig.customFields ?? {}) as {turnstileSiteKey?: string; turnstileTestMode?: boolean};
   const siteKey = publicSettings.turnstileSiteKey?.trim() ?? '';
@@ -80,6 +82,7 @@ export default function BetaAccessForm(): React.ReactNode {
       setNotice({kind: 'success', text: `${result.message}${identifier}`});
       setApplication(initialBetaApplication);
       resetVerification();
+      onSubmitted?.();
     } catch (error) {
       const message = error instanceof BetaSubmissionError ? error.message : 'A network error prevented submission. Check your connection and try again.';
       setNotice({kind: 'error', text: message});

@@ -27,7 +27,12 @@ from .models import Profile
 from .paths import data_root
 from .signing import AuthorityState, ProductionAuthority, SigningUnavailable, TestEphemeralAuthority, public_key_record, record_public_metadata
 from .storage import StorageError, bootstrap_storage
-from .website_sync import WebsiteSyncError, sync_website_applications
+from .website_sync import (
+    WebsiteStatusSyncError,
+    WebsiteSyncError,
+    sync_local_application_status,
+    sync_website_applications,
+)
 
 
 PAGES = ("Overview", "Applications", "Activation Requests", "Licences", "Audit Log", "Settings")
@@ -136,6 +141,7 @@ class LicenceManagerWindow(QMainWindow):
                     box, self.applications_table, ("All statuses", "APPLIED", "UNDER_REVIEW", "APPROVED",
                                                    "REJECTED", "LICENCE_ISSUED", "EXPIRED", "REVOKED"), 1)
                 self._actions(box, (("Sync website applications", self.sync_website_applications),
+                                    ("Sync status to website", self.sync_selected_status_to_website),
                                     ("Import applications…", self.import_applicants),
                                     ("Review", lambda: self.transition_selected("UNDER_REVIEW")),
                                     ("Approve", lambda: self.transition_selected("APPROVED")),
@@ -305,6 +311,8 @@ class LicenceManagerWindow(QMainWindow):
             return "Export needs operator review. Check the chosen destination before retrying."
         if isinstance(error, StorageError):
             return "Storage is unavailable. Preserve the existing data and request operator recovery."
+        if isinstance(error, WebsiteStatusSyncError):
+            return "Website status mirror is stale. The local decision is unchanged; retry when available."
         if isinstance(error, WebsiteSyncError):
             return "Website sync could not be completed. Check the configured URL and authentication."
         return f"{action} could not be completed. No diagnostic or private data is shown here."
@@ -434,6 +442,29 @@ class LicenceManagerWindow(QMainWindow):
             )
         except Exception as error:
             self._show_error("Website sync failed", error, "Website sync")
+
+    def sync_selected_status_to_website(self):
+        application_id = self._selected_id(self.applications_table)
+        if not application_id:
+            self._set_feedback("Select an application first.", level="warning")
+            return
+        try:
+            result = sync_local_application_status(
+                self.database,
+                application_id,
+                test_mode=self.test_mode,
+            )
+            state = (
+                "already current"
+                if result.result == "already_current"
+                else "updated"
+            )
+            self._set_feedback(
+                f"Website status mirror {state}: {result.status}.",
+                level="success",
+            )
+        except Exception as error:
+            self._show_error("Website status sync failed", error, "Website status sync")
 
     def import_activation(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import Quantum Studio activation request", "", "JSON (*.json)")

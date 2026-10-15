@@ -1,4 +1,5 @@
 import {APPLICATION_STATUSES} from '../../_lib/workflow.js';
+import {constantTimeEquals, getBearerToken} from '../../_lib/operator-auth.js';
 
 const JSON_HEADERS = Object.freeze({
   'Content-Type': 'application/json; charset=utf-8',
@@ -16,39 +17,6 @@ function jsonResponse(status, payload, extraHeaders = {}) {
     headers.set(name, value);
   }
   return new Response(JSON.stringify(payload), {status, headers});
-}
-
-function constantTimeEquals(left, right) {
-  if (typeof left !== 'string' || typeof right !== 'string') {
-    return false;
-  }
-  const leftBytes = new TextEncoder().encode(left);
-  const rightBytes = new TextEncoder().encode(right);
-  if (leftBytes.length !== rightBytes.length) {
-    return false;
-  }
-  try {
-    return crypto.subtle.timingSafeEqual(leftBytes, rightBytes);
-  } catch {
-    let result = 0;
-    for (let index = 0; index < leftBytes.length; index += 1) {
-      result |= leftBytes[index] ^ rightBytes[index];
-    }
-    return result === 0;
-  }
-}
-
-function getBearerToken(request) {
-  const authorization = request.headers.get('Authorization');
-  if (!authorization) {
-    return null;
-  }
-  const match = /^Bearer[ \t]+(\S+)$/i.exec(authorization.trim());
-  if (!match) {
-    return null;
-  }
-  const value = match[1].trim();
-  return value || null;
 }
 
 export async function onRequestGet(context) {

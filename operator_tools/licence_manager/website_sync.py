@@ -5,6 +5,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from urllib import error, parse, request
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, build_opener
@@ -15,7 +16,17 @@ DEFAULT_TIMEOUT_SECONDS = 15.0
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_APPLICATIONS = 1000
 MAX_STATUS_RESPONSE_BYTES = 4096
+MAX_ACTIVATION_RESPONSE_BYTES = 512 * 1024
+MAX_WEBSITE_ACTIVATIONS = 2000
 REVIEW_STATUSES = frozenset({"APPLIED", "UNDER_REVIEW", "APPROVED", "REJECTED"})
+ACTIVATION_STATUSES = frozenset({"AUTHORIZED", "FLAGGED", "REVOKED"})
+ACTIVATION_FLAG_REASONS = frozenset({
+    "DEVICE_LIMIT",
+    "APPLICATION_NOT_ELIGIBLE",
+    "INSTALLATION_REVOKED",
+    "INVALID_INSTALLATION",
+    "UNSUPPORTED_VERSION",
+})
 
 
 class WebsiteSyncError(RuntimeError):
@@ -55,6 +66,22 @@ class WebsiteStatusSyncResult:
     application_id: str
     status: str
     result: str
+
+
+@dataclass(frozen=True)
+class WebsiteActivation:
+    activation_request_id: str
+    application_id: str
+    installation_id: str
+    platform: str
+    architecture: str
+    app_version: str
+    status: str
+    flag_reason: str | None
+    created_at: str
+    updated_at: str
+    authorized_at: str | None
+    revoked_at: str | None
 
 
 def resolve_operator_sync_token() -> str:
@@ -395,3 +422,205 @@ def sync_local_application_status(
         production=(environment == "production"),
     )
     return client.sync_local_application_status(database, application_id)
+
+
+class WebsiteActivationsClient:
+    """Read-only client for the website's automatically evaluated activations."""
+
+    def __init__(
+        self,
+        base_url: str,
+        token: str | None = None,
+        *,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        allow_http_local: bool = False,
+        production: bool = False,
+    ):
+        self.base_url, _ = _validated_base_url(
+            base_url,
+            allow_http_local=allow_http_local,
+            production=production,
+        )
+        self.token = token if token is not None else resolve_operator_sync_token()
+        if not self.token or self.token.strip() != self.token:
+            raise WebsiteAuthenticationError("QS_OPERATOR_SYNC_TOKEN is invalid.")
+        self.timeout = float(timeout)
+
+    def fetch_activations(self) -> tuple[WebsiteActivation, ...]:
+        req = request.Request(
+            f"{self.base_url}/api/operator/activations",
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Accept": "application/json",
+                "User-Agent": "QuantumStudio-LicenceManager/1.0",
+            },
+            method="GET",
+        )
+        try:
+            with build_opener(_NoRedirectHandler()).open(
+                req, timeout=self.timeout
+            ) as response:
+                if response.status != 200:
+                    raise WebsiteResponseError(
+                        "Website activation endpoint returned an unexpected status."
+                    )
+                content_length = response.headers.get("Content-Length")
+                if (
+                    content_length is not None
+                    and content_length.isdecimal()
+                    and int(content_length) > MAX_ACTIVATION_RESPONSE_BYTES
+                ):
+                    raise WebsiteResponseError(
+                        "Website activation response exceeds the configured limit."
+                    )
+                body = response.read(MAX_ACTIVATION_RESPONSE_BYTES + 1)
+        except HTTPError as exc:
+            if exc.code in {401, 403}:
+                raise WebsiteAuthenticationError(
+                    "Website activation endpoint rejected the request."
+                ) from None
+            raise WebsiteResponseError(
+                "Website activation endpoint returned an unexpected status."
+            ) from None
+        except WebsiteSyncError:
+            raise
+        except (error.URLError, TimeoutError, OSError):
+            raise WebsiteSyncError(
+                "Unable to reach the website activation endpoint."
+            ) from None
+        if len(body) > MAX_ACTIVATION_RESPONSE_BYTES:
+            raise WebsiteResponseError(
+                "Website activation response exceeds the configured limit."
+            )
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise WebsiteResponseError(
+                "Website activation response was not valid JSON."
+            ) from None
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"schema_version", "activations"}
+            or type(payload.get("schema_version")) is not int
+            or payload["schema_version"] != 1
+            or not isinstance(payload["activations"], list)
+            or len(payload["activations"]) > MAX_WEBSITE_ACTIVATIONS
+        ):
+            raise WebsiteResponseError(
+                "Website activation response did not match the expected schema."
+            )
+        return tuple(_parse_website_activation(value) for value in payload["activations"])
+
+
+def _parse_website_activation(value: object) -> WebsiteActivation:
+    fields = {
+        "activation_request_id",
+        "application_id",
+        "installation_id",
+        "platform",
+        "architecture",
+        "app_version",
+        "status",
+        "flag_reason",
+        "created_at",
+        "updated_at",
+        "authorized_at",
+        "revoked_at",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise WebsiteResponseError(
+            "Website activation record did not match the expected contract."
+        )
+    string_fields = (
+        "activation_request_id",
+        "application_id",
+        "installation_id",
+        "platform",
+        "architecture",
+        "app_version",
+        "status",
+        "created_at",
+        "updated_at",
+    )
+    if any(not isinstance(value.get(field), str) for field in string_fields):
+        raise WebsiteResponseError(
+            "Website activation record did not match the expected contract."
+        )
+    if (
+        not _is_application_id(value["activation_request_id"])
+        or not _is_application_id(value["application_id"])
+        or re.fullmatch(r"dev_[0-9a-f]{32}", value["installation_id"]) is None
+        or value["platform"] not in {"windows", "linux"}
+        or value["architecture"] != "x86_64"
+        or len(value["app_version"]) > 64
+        or value["status"] not in ACTIVATION_STATUSES
+        or (
+            value["flag_reason"] is not None
+            and (
+                not isinstance(value["flag_reason"], str)
+                or value["flag_reason"] not in ACTIVATION_FLAG_REASONS
+            )
+        )
+    ):
+        raise WebsiteResponseError(
+            "Website activation record did not match the expected contract."
+        )
+    for field in ("created_at", "updated_at"):
+        if not _is_iso_timestamp(value[field]):
+            raise WebsiteResponseError(
+                "Website activation record did not match the expected contract."
+            )
+    nullable_timestamps = {}
+    for field in ("authorized_at", "revoked_at"):
+        timestamp = value[field]
+        if timestamp is not None and (
+            not isinstance(timestamp, str) or not _is_iso_timestamp(timestamp)
+        ):
+            raise WebsiteResponseError(
+                "Website activation record did not match the expected contract."
+            )
+        nullable_timestamps[field] = timestamp
+    return WebsiteActivation(
+        activation_request_id=value["activation_request_id"],
+        application_id=value["application_id"],
+        installation_id=value["installation_id"],
+        platform=value["platform"],
+        architecture=value["architecture"],
+        app_version=value["app_version"],
+        status=value["status"],
+        flag_reason=value["flag_reason"],
+        created_at=value["created_at"],
+        updated_at=value["updated_at"],
+        authorized_at=nullable_timestamps["authorized_at"],
+        revoked_at=nullable_timestamps["revoked_at"],
+    )
+
+
+def _is_iso_timestamp(value: str) -> bool:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def fetch_website_activations(
+    *,
+    base_url: str | None = None,
+    token: str | None = None,
+    test_mode: bool = False,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> tuple[WebsiteActivation, ...]:
+    resolved_url = base_url or os.environ.get("QS_OPERATOR_WEBSITE_URL")
+    if not resolved_url:
+        raise WebsiteSyncError("QS_OPERATOR_WEBSITE_URL is not configured.")
+    environment = os.environ.get("BETA_ENVIRONMENT", "").strip().lower()
+    local_mode = test_mode or environment in {"local", "test"}
+    client = WebsiteActivationsClient(
+        resolved_url,
+        token=token,
+        timeout=timeout,
+        allow_http_local=local_mode,
+        production=(environment == "production"),
+    )
+    return client.fetch_activations()

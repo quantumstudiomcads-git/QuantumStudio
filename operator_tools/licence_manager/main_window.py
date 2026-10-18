@@ -30,6 +30,7 @@ from .storage import StorageError, bootstrap_storage
 from .website_sync import (
     WebsiteStatusSyncError,
     WebsiteSyncError,
+    fetch_website_activations,
     sync_local_application_status,
     sync_website_applications,
 )
@@ -160,6 +161,12 @@ class LicenceManagerWindow(QMainWindow):
                     box, self.requests_table, ("All statuses", "Pending", "Authorized", "Issued"), 2)
                 self._actions(box, (("Import request…", self.import_activation),
                                     ("Authorize and issue…", self.issue_selected)))
+                self.website_activations_table = self._table(
+                    box,
+                    "Website beta activations (read-only)",
+                    ("Activation ID", "Application ID", "Installation", "Status", "Flag", "Platform", "Version"),
+                )
+                self._actions(box, (("Refresh website activations", self.refresh_website_activations),))
             elif name == "Licences":
                 self.licences_table = self._table(box, "Licences",
                     ("Licence ID", "Profile", "Issued", "Expires", "Status"))
@@ -465,6 +472,33 @@ class LicenceManagerWindow(QMainWindow):
             )
         except Exception as error:
             self._show_error("Website status sync failed", error, "Website status sync")
+
+    def refresh_website_activations(self):
+        try:
+            activations = fetch_website_activations(test_mode=self.test_mode)
+            self._fill(
+                self.website_activations_table,
+                [
+                    (
+                        activation.activation_request_id,
+                        activation.application_id,
+                        activation.installation_id,
+                        activation.status,
+                        activation.flag_reason or "",
+                        activation.platform,
+                        activation.app_version,
+                    )
+                    for activation in activations
+                ],
+                ("Activation ID", "Application ID", "Installation", "Status", "Flag", "Platform", "Version"),
+                3,
+            )
+            self._set_feedback(
+                f"Loaded {len(activations)} website activation record(s). These records are read-only.",
+                level="success",
+            )
+        except Exception as error:
+            self._show_error("Website activations unavailable", error, "Website activation refresh")
 
     def import_activation(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import Quantum Studio activation request", "", "JSON (*.json)")

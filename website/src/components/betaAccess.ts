@@ -100,11 +100,93 @@ export type CurrentBetaApplication = {
   updated_at: string;
 };
 
+export type BetaActivationStatus = 'AUTHORIZED' | 'FLAGGED' | 'REVOKED';
+
+export type CurrentBetaActivation = {
+  activation_request_id: string;
+  installation_id: string;
+  platform: 'windows' | 'linux';
+  architecture: 'x86_64';
+  app_version: string;
+  status: BetaActivationStatus;
+  created_at: string;
+  authorized_at: string | null;
+};
+
 export class BetaStatusError extends Error {
   constructor(public readonly status: number, message: string) {
     super(message);
     this.name = 'BetaStatusError';
   }
+}
+
+export async function fetchMyBetaActivations(fetchImpl: FetchLike = fetch): Promise<CurrentBetaActivation[]> {
+  const response = await fetchImpl('/api/beta/activation', {
+    credentials: 'same-origin',
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new BetaStatusError(
+      response.status,
+      response.status === 401
+        ? 'Sign in to view your beta devices.'
+        : 'Beta device status is temporarily unavailable. Please try again later.',
+    );
+  }
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new BetaStatusError(502, 'The beta device service returned an invalid response.');
+  }
+  if (
+    typeof payload !== 'object'
+    || payload === null
+    || !('activations' in payload)
+    || !Array.isArray(payload.activations)
+  ) {
+    throw new BetaStatusError(502, 'The beta device service returned an invalid response.');
+  }
+  return payload.activations.map((activation: unknown) => {
+    const expectedFields = [
+      'activation_request_id', 'installation_id', 'platform', 'architecture',
+      'app_version', 'status', 'created_at', 'authorized_at',
+    ];
+    if (
+      typeof activation !== 'object'
+      || activation === null
+      || Object.keys(activation).length !== expectedFields.length
+      || expectedFields.some((field) => !(field in activation))
+      || !('activation_request_id' in activation)
+      || typeof activation.activation_request_id !== 'string'
+      || !('installation_id' in activation)
+      || typeof activation.installation_id !== 'string'
+      || !('platform' in activation)
+      || (activation.platform !== 'windows' && activation.platform !== 'linux')
+      || !('architecture' in activation)
+      || activation.architecture !== 'x86_64'
+      || !('app_version' in activation)
+      || typeof activation.app_version !== 'string'
+      || !('status' in activation)
+      || !['AUTHORIZED', 'FLAGGED', 'REVOKED'].includes(String(activation.status))
+      || !('created_at' in activation)
+      || typeof activation.created_at !== 'string'
+      || !('authorized_at' in activation)
+      || (activation.authorized_at !== null && typeof activation.authorized_at !== 'string')
+    ) {
+      throw new BetaStatusError(502, 'The beta device service returned an invalid response.');
+    }
+    return {
+      activation_request_id: activation.activation_request_id,
+      installation_id: activation.installation_id,
+      platform: activation.platform,
+      architecture: activation.architecture,
+      app_version: activation.app_version,
+      status: activation.status as BetaActivationStatus,
+      created_at: activation.created_at,
+      authorized_at: activation.authorized_at,
+    };
+  });
 }
 
 export function betaStatusPresentation(status: BetaApplicationStatus): {label: string; description: string} {

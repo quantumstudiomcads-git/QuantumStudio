@@ -20,6 +20,8 @@ from operator_tools.licence_manager.models import ApplicantStatus
 from operator_tools.licence_manager.signing import TestEphemeralAuthority as _TestEphemeralAuthority
 from operator_tools.licence_manager import main_window
 from operator_tools.licence_manager.website_sync import (
+    MAX_ACTIVATION_RESPONSE_BYTES,
+    WebsiteActivation,
     MAX_RESPONSE_BYTES,
     MAX_STATUS_RESPONSE_BYTES,
     WebsiteAuthenticationError,
@@ -29,9 +31,11 @@ from operator_tools.licence_manager.website_sync import (
     WebsiteStatusSyncClient,
     WebsiteStatusSyncError,
     WebsiteStatusSyncResult,
+    WebsiteActivationsClient,
     WebsiteSyncClient,
     WebsiteSyncError,
     WebsiteSyncResult,
+    fetch_website_activations,
     resolve_operator_sync_token,
     sync_local_application_status,
     sync_website_applications,
@@ -773,6 +777,146 @@ def test_local_pages_d1_sync_through_actual_licence_manager_ui(app, tmp_path):
     finally:
         window.close()
         db.close()
+
+
+def _website_activation_record(**overrides):
+    record = {
+        "activation_request_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "application_id": APPLICATION_ID,
+        "installation_id": f"dev_{'a' * 32}",
+        "platform": "linux",
+        "architecture": "x86_64",
+        "app_version": "0.1.0",
+        "status": "AUTHORIZED",
+        "flag_reason": None,
+        "created_at": "2026-10-01T00:00:00.000Z",
+        "updated_at": "2026-10-01T00:00:00.000Z",
+        "authorized_at": "2026-10-01T00:00:00.000Z",
+        "revoked_at": None,
+    }
+    record.update(overrides)
+    return record
+
+
+def test_operator_activation_client_uses_read_only_endpoint_and_strict_contract(monkeypatch):
+    body = json.dumps({
+        "schema_version": 1,
+        "activations": [_website_activation_record()],
+    }).encode()
+    opener = patch_status_response(monkeypatch, body)
+    result = WebsiteActivationsClient(
+        "https://website.example.test/base/",
+        TEST_TOKEN,
+        timeout=3,
+    ).fetch_activations()
+    assert result == (WebsiteActivation(**_website_activation_record()),)
+    assert opener.request.full_url == (
+        "https://website.example.test/base/api/operator/activations"
+    )
+    assert opener.request.get_method() == "GET"
+    assert opener.request.get_header("Authorization") == f"Bearer {TEST_TOKEN}"
+    assert opener.timeout == 3
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"{",
+        b'{"schema_version":2,"activations":[]}',
+        b'{"schema_version":true,"activations":[]}',
+        b'{"schema_version":1,"activations":[],"users":[]}',
+        json.dumps({"schema_version": 1, "activations": [{
+            **_website_activation_record(),
+            "email": "private@example.test",
+        }]}).encode(),
+        json.dumps({"schema_version": 1, "activations": [{
+            **_website_activation_record(),
+            "status": "ISSUED",
+        }]}).encode(),
+    ],
+)
+def test_operator_activation_client_rejects_malformed_or_sensitive_payloads(
+    monkeypatch, body
+):
+    patch_status_response(monkeypatch, body)
+    with pytest.raises(WebsiteResponseError):
+        WebsiteActivationsClient(
+            "https://website.example.test", TEST_TOKEN
+        ).fetch_activations()
+
+
+def test_operator_activation_client_bounds_http_and_production_transport(monkeypatch):
+    with pytest.raises(WebsiteSyncError, match="HTTP"):
+        WebsiteActivationsClient("http://127.0.0.1:8788", TEST_TOKEN)
+    with pytest.raises(WebsiteSyncError, match="HTTPS"):
+        WebsiteActivationsClient(
+            "http://127.0.0.1:8788",
+            TEST_TOKEN,
+            allow_http_local=True,
+            production=True,
+        )
+    patch_status_response(
+        monkeypatch,
+        b"",
+        content_length=str(MAX_ACTIVATION_RESPONSE_BYTES + 1),
+    )
+    with pytest.raises(WebsiteResponseError, match="limit"):
+        WebsiteActivationsClient(
+            "https://website.example.test", TEST_TOKEN
+        ).fetch_activations()
+
+
+def test_operator_activation_client_redacts_token_and_rejects_non_success(monkeypatch, caplog):
+    token = "activation-token-must-not-leak"
+    opener = patch_status_response(
+        monkeypatch,
+        b"",
+        error=HTTPError(
+            "https://website.example.test/api/operator/activations",
+            503,
+            f"private response mentioned {token}",
+            {},
+            None,
+        ),
+    )
+    with pytest.raises(WebsiteResponseError) as raised:
+        WebsiteActivationsClient("https://website.example.test", token).fetch_activations()
+    assert token not in str(raised.value)
+    assert token not in caplog.text
+    assert opener.request.get_method() == "GET"
+
+
+def test_fetch_website_activations_uses_local_environment(monkeypatch):
+    monkeypatch.setenv("QS_OPERATOR_WEBSITE_URL", "http://127.0.0.1:8788")
+    monkeypatch.setenv("QS_OPERATOR_SYNC_TOKEN", TEST_TOKEN)
+    monkeypatch.setenv("BETA_ENVIRONMENT", "local")
+    monkeypatch.setattr(
+        "operator_tools.licence_manager.website_sync.WebsiteActivationsClient.fetch_activations",
+        lambda self: (),
+    )
+    assert fetch_website_activations() == ()
+
+
+def test_ui_refresh_action_displays_read_only_remote_activations(app, database, monkeypatch):
+    activation = WebsiteActivation(**_website_activation_record(flag_reason="DEVICE_LIMIT", status="FLAGGED"))
+    monkeypatch.setattr(
+        main_window,
+        "fetch_website_activations",
+        lambda **_kwargs: (activation,),
+    )
+    window = LicenceManagerWindow(test_mode=True, database=database)
+    try:
+        _button(window, "Refresh website activations").click()
+        assert window.website_activations_table.rowCount() == 1
+        assert window.website_activations_table.item(0, 3).text() == "FLAGGED"
+        assert window.website_activations_table.item(0, 4).text() == "DEVICE_LIMIT"
+        assert window.requests_table.rowCount() == 0
+        assert database.connection.execute(
+            "SELECT COUNT(*) FROM activation_requests"
+        ).fetchone()[0] == 0
+        assert "read-only" in window.feedback.text()
+    finally:
+        window.close()
 
 
 def test_local_pages_d1_operator_status_push_flow(app, tmp_path, monkeypatch):

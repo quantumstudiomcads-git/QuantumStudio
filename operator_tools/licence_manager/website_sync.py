@@ -5,7 +5,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib import error, parse, request
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, build_opener
@@ -82,6 +82,12 @@ class WebsiteActivation:
     updated_at: str
     authorized_at: str | None
     revoked_at: str | None
+    device_public_key_hash: str | None = None
+    licence_id: str | None = None
+    licence_status: str | None = None
+    licence_issued_at: str | None = None
+    licence_expires_at: str | None = None
+    licence_revoked_at: str | None = None
 
 
 def resolve_operator_sync_token() -> str:
@@ -527,7 +533,11 @@ def _parse_website_activation(value: object) -> WebsiteActivation:
         "authorized_at",
         "revoked_at",
     }
-    if not isinstance(value, dict) or set(value) != fields:
+    optional = {
+        "device_public_key_hash", "licence_id", "licence_status",
+        "licence_issued_at", "licence_expires_at", "licence_revoked_at",
+    }
+    if not isinstance(value, dict) or not fields <= set(value) or set(value) - fields - optional:
         raise WebsiteResponseError(
             "Website activation record did not match the expected contract."
         )
@@ -580,6 +590,22 @@ def _parse_website_activation(value: object) -> WebsiteActivation:
                 "Website activation record did not match the expected contract."
             )
         nullable_timestamps[field] = timestamp
+    digest = value.get("device_public_key_hash")
+    if digest is not None and (
+        not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or value["installation_id"] != "dev_" + digest[:32]
+    ):
+        raise WebsiteResponseError("Website activation public identity is invalid.")
+    for name in ("licence_issued_at", "licence_expires_at", "licence_revoked_at"):
+        stamp = value.get(name)
+        if stamp is not None and (not isinstance(stamp, str) or not _is_iso_timestamp(stamp)):
+            raise WebsiteResponseError("Website licence timestamp is invalid.")
+    licence_id = value.get("licence_id")
+    if licence_id is not None and (not isinstance(licence_id, str)
+            or not licence_id.startswith("lic_") or not _is_application_id(licence_id[4:])):
+        raise WebsiteResponseError("Website licence identifier is invalid.")
+    if value.get("licence_status") not in (None, "ISSUED"):
+        raise WebsiteResponseError("Website licence status is invalid.")
     return WebsiteActivation(
         activation_request_id=value["activation_request_id"],
         application_id=value["application_id"],
@@ -593,6 +619,7 @@ def _parse_website_activation(value: object) -> WebsiteActivation:
         updated_at=value["updated_at"],
         authorized_at=nullable_timestamps["authorized_at"],
         revoked_at=nullable_timestamps["revoked_at"],
+        **{name: value.get(name) for name in optional},
     )
 
 
@@ -624,3 +651,103 @@ def fetch_website_activations(
         production=(environment == "production"),
     )
     return client.fetch_activations()
+
+
+class WebsiteLicenceSyncError(WebsiteSyncError):
+    """Safe operator-facing failure confined to the licence metadata bridge."""
+
+
+class WebsiteLicenceResponseError(WebsiteLicenceSyncError):
+    """HTTP/API response failure; arbitrary server content is never displayed."""
+
+
+class WebsiteLicenceMetadataClient:
+    def __init__(self, base_url, token=None, *, test_mode=False, timeout=DEFAULT_TIMEOUT_SECONDS):
+        if not test_mode:
+            raise WebsiteLicenceSyncError("Licence metadata sync requires TEST MODE.")
+        try:
+            self.base_url, _ = _validated_base_url(
+                base_url, allow_http_local=True,
+                production=os.environ.get("BETA_ENVIRONMENT", "").strip().lower() == "production")
+        except (WebsiteSyncError, ValueError):
+            raise WebsiteLicenceSyncError("Licence metadata website URL is invalid; use HTTPS or local loopback HTTP.") from None
+        self.token = token if token is not None else os.environ.get("QS_OPERATOR_LICENCE_SYNC_TOKEN")
+        if not isinstance(self.token, str) or not self.token or self.token.strip() != self.token:
+            raise WebsiteLicenceSyncError("QS_OPERATOR_LICENCE_SYNC_TOKEN is missing or invalid; configure the dedicated licence write credential.")
+        self.timeout = timeout
+
+    def push_issued_licence(self, activation, envelope):
+        if (activation.status != "AUTHORIZED" or not _is_application_id(activation.activation_request_id)
+                or envelope.get("device_id") != activation.installation_id
+                or not activation.device_public_key_hash
+                or envelope.get("device_public_key_hash") != activation.device_public_key_hash):
+            raise WebsiteLicenceSyncError("Local licence does not match an AUTHORIZED website activation.")
+        try:
+            issued, expires = envelope["issued_at"], envelope["expires_at"]
+            if type(issued) is not int or type(expires) is not int or expires <= issued:
+                raise ValueError
+            licence_id = envelope["licence_id"]
+            if not isinstance(licence_id, str) or not licence_id.startswith("lic_") or not _is_application_id(licence_id[4:]):
+                raise ValueError
+            metadata = {
+                "schema_version": 1, "installation_id": activation.installation_id,
+                "licence_id": licence_id, "status": "ISSUED",
+                "issued_at": datetime.fromtimestamp(issued, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                "expires_at": datetime.fromtimestamp(expires, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                "revoked_at": None,
+            }
+        except (KeyError, ValueError, TypeError, OverflowError, OSError):
+            raise WebsiteLicenceSyncError("Stored licence metadata is invalid.") from None
+        req = request.Request(
+            f"{self.base_url}/api/operator/activations/{parse.quote(activation.activation_request_id, safe='')}/licence",
+            data=json.dumps(metadata, separators=(",", ":")).encode(),
+            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json", "Accept": "application/json"},
+            method="POST")
+        try:
+            with build_opener(_NoRedirectHandler()).open(req, timeout=self.timeout) as response:
+                if response.status != 200:
+                    raise WebsiteLicenceResponseError(f"Licence metadata endpoint returned HTTP {response.status}.")
+                body = response.read(MAX_STATUS_RESPONSE_BYTES + 1)
+        except HTTPError as exc:
+            message = f"Licence metadata sync failed (HTTP {exc.code})."
+            # Never echo server text, reason phrases, headers, URLs, or credentials.
+            known = {
+                "invalid_metadata": "Check the seven metadata fields and timestamp order.",
+                "invalid_activation_id": "The activation identifier is invalid.",
+                "activation_not_found": "The matching activation was not found.",
+                "activation_not_authorized": "The activation is not AUTHORIZED.",
+                "licence_metadata_conflict": "Website metadata conflicts with the stored licence.",
+                "unauthorized": "The dedicated licence write credential was rejected.",
+                "forbidden": "The dedicated licence write credential was rejected.",
+                "service_unavailable": "The metadata service is unavailable.",
+                "test_only": "This endpoint is disabled in production.",
+                "activation_changed": "Activation state changed; refresh before retrying.",
+            }
+            try:
+                body = exc.read(MAX_STATUS_RESPONSE_BYTES + 1)
+                data = json.loads(body.decode()) if len(body) <= MAX_STATUS_RESPONSE_BYTES else None
+                problem = data.get("error") if isinstance(data, dict) else None
+                code = problem.get("code") if isinstance(problem, dict) else None
+                if isinstance(code, str) and code in known:
+                    message += f" {code}: {known[code]}"
+            except (ValueError, UnicodeDecodeError, OSError):
+                pass  # Keep the safe HTTP status for unreadable error responses.
+            raise WebsiteLicenceResponseError(message) from None
+        except (error.URLError, TimeoutError, OSError):
+            raise WebsiteLicenceSyncError("Unable to reach the licence metadata endpoint.") from None
+        try:
+            data = json.loads(body.decode()) if len(body) <= MAX_STATUS_RESPONSE_BYTES else None
+        except (ValueError, UnicodeDecodeError):
+            data = None
+        if (not isinstance(data, dict) or set(data) != {"schema_version", "result"}
+                or type(data.get("schema_version")) is not int or data["schema_version"] != 1
+                or data.get("result") not in ("updated", "already_current")):
+            raise WebsiteLicenceResponseError("Licence metadata endpoint returned an invalid response.")
+        return data["result"]
+
+
+def sync_website_test_licence_metadata(activation, envelope, *, test_mode=False, base_url=None, token=None):
+    client = WebsiteLicenceMetadataClient(
+        base_url or os.environ.get("QS_OPERATOR_WEBSITE_URL", ""), token,
+        test_mode=test_mode)
+    return client.push_issued_licence(activation, envelope)

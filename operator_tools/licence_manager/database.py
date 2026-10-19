@@ -10,7 +10,7 @@ from .audit import append_event
 from .models import ApplicantStatus, TRANSITIONS
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _PII_CONTEXT = {"application": "quantum-studio-licence-manager", "schema_id": "operator.sqlite3/applicants/encrypted-pii-v1",
                 "table": "applicants", "record_id": None, "field": "encrypted_pii"}
 
@@ -83,6 +83,12 @@ class Database:
                 raise sqlite3.DatabaseError("Storage generation does not match the protected data key.")
         if not db.execute("SELECT 1 FROM schema_migrations WHERE version=4").fetchone():
             db.execute("INSERT INTO schema_migrations VALUES(4,datetime('now'))")
+        db.execute("""CREATE TABLE IF NOT EXISTS website_activation_licences(
+            activation_request_id TEXT PRIMARY KEY,
+            application_id TEXT NOT NULL, installation_id TEXT NOT NULL,
+            device_public_key_hash TEXT NOT NULL, licence_id TEXT UNIQUE NOT NULL,
+            envelope_json TEXT NOT NULL, audit_event_id TEXT NOT NULL)""")
+        db.execute("INSERT OR IGNORE INTO schema_migrations VALUES(5,datetime('now'))")
         db.commit()
 
     def transaction(self):

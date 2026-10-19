@@ -14,11 +14,11 @@ The Website → Licence Manager applicant pull is read-only and imports the fetc
 
 The explicit Licence Manager → Website status push mirrors only `APPLIED`, `UNDER_REVIEW`, `APPROVED`, and `REJECTED`. Local SQLite is re-read immediately before the push and remains the source of truth. The write endpoint accepts only a version-1 status body, validates the existing website workflow transition, conditionally updates the expected D1 state, and appends a controlled `OPERATOR_STATUS_SYNC` event. Retries already reflected in D1 succeed without a duplicate transition audit; concurrent unexpected status changes fail with conflict. This write capability uses the distinct `QS_OPERATOR_STATUS_SYNC_TOKEN` / Cloudflare `OPERATOR_STATUS_SYNC_TOKEN` bearer credential, never the read-only token. Local status decisions are not rolled back when the website is unavailable; the UI reports the mirror stale and permits an explicit retry.
 
-Beta device activation is a separate website record from the existing signed, locally imported activation request. The authenticated `POST /api/beta/activation` endpoint derives the account and linked application from the session, reuses the desktop's stable `dev_` installation identity, and evaluates the current application entitlement automatically. An approved application can authorize devices up to `BETA_MAX_ACTIVE_DEVICES` (default 2); non-eligible applications and excess devices are recorded as flagged rather than being granted access. Repeating the same installation is idempotent, and an existing revoked installation is not reactivated by retry. `GET /api/beta/activation` exposes only that account's device summary. The separate read-only `GET /api/operator/activations` export uses the existing `OPERATOR_SYNC_TOKEN` bearer credential and contains device/application identifiers and controlled status fields, but no account identity or applicant PII. Licence Manager displays these website records separately from local signed activation requests; they cannot enter its local authorize-and-issue path. This does not issue a licence, sign data, or replace human review of the beta application.
+Beta device activation is a separate website record from the existing signed, locally imported activation request. The authenticated `POST /api/beta/activation` endpoint derives the account and linked application from the session, reuses the desktop's stable `dev_` installation identity, and evaluates the current application entitlement automatically. An approved application can authorize devices up to `BETA_MAX_ACTIVE_DEVICES` (default 2); non-eligible applications and excess devices are recorded as flagged rather than being granted access. Repeating the same installation is idempotent, and an existing revoked installation is not reactivated by retry. `GET /api/beta/activation` exposes only that account's device summary. The separate read-only `GET /api/operator/activations` export uses the existing `OPERATOR_SYNC_TOKEN` bearer credential and contains device/application identifiers and controlled status fields, but no account identity or applicant PII. Licence Manager displays these website records separately from local signed activation requests; they never enter the legacy local authorize-and-issue path. The separate Milestone 5 TEST path described below consumes an already AUTHORIZED website activation without a second approval.
 
 Authenticated website users can read their own beta application's public status through `GET /api/beta/me`. New submissions store the authenticated `users.user_id` in the nullable `beta_applications.user_id` foreign key; a partial unique index prevents a second application for the same user until reapplication is explicitly designed. The endpoint returns only application ID, status, and submission/update timestamps. Existing rows with a null user ID are not linked by email and will remain unavailable to the account status view unless associated through a future reviewed process or an explicit test fixture.
 
-The automatic activation record is an entitlement/installation registry, not a delivered signed licence. Desktop enforcement integration, remote device revocation management, licence issuance/revocation metadata sync, and synchronization of the rich signed activation-request format are not implemented. Signing remains entirely local. The production Cloudflare secrets and deployment are not configured.
+The automatic activation record is an entitlement/installation registry, not a delivered signed licence. Desktop enforcement integration, remote device revocation management, production issuance, remote revocation metadata sync, and synchronization of the rich signed activation-request format are not implemented. Signing remains entirely local. The production Cloudflare secrets and deployment are not configured.
 
 Production authority status is metadata-only: it checks metadata syntax and public-key encoding plus protected-blob file presence. A present protected blob is reported as unverified, never as ready or currently valid. Startup, refresh, review, imports, and profile selection do not decrypt the licence key. The normal production DPAPI-unprotect path is reached only after issuance authorization and request/device/policy validation have been repeated inside `BEGIN IMMEDIATE`. Private-key references are released immediately after signing and are not cached on the authority object. Python cannot guarantee complete memory zeroization; process or Windows-account compromise defeats this boundary. A last-use success shown during the running manager session is historical evidence and does not verify the current protected blob.
 
@@ -45,3 +45,65 @@ Revocation records the operator's local administrative decision. A delivered off
 Windows and Linux package audits reject forbidden paths and known sensitive content independently of filename extensions. The authoritative Windows build writes a canonical, versioned `quantumstudio-payload-inventory.json` after the payload and both metadata files are final. It records the exact relative path, byte size, and SHA-256 of every other payload file. The installer rejects legacy bundles without this inventory, checks metadata consistency and the exact file set, streams hashes, performs content-sensitive checks, then rechecks before ISCC. SQLite database/journal/WAL signatures, PEM private-key material, manager protected-key markers and known operator records, receipts, and pre-issued licences are rejected. Recognized archive/container formats are forbidden rather than unpacked. Linux AppImage staging reuses the content-sensitive audit but does not yet use the Windows inventory format.
 
 This detects known formats and verifies the inventoried bundle; it cannot classify every possible encrypted or arbitrary byte sequence. Clean source and build-host controls remain part of the release trust boundary. These checks and focused tests do not prove safety from a completed customer build. The customer front end does not import this package. The manager remains excluded from customer Nuitka bundles, installers, AppImages, update manifests, release ZIPs, Engine Packs, and website builds.
+
+
+## Milestone 5: TEST website activation licences
+
+Inspected baseline: clean `beta-hardening-v0.2` at `9a392c6`. Website activation
+entitlement checks remain automatic. The desktop public identity is SHA-256 of
+its Ed25519 public key, with installation ID `dev_` plus the first 32 hex digits.
+Verifier binding requires the full 64-digit hash. Activation POST now optionally
+accepts `device_public_key_hash`, validates the existing identity convention,
+and stores it without permitting a later conflicting hash. Four-field legacy
+requests remain supported; records without the full hash cannot be issued a
+TEST licence. No private device key or hardware fingerprint is uploaded. This
+registry is not a proof-of-possession protocol; production device authentication
+and desktop enforcement integration remain future work.
+
+Local schema v5 adds `website_activation_licences`, separate from legacy
+`activation_requests` and `licences`. Its primary key is the stable website
+activation ID; its unique licence ID, application/installation IDs, public hash,
+original signed envelope and audit event commit in one `BEGIN IMMEDIATE`
+transaction. A repeat with the same identity returns the original envelope
+before signing; conflicting identities fail. No second applicant status/profile
+approval is introduced. `issue_website_activation_for_testing` accepts only the
+existing TEST authority, uses the existing PROFESSOR_BETA policy and 90-day
+licence format, and never invokes ProductionAuthority. A verified complete v4
+storage pair can migrate to v5 after the existing protected-generation checks;
+incomplete pairs still fail closed.
+
+`TestEphemeralAuthority` is unchanged: every process creates a new private key.
+The persisted envelope and public signing metadata survive restart; the new key
+does not re-sign or replace a previous licence. A verifier trusting only the
+new key rejects old envelopes. The original public key can verify the original
+signature when explicitly supplied, but there is no production trust/delivery
+mechanism here. UI identifies an envelope from a prior TEST key. Plain
+`--test-mode` remains disposable; explicit `--test-data-root` uses isolated
+persistent storage through the existing Windows protected-data bootstrap.
+The TEST signing key is never persisted.
+
+D1 migration `0006_beta_activation_licences.sql` adds the optional full public
+hash and five licence metadata columns. The bounded read-only operator export
+includes those safe fields. The public account device summary is unchanged.
+`POST /api/operator/activations/:activationId/licence` accepts exactly:
+`schema_version: 1`, matching `installation_id`, UUID-based `licence_id`,
+`status: ISSUED`, timezone-bearing `issued_at` and later `expires_at`, and
+`revoked_at: null`. This milestone supports issuance metadata only. It returns
+`{schema_version: 1, result: updated|already_current}`. Conflicts and non-authorized
+activations are rejected. Updates are conditional; retries never replace an
+existing different licence. The endpoint is disabled in production and uses
+only `OPERATOR_LICENCE_SYNC_TOKEN`, independent of read/status tokens. The
+manager uses the matching `QS_OPERATOR_LICENCE_SYNC_TOKEN` process variable.
+
+The UI keeps website activations separate, displays local/remote licence IDs,
+disables duplicate issuance and permits independent metadata retries. Local
+issuance does not depend on a successful metadata push. The client serializes
+an explicit seven-field allowlist, never a signed envelope. HTTP/API errors use
+licence-specific exceptions and bounded parsing with allowlisted validation
+codes and locally defined safe messages; arbitrary server text and credentials
+are never displayed. Missing write credentials are also explicit. Application
+pull, review-status push and legacy issuance behavior are unchanged.
+
+Automatic issuance scheduling, production signing/trust configuration, licence
+delivery/export from this new view, remote revocation, and customer enforcement
+integration are deferred. No remote migration or deployment is performed.

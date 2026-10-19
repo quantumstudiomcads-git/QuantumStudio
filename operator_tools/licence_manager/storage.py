@@ -216,7 +216,9 @@ def _validate_existing_database(database_path: Path, generation: str | None) -> 
             if "schema_migrations" not in tables:
                 raise IncompleteInitializationError("Licence Manager database schema completion cannot be proven; preserve the database, key, and pending recovery record for manual inspection or matched-backup restoration.")
             versions = {row[0] for row in connection.execute("SELECT version FROM schema_migrations")}
-            if versions != set(range(1, SCHEMA_VERSION + 1)):
+            # A complete v4 pair is the last verified baseline and can migrate
+            # transactionally to v5 after its generation/metadata checks pass.
+            if versions not in (set(range(1, 5)), set(range(1, SCHEMA_VERSION + 1))):
                 raise IncompleteInitializationError("Licence Manager database schema completion cannot be proven; preserve the database, key, and pending recovery record for manual inspection or matched-backup restoration.")
         finally:
             connection.close()

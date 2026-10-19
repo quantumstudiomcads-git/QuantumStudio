@@ -149,7 +149,7 @@ class LicenceManagerTests(unittest.TestCase):
         return int(datetime.fromisoformat(self.request["created_at"].replace("Z", "+00:00")).timestamp()) + 1
 
     def test_database_migration_and_encrypted_pii_round_trip(self):
-        self.assertEqual(self.db.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 4)
+        self.assertEqual(self.db.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 5)
         self.assertEqual(self.db.applicant_pii(self.application_id)["email"], "ada@example.test")
         raw = self.db.path.read_bytes()
         for secret in ("Ada Beta Fixture", "ada@example.test", "Example Institute", "local test only"):
@@ -167,7 +167,7 @@ class LicenceManagerTests(unittest.TestCase):
         self.addCleanup(upgraded.close)
         columns = {row[1] for row in upgraded.connection.execute("PRAGMA table_info(activation_requests)")}
         self.assertIn("authorized_profile", columns)
-        self.assertEqual(upgraded.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 4)
+        self.assertEqual(upgraded.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 5)
 
     def test_raw_pii_keys_are_test_only_and_json_duplicate_fields_reject(self):
         with self.assertRaises(ProtectionUnavailable): DataProtector(b"K" * 32)

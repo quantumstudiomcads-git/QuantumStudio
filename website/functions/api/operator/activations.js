@@ -22,6 +22,12 @@ const ACTIVATION_FIELDS = Object.freeze([
   'updated_at',
   'authorized_at',
   'revoked_at',
+  'device_public_key_hash',
+  'licence_id',
+  'licence_status',
+  'licence_issued_at',
+  'licence_expires_at',
+  'licence_revoked_at',
 ]);
 
 function jsonResponse(status, payload) {

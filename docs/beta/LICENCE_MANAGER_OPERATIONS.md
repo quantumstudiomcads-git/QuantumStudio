@@ -2,7 +2,7 @@
 
 ## Current gate status
 
-The production signing authority is intentionally unavailable. P1 creates no production licence key and must not be used to issue or deliver real licences. `--test-mode` is for automated tests and disposable demonstrations only; it creates an ephemeral signing key in memory and temporary operator data. TEST ONLY issuance is a separate API and cannot be selected as a production fallback. No supported generic DPAPI unprotect function exists.
+The production signing authority is intentionally unavailable. P1 creates no production licence key and must not be used to issue or deliver real licences. `--test-mode` is for local tests and demonstrations only; without `--test-data-root`, it creates an ephemeral signing key in memory and temporary operator data. TEST ONLY issuance is a separate API and cannot be selected as a production fallback. No supported generic DPAPI unprotect function exists.
 
 The production operator data root is `%LOCALAPPDATA%\QuantumStudio\LicenceManager`. SQLite stores encrypted applicant details, status history, validated activation request fields, licences, public signing metadata, schema migrations, and audit events. Back up the database and DPAPI-wrapped data key together using an approved encrypted backup process. Do not copy the protected files to an untrusted workstation. Applicant email is trimmed, NFC-normalized, case-folded, and NFC-normalized again before keyed indexing. A normalized email may identify only one local application; duplicates are rejected, including rejected applicants, until a separately reviewed reapplication process exists. The keyed index protects equality lookup but, if its key is compromised, likely email addresses can be guessed offline.
 
@@ -16,7 +16,7 @@ The applicant pull reports fetched, newly imported, duplicate, and rejected coun
 
 After locally reviewing an application, select it and use **Sync status to website** to explicitly mirror its current locally stored review status (`APPLIED`, `UNDER_REVIEW`, `APPROVED`, or `REJECTED`). The manager reloads the status from local SQLite immediately before sending it. Local approval/rejection works independently of website availability. A failed push leaves the local decision unchanged and reports the website mirror as stale; retry the explicit action when connectivity and authentication are available. The write bridge uses the separate `QS_OPERATOR_STATUS_SYNC_TOKEN` setting and Cloudflare `OPERATOR_STATUS_SYNC_TOKEN` secret; never reuse the read-only `OPERATOR_SYNC_TOKEN` or place either real token in `wrangler.toml`. The example file contains only the empty status-token setting.
 
-Website status is a mirror, not the decision authority. Licence issuance/revocation metadata sync and synchronization of rich signed activation-request files are not implemented. Signing remains entirely local. Production Cloudflare secrets/deployment are not configured.
+Website status is a mirror, not the decision authority. TEST issuance metadata sync is described below. Production issuance, remote revocation sync and synchronization of rich signed activation-request files are not implemented. Signing remains entirely local. Production Cloudflare secrets/deployment are not configured.
 
 New beta applications submitted by signed-in users are associated with the authenticated account ID, not matched to an account by email. The account's `/beta-access` page shows a status card instead of another form once its application exists; `/account` includes the same compact status summary. Historical applications with no `user_id` are not automatically backfilled by email and therefore do not appear as linked account applications. Local testing should create a linked application through the authenticated submission flow or use an explicit fixture.
 
@@ -24,9 +24,9 @@ New beta applications submitted by signed-in users are associated with the authe
 
 An approved beta applicant can register an installation through the authenticated `POST /api/beta/activation` endpoint. The endpoint uses the signed-in account and its linked application; clients cannot submit an account ID, application ID, activation status, or licence claim. It accepts the desktop's stable installation ID (`dev_` plus the public-key hash prefix), platform, architecture, and application version. No hardware fingerprint is collected. An approved application is automatically authorized up to `BETA_MAX_ACTIVE_DEVICES` active installations per account (default 2; configured values must be integers from 1 through 20). A non-eligible application or an installation over the limit is flagged for support rather than automatically authorized. Repeating a registration is idempotent; an installation already marked revoked remains revoked.
 
-The authenticated `/account` page shows each user's own compact device ID, platform, and safe status. The operator's **Activation Requests** page has a separate **Refresh website activations** view that reads through `/api/operator/activations` using the existing read-only `QS_OPERATOR_SYNC_TOKEN` / `OPERATOR_SYNC_TOKEN` bearer credential. It is display-only and does not add website rows to local activation requests, grant a profile, issue a licence, or invoke signing. The endpoint requires HTTPS in production; local HTTP use is only for local Pages testing. No production token is configured or committed.
+The authenticated `/account` page shows each user's own compact device ID, platform, and safe status. The operator's **Activation Requests** page has a separate **Refresh website activations** view that reads through `/api/operator/activations` using the existing read-only `QS_OPERATOR_SYNC_TOKEN` / `OPERATOR_SYNC_TOKEN` bearer credential. It does not add website rows to local activation requests. TEST MODE provides the separate issuance and metadata actions described below. The endpoint requires HTTPS in production; local HTTP use is only for local Pages testing. No production token is configured or committed.
 
-These beta activation records are not the rich signed activation-request files consumed by the local Licence Manager. No automatic licence issuance, desktop enforcement integration, remote device revoke/manage action, activation write-back, or production deployment is part of this milestone. Website applications without an authenticated `user_id` remain unlinked; there is no email-based backfill.
+These beta activation records are not the rich signed activation-request files consumed by the local Licence Manager. No automatic issuance scheduler, desktop enforcement integration, remote device revoke/manage action, or production deployment is part of this milestone. Website applications without an authenticated `user_id` remain unlinked; there is no email-based backfill.
 
 For manual import, wrap the current website beta-admin applicant export in the strict envelope `{"schema_version":1,"applications":[...]}`. The importer maps the existing D1 export fields and accepts only known version-1 fields. Review applications locally and approve only after operator review.
 
@@ -60,3 +60,51 @@ The manager has no destructive reset or “start over” action. CurrentUser DPA
 CurrentUser DPAPI protects against offline access by other Windows accounts, not compromise of the logged-in account/session. The audit chain records tampering but cannot defeat a fully compromised administrator. The issuance boundary limits supported manager code and untrusted imports; it is not Python process isolation. Same-user arbitrary code can invoke Windows DPAPI directly; arbitrary code execution in the operator process or compromise of the Windows account defeats this boundary. No production key ceremony or production database migration has been performed.
 
 Audit verification detects modified events, removed middle events, and reordering. The current audit head is not anchored outside SQLite. An administrator with database write access can truncate the tail, replace the complete history and recompute its hashes, or restore an older database snapshot without detection. The hash chain is tamper evidence, not append-only immutability.
+
+
+## Milestone 5 local TEST QA
+
+1. Apply migrations through `0006_beta_activation_licences.sql` to LOCAL D1
+   only: from `website`, run `npm run d1:migrate:local`. Never add `--remote`.
+2. Configure distinct local website secrets `OPERATOR_SYNC_TOKEN`,
+   `OPERATOR_STATUS_SYNC_TOKEN`, and `OPERATOR_LICENCE_SYNC_TOKEN` in ignored
+   `.dev.vars`. Matching manager environment variables are
+   `QS_OPERATOR_SYNC_TOKEN`, `QS_OPERATOR_STATUS_SYNC_TOKEN`, and
+   `QS_OPERATOR_LICENCE_SYNC_TOKEN`. Set `QS_OPERATOR_WEBSITE_URL` to the local
+   Pages origin and `BETA_ENVIRONMENT=local` in the manager process. The manager
+   does not load website `.dev.vars` automatically. Examples contain empty
+   placeholders only, never real credentials.
+3. Sign in as a local fixture user with an APPROVED linked application. Submit
+   activation facts plus the desktop identity's full public-key hash:
+   `{installation_id, platform, architecture, app_version, device_public_key_hash}`.
+   The ID must be `dev_` plus the first 32 digits of that 64-digit hash. Existing
+   registrations can add the matching full hash by retrying POST; old requests
+   remain compatible but cannot be issued until the hash is supplied. Never
+   invent a hash or send a private device key. AUTHORIZED is the existing
+   automatic entitlement outcome, not another operator approval.
+4. For restart QA on Windows launch from the repository with:
+   `.venv\Scripts\python.exe scripts/run_licence_manager.py --test-mode --test-data-root C:\Temp\QuantumStudio-M5-Test`.
+   Use a new isolated directory, never the production operator directory.
+   It uses existing CurrentUser DPAPI storage for the applicant-data key.
+   Without this option the default TEST database is temporary and disposable.
+5. In Activation Requests, use Refresh website activations, select an AUTHORIZED
+   row, and Issue test licence. Its local licence ID appears immediately.
+   There is no second approval dialog. FLAGGED/REVOKED or hash-incomplete rows
+   are not issuable. Use Sync licence metadata independently. Simulate a failed
+   sync or missing write credential and verify the safe specific error. Restore
+   configuration and retry; the stored licence is not replaced.
+6. Close and relaunch with the same isolated root and Windows account. Refresh
+   and select the same activation. Confirm the same local licence ID, disabled
+   issuance, enabled metadata retry, and prior-TEST-key notice. The prior signed
+   envelope is recovered unchanged. A new ephemeral signer cannot establish
+   trust for an old envelope by itself; no automatic re-signing occurs.
+7. Retry metadata sync twice and verify `updated` then `already_current` (or
+   `already_current` for both if already mirrored). The endpoint accepts exactly
+   the seven documented safe fields, authenticates only its dedicated token,
+   rejects private/extra fields and rejects conflicting existing metadata.
+
+This milestone does not deliver a production licence, persist TEST signing keys,
+update account-wide application approval status, or implement automatic issuance.
+The website account device summary continues to show activation status only.
+Manual click-through against local Pages/D1 is separate from automated offscreen
+Qt/loopback HTTP verification and must be recorded explicitly before freeze.

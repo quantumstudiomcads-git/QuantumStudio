@@ -255,3 +255,67 @@ def record_expiries(database, *, now=None, operator_id="operator"):
                             ApplicantStatus.EXPIRED.value, "licence_expired", event))
             count += 1
     return count
+
+
+def issue_website_activation_for_testing(database, test_authority, activation, *, operator_id="operator", now=None):
+    """Use an already AUTHORIZED website record, without a second approval.
+
+    Business identity and the original signed envelope survive signer restart.
+    No replacement signature is created when a new ephemeral authority is used.
+    This entry point never accepts a production signing authority.
+    """
+    from .signing import TestEphemeralAuthority
+    if not isinstance(test_authority, TestEphemeralAuthority):
+        raise IssuanceRejected("Website issuance requires the TEST ONLY authority.")
+    try:
+        valid = (
+            activation.status == "AUTHORIZED"
+            and str(uuid.UUID(activation.activation_request_id)) == activation.activation_request_id.lower()
+            and str(uuid.UUID(activation.application_id)) == activation.application_id.lower()
+            and isinstance(activation.device_public_key_hash, str)
+            and re.fullmatch(r"[0-9a-f]{64}", activation.device_public_key_hash) is not None
+            and activation.installation_id == "dev_" + activation.device_public_key_hash[:32]
+        )
+    except (ValueError, TypeError, AttributeError):
+        valid = False
+    if not valid:
+        raise IssuanceRejected("An AUTHORIZED activation with a matching full device public-key hash is required.")
+    with database.transaction() as db:
+        existing = db.execute(
+            "SELECT * FROM website_activation_licences WHERE activation_request_id=?",
+            (activation.activation_request_id,),
+        ).fetchone()
+        if existing:
+            if any(existing[field] != getattr(activation, field) for field in (
+                "application_id", "installation_id", "device_public_key_hash")):
+                raise IssuanceRejected("Website activation identity conflicts with its stored licence.")
+            return json.loads(existing["envelope_json"])
+        issued = int(now.timestamp()) if isinstance(now, datetime) else int(
+            now if now is not None else datetime.now(timezone.utc).timestamp())
+        grants = derive_profile(Profile.PROFESSOR_BETA)
+        licence_id = "lic_" + str(uuid.uuid4())
+        subject = "sub_" + activation.application_id
+        payload = {
+            "schema_version": 1, "licence_id": licence_id, "account_id": subject,
+            "subject_type": "beta_applicant", "subject_id": subject,
+            "approved_application_ref": activation.application_id,
+            "product": PRODUCT, "channel": "beta", "plan_id": "pro",
+            "device_id": activation.installation_id,
+            "device_public_key_hash": activation.device_public_key_hash,
+            "issued_at": issued, "not_before": issued,
+            "expires_at": issued + DURATION_SECONDS, "offline_until": issued + DURATION_SECONDS,
+            "entitlement_version": 1, "feature_entitlements": list(grants.features),
+            "calculation_entitlements": list(grants.calculations),
+            "registered_device_limit": 1, "concurrent_session_limit": 1, "offline_device_limit": 1,
+            "nonce": str(uuid.uuid4()), "policy_profile": Profile.PROFESSOR_BETA.value,
+            "issuer_label": "Quantum Studio Licence Manager",
+        }
+        _record_signing_metadata_in_transaction(db, test_authority, operator_id)
+        envelope = test_authority.sign_test_fixture_only(payload)
+        event = append_event(db, "successful_test_issuance", operator_id,
+                             [activation.activation_request_id, licence_id], {"source": "website_activation"})
+        db.execute("INSERT INTO website_activation_licences VALUES(?,?,?,?,?,?,?)", (
+            activation.activation_request_id, activation.application_id,
+            activation.installation_id, activation.device_public_key_hash, licence_id,
+            canonical_json(envelope).decode(), event))
+        return envelope

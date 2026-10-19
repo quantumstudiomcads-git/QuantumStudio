@@ -39,8 +39,9 @@ function parseActivationPayload(rawText) {
     !payload
     || typeof payload !== 'object'
     || Array.isArray(payload)
-    || Object.keys(payload).some((key) => !ACTIVATION_FIELDS.has(key))
-    || Object.keys(payload).length !== ACTIVATION_FIELDS.size
+    || Object.keys(payload).some((key) => !ACTIVATION_FIELDS.has(key) && key !== 'device_public_key_hash')
+    || ![ACTIVATION_FIELDS.size, ACTIVATION_FIELDS.size + 1].includes(Object.keys(payload).length)
+    || [...ACTIVATION_FIELDS].some((field) => !(field in payload))
   ) {
     return {ok: false, response: errorResponse(400, 'invalid_payload', 'Activation request contains unsupported fields.')};
   }
@@ -56,6 +57,13 @@ function parseActivationPayload(rawText) {
     || !APP_VERSION_PATTERN.test(payload.app_version)
   ) {
     return {ok: false, response: errorResponse(400, 'invalid_activation_facts', 'Activation details are invalid or unsupported.')};
+  }
+  if ('device_public_key_hash' in payload && (
+    typeof payload.device_public_key_hash !== 'string'
+    || !/^[0-9a-f]{64}$/.test(payload.device_public_key_hash)
+    || payload.installation_id !== `dev_${payload.device_public_key_hash.slice(0, 32)}`
+  )) {
+    return {ok: false, response: errorResponse(400, 'invalid_device_identity', 'Full device public-key hash must match the installation ID.')};
   }
   return {ok: true, value: payload};
 }
@@ -186,7 +194,7 @@ export async function handleActivationRequest(request, env, method) {
       INSERT INTO beta_activations (
         activation_request_id, user_id, application_id, installation_id, platform,
         architecture, app_version, status, flag_reason, created_at, updated_at,
-        authorized_at, revoked_at
+        authorized_at, revoked_at, device_public_key_hash
       )
       SELECT ?, app.user_id, app.application_id, ?, ?, ?, ?,
         CASE
@@ -222,11 +230,12 @@ export async function handleActivationRequest(request, env, method) {
           ) < ? THEN ? ELSE NULL END
           ELSE NULL
         END,
-        NULL
+        NULL, ?
       FROM beta_applications app
       WHERE app.user_id = ? AND 1 = 1
       LIMIT 1
       ON CONFLICT(user_id, installation_id) DO UPDATE SET
+        device_public_key_hash = COALESCE(beta_activations.device_public_key_hash, excluded.device_public_key_hash),
         platform = excluded.platform,
         architecture = excluded.architecture,
         app_version = excluded.app_version,
@@ -241,11 +250,15 @@ export async function handleActivationRequest(request, env, method) {
             THEN COALESCE(beta_activations.authorized_at, excluded.authorized_at)
           ELSE NULL
         END
-      WHERE beta_activations.status <> excluded.status
+      WHERE (beta_activations.device_public_key_hash IS NULL
+        OR excluded.device_public_key_hash IS NULL
+        OR beta_activations.device_public_key_hash = excluded.device_public_key_hash)
+        AND (beta_activations.status <> excluded.status
         OR beta_activations.flag_reason IS NOT excluded.flag_reason
         OR beta_activations.platform <> excluded.platform
         OR beta_activations.architecture <> excluded.architecture
         OR beta_activations.app_version <> excluded.app_version
+        OR (beta_activations.device_public_key_hash IS NULL AND excluded.device_public_key_hash IS NOT NULL))
     `).bind(
       requestId,
       installationId,
@@ -264,16 +277,20 @@ export async function handleActivationRequest(request, env, method) {
       installationId,
       maxDevices,
       now,
+      parsed.value.device_public_key_hash ?? null,
       session.userId,
     ).run();
     const activation = await env.BETA_DB.prepare(
       `SELECT activation_request_id, installation_id, platform, architecture,
-              app_version, status, created_at, updated_at, authorized_at
+              app_version, status, created_at, updated_at, authorized_at, device_public_key_hash
        FROM beta_activations
        WHERE user_id = ? AND installation_id = ?`,
     ).bind(session.userId, installationId).first();
     if (!activation || !PUBLIC_ACTIVATION_STATUSES.has(activation.status)) {
       return errorResponse(403, 'application_required', 'A linked beta application is required for device activation.');
+    }
+    if (parsed.value.device_public_key_hash && activation.device_public_key_hash !== parsed.value.device_public_key_hash) {
+      return errorResponse(409, 'device_identity_conflict', 'The installation already has a different public device identity.');
     }
     return buildJsonResponse(200, {
       activation: userActivationPayload(activation),

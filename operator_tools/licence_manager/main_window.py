@@ -22,12 +22,14 @@ from .crypto import DataProtector
 from .database import Database
 from .exports import ExportRecoveryError, export_licence
 from .imports import ImportRejected, import_activation_json, import_applicants_json
-from .issuance import IssuanceRejected, authorize_activation_profile, issue_for_request_for_testing, record_expiries, revoke_licence
+from .issuance import IssuanceRejected, authorize_activation_profile, issue_for_request_for_testing, record_expiries, revoke_licence, issue_website_activation_for_testing
 from .models import Profile
 from .paths import data_root
 from .signing import AuthorityState, ProductionAuthority, SigningUnavailable, TestEphemeralAuthority, public_key_record, record_public_metadata
 from .storage import StorageError, bootstrap_storage
 from .website_sync import (
+    WebsiteLicenceSyncError,
+    sync_website_test_licence_metadata,
     WebsiteStatusSyncError,
     WebsiteSyncError,
     fetch_website_activations,
@@ -53,22 +55,37 @@ class LicenceManagerWindow(QMainWindow):
         self.test_mode = bool(test_mode)
         self.operator_id = current_operator_id()
         self._temporary = None
+        self._owns_database = database is None
         if database is None:
-            if self.test_mode:
+            if self.test_mode and data_root_override is not None:
+                database = bootstrap_storage(data_root_override)
+            elif self.test_mode:
                 self._temporary = tempfile.TemporaryDirectory(prefix="qs-lm-test-")
                 protector = DataProtector.for_testing(os.urandom(32))
                 root = data_root_override or self._temporary.name
             else:
                 root = data_root(data_root_override)
                 database = bootstrap_storage(root)
-            if self.test_mode:
+            if self.test_mode and database is None:
                 database = Database(root, protector)
         self.database = database
         self.authority = authority or (TestEphemeralAuthority() if self.test_mode else ProductionAuthority(
             data_root(data_root_override) / "licence-signing-key.dpapi",
             data_root(data_root_override) / "licence-signing-public.json", database=database))
+        self._website_activations = ()
         self._build_ui()
         self.refresh()
+
+    def closeEvent(self, event):
+        # Release SQLite before deleting disposable Windows TEST storage.
+        # Injected databases belong to the caller and remain open.
+        if self._owns_database:
+            self.database.close()
+            self._owns_database = False
+            if self._temporary is not None:
+                self._temporary.cleanup()
+                self._temporary = None
+        super().closeEvent(event)
 
     def _build_ui(self):
         self.setStyleSheet("""
@@ -163,10 +180,18 @@ class LicenceManagerWindow(QMainWindow):
                                     ("Authorize and issue…", self.issue_selected)))
                 self.website_activations_table = self._table(
                     box,
-                    "Website beta activations (read-only)",
-                    ("Activation ID", "Application ID", "Installation", "Status", "Flag", "Platform", "Version"),
+                    "Website beta activations",
+                    ("Activation ID", "Application ID", "Installation", "Status", "Flag", "Platform", "Version", "Local licence", "Website licence", "TEST signer"),
                 )
-                self._actions(box, (("Refresh website activations", self.refresh_website_activations),))
+                actions = self._actions(box, (
+                    ("Refresh website activations", self.refresh_website_activations),
+                    ("Issue test licence", self.issue_selected_website_test_licence),
+                    ("Sync licence metadata", self.sync_selected_website_test_licence_metadata),
+                ))
+                self.issue_website_test_licence_button = actions[1]
+                self.sync_website_test_licence_button = actions[2]
+                self.website_activations_table.itemSelectionChanged.connect(self._update_website_licence_actions)
+                self._update_website_licence_actions()
             elif name == "Licences":
                 self.licences_table = self._table(box, "Licences",
                     ("Licence ID", "Profile", "Issued", "Expires", "Status"))
@@ -216,13 +241,16 @@ class LicenceManagerWindow(QMainWindow):
     @staticmethod
     def _actions(box, actions):
         row = QHBoxLayout()
+        buttons = []
         for label, callback in actions:
             button = QPushButton(label)
             button.setAccessibleName(label)
             button.clicked.connect(callback)
+            buttons.append(button)
             row.addWidget(button)
         row.addStretch()
         box.addLayout(row)
+        return buttons
 
     @staticmethod
     def _table(box, label, headers):
@@ -320,6 +348,8 @@ class LicenceManagerWindow(QMainWindow):
             return "Storage is unavailable. Preserve the existing data and request operator recovery."
         if isinstance(error, WebsiteStatusSyncError):
             return "Website status mirror is stale. The local decision is unchanged; retry when available."
+        if isinstance(error, WebsiteLicenceSyncError):
+            return str(error)
         if isinstance(error, WebsiteSyncError):
             return "Website sync could not be completed. Check the configured URL and authentication."
         return f"{action} could not be completed. No diagnostic or private data is shown here."
@@ -475,30 +505,80 @@ class LicenceManagerWindow(QMainWindow):
 
     def refresh_website_activations(self):
         try:
-            activations = fetch_website_activations(test_mode=self.test_mode)
-            self._fill(
-                self.website_activations_table,
-                [
-                    (
-                        activation.activation_request_id,
-                        activation.application_id,
-                        activation.installation_id,
-                        activation.status,
-                        activation.flag_reason or "",
-                        activation.platform,
-                        activation.app_version,
-                    )
-                    for activation in activations
-                ],
-                ("Activation ID", "Application ID", "Installation", "Status", "Flag", "Platform", "Version"),
-                3,
-            )
+            self._website_activations = fetch_website_activations(test_mode=self.test_mode)
+            self._render_website_activations()
             self._set_feedback(
-                f"Loaded {len(activations)} website activation record(s). These records are read-only.",
-                level="success",
-            )
+                f"Loaded {len(self._website_activations)} website activation record(s). Website facts are read-only; TEST issuance is local.",
+                level="success")
         except Exception as error:
             self._show_error("Website activations unavailable", error, "Website activation refresh")
+
+    def _selected_website_activation(self):
+        selected = self._selected_id(self.website_activations_table)
+        return next((item for item in self._website_activations if item.activation_request_id == selected), None)
+
+    def _local_website_licence(self, activation):
+        if activation is None:
+            return None
+        return self.database.connection.execute(
+            "SELECT licence_id,envelope_json FROM website_activation_licences WHERE activation_request_id=?",
+            (activation.activation_request_id,)).fetchone()
+
+    def _render_website_activations(self):
+        selected = self._selected_id(self.website_activations_table)
+        rows = []
+        for activation in self._website_activations:
+            local = self._local_website_licence(activation)
+            signer = ""
+            if local:
+                signer = ("Current TEST key" if json.loads(local["envelope_json"])["kid"] == self.authority.status().kid
+                          else "Prior TEST key; not re-signed")
+            rows.append((activation.activation_request_id, activation.application_id,
+                         activation.installation_id, activation.status, activation.flag_reason or "",
+                         activation.platform, activation.app_version, local["licence_id"] if local else "",
+                         activation.licence_id or "", signer))
+        self._fill(self.website_activations_table, rows,
+                   ("Activation ID", "Application ID", "Installation", "Status", "Flag", "Platform", "Version", "Local licence", "Website licence", "TEST signer"), 3)
+        for row in range(self.website_activations_table.rowCount()):
+            if self.website_activations_table.item(row, 0).text() == selected:
+                self.website_activations_table.selectRow(row)
+        self._update_website_licence_actions()
+
+    def _update_website_licence_actions(self):
+        activation = self._selected_website_activation()
+        local = self._local_website_licence(activation)
+        eligible = bool(self.test_mode and activation and activation.status == "AUTHORIZED")
+        self.issue_website_test_licence_button.setEnabled(bool(
+            eligible and activation.device_public_key_hash and not local and not activation.licence_id))
+        self.sync_website_test_licence_button.setEnabled(bool(eligible and local))
+
+    def issue_selected_website_test_licence(self):
+        activation = self._selected_website_activation()
+        if not self.test_mode or not activation or activation.status != "AUTHORIZED":
+            self._set_feedback("Select an AUTHORIZED website activation in TEST MODE.", level="warning")
+            return
+        try:
+            if activation.licence_id and not self._local_website_licence(activation):
+                raise WebsiteLicenceSyncError("The website already has a licence; recover its local database before issuing.")
+            envelope = issue_website_activation_for_testing(
+                self.database, self.authority, activation, operator_id=self.operator_id)
+            self._render_website_activations()
+            self._set_feedback(f"TEST licence {envelope['licence_id']} stored locally. Sync licence metadata separately. TEST keys are ephemeral; an existing licence is never re-signed.", level="success")
+        except Exception as error:
+            self._show_error("TEST licence issuance failed", error, "TEST licence issuance")
+
+    def sync_selected_website_test_licence_metadata(self):
+        activation = self._selected_website_activation()
+        local = self._local_website_licence(activation)
+        if not self.test_mode or activation is None or local is None:
+            self._set_feedback("Select a website activation with a stored TEST licence.", level="warning")
+            return
+        try:
+            result = sync_website_test_licence_metadata(
+                activation, json.loads(local["envelope_json"]), test_mode=self.test_mode)
+            self._set_feedback(f"Website licence metadata {result}: {local['licence_id']}.", level="success")
+        except Exception as error:
+            self._show_error("Licence metadata sync failed", error, "Licence metadata sync")
 
     def import_activation(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import Quantum Studio activation request", "", "JSON (*.json)")

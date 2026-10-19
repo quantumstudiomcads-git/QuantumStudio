@@ -86,7 +86,7 @@ class FakeD1 {
         }
         this.insertRuns += 1;
         const values = statement.values;
-        expect(values).toHaveLength(18);
+        expect(values).toHaveLength(19);
         const activationId = values[0];
         const installationId = values[1];
         const platform = values[2];
@@ -96,7 +96,8 @@ class FakeD1 {
         const createdAt = values[11];
         const updatedAt = values[12];
         const authorizedAt = values[16];
-        const userId = values[17];
+        const digest = values[17];
+        const userId = values[18];
         const app = this.applications.find((row) => row.user_id === userId);
         const now = values[5];
         const eligible = app?.status === 'APPROVED'
@@ -114,6 +115,8 @@ class FakeD1 {
           ? activeCount >= maxDevices ? 'DEVICE_LIMIT' : null
           : 'APPLICATION_NOT_ELIGIBLE';
         if (existing) {
+          if (existing.device_public_key_hash && digest && existing.device_public_key_hash !== digest) return {success: true};
+          existing.device_public_key_hash ??= digest;
           if (existing.status !== 'REVOKED') {
             Object.assign(existing, {
               platform,
@@ -137,6 +140,7 @@ class FakeD1 {
           user_id: userId,
           application_id: app.application_id,
           installation_id: installationId,
+          device_public_key_hash: digest,
           platform,
           architecture,
           app_version: appVersion,
@@ -271,6 +275,17 @@ describe('authenticated beta activation API', () => {
     });
     expect(response.status).toBe(503);
     expect(db.insertRuns).toBe(0);
+  });
+
+  it('records the existing desktop full public hash, permits legacy requests, and prevents rebinding', async () => {
+    const db = new FakeD1({applications: [makeApplication()]});
+    expect((await register(db, 'user-a', requestPayload())).status).toBe(200);
+    const digest = 'a'.repeat(64);
+    expect((await register(db, 'user-a', {...requestPayload(), device_public_key_hash: digest})).status).toBe(200);
+    expect(db.activations[0].device_public_key_hash).toBe(digest);
+    expect((await register(db, 'user-a', {...requestPayload(), device_public_key_hash: 'b'.repeat(64)})).status).toBe(400);
+    expect((await register(db, 'user-a', {...requestPayload(), device_public_key_hash: 'a'.repeat(32) + 'b'.repeat(32)})).status).toBe(409);
+    expect(db.activations[0].device_public_key_hash).toBe(digest);
   });
 
   it('rejects unsupported activation facts and unknown client authority fields', async () => {

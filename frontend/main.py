@@ -13,7 +13,7 @@ from frontend.analyze import AnalyzeWorkspace
 from frontend.builder import Builder
 from frontend.calculate import CalculateWorkspace
 from frontend.core.project import Project
-from backend.licensing import LicensingService
+from backend.licensing.local_test_trust import configured_licensing_service
 
 
 def main():
@@ -41,9 +41,8 @@ def main():
     from frontend.app.theme import application_stylesheet
     app.setStyleSheet(application_stylesheet())
 
-    # Production startup receives a fail-closed service.  It never creates a
-    # developer entitlement, even on the development build channel.
-    hub = ProjectHub(licensing_service=LicensingService.production())
+    # Production remains fail-closed; LOCAL TEST trust requires explicit double opt-in.
+    hub = ProjectHub(licensing_service=configured_licensing_service())
 
     hub.show()
     # Network failures and absent pre-release endpoint configuration never

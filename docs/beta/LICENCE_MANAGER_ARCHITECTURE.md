@@ -105,5 +105,11 @@ are never displayed. Missing write credentials are also explicit. Application
 pull, review-status push and legacy issuance behavior are unchanged.
 
 Automatic issuance scheduling, production signing/trust configuration, licence
-delivery/export from this new view, remote revocation, and customer enforcement
+production delivery/export from this view, remote revocation, and customer enforcement
 integration are deferred. No remote migration or deployment is performed.
+
+
+Milestone 7 adds TEST-only immutable publication, device proof-of-possession,
+explicit local issuer trust and verified offline installation through the
+existing LeaseStore/service. M5 issuance remains unchanged. See
+[Licence delivery](LICENCE_DELIVERY.md) for the current contracts and QA steps.

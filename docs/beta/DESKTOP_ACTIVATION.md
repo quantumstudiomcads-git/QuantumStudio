@@ -164,3 +164,9 @@ two separate process starts. A timed offscreen launch of `frontend.main` opened
 and closed the actual Help -> Account / Licensing panel. Local D1 migration 0007
 was applied successfully. This is automated verification, not a real browser
 login click-through or a production deployment.
+
+
+Milestone 7 extends the completed M6 handshake with a separate device-proof
+licence delivery service. The M6 protocol still grants no entitlement by itself.
+See [TEST signed licence delivery](LICENCE_DELIVERY.md) for explicit trust,
+publication, installation and offline startup QA.

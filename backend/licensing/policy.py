@@ -44,6 +44,14 @@ class EntitlementPolicy:
         allowed = feature_id in grants or "calc:*" in grants
         return LicenseDecision(allowed, DecisionReason.ALLOWED if allowed else DecisionReason.NOT_ENTITLED, ImplementationState.READY, self._entitlement_kind(), feature_id, self.lease.plan_id, self.lease.expires_at, "Refresh your licence or choose a plan that includes this calculation." if not allowed else "")
 
+    def validity_decision(self) -> LicenseDecision:
+        """Public validity check using the same policy as every feature gate."""
+        denied = self._lease_state("licence:validity")
+        if denied is not None:
+            return denied
+        return LicenseDecision(True, DecisionReason.ALLOWED, ImplementationState.READY,
+                               self._entitlement_kind(), "licence:validity", self.lease.plan_id, self.lease.expires_at)
+
     def _lease_state(self, feature_id: str) -> LicenseDecision | None:
         if self.lease is None:
             return LicenseDecision(False, DecisionReason.AUTH_REQUIRED, ImplementationState.READY, EntitlementState.AUTH_REQUIRED, feature_id, remediation="Sign in and refresh a valid Quantum Studio licence.")

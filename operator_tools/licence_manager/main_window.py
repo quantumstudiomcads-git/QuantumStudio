@@ -23,6 +23,7 @@ from .database import Database
 from .exports import ExportRecoveryError, export_licence
 from .imports import ImportRejected, import_activation_json, import_applicants_json
 from .issuance import IssuanceRejected, authorize_activation_profile, issue_for_request_for_testing, record_expiries, revoke_licence, issue_website_activation_for_testing
+from .licence_delivery import publish_website_test_licence, stored_test_licence
 from .models import Profile
 from .paths import data_root
 from .signing import AuthorityState, ProductionAuthority, SigningUnavailable, TestEphemeralAuthority, public_key_record, record_public_metadata
@@ -187,9 +188,13 @@ class LicenceManagerWindow(QMainWindow):
                     ("Refresh website activations", self.refresh_website_activations),
                     ("Issue test licence", self.issue_selected_website_test_licence),
                     ("Sync licence metadata", self.sync_selected_website_test_licence_metadata),
+                    ("Publish signed licence", self.publish_selected_website_licence),
+                    ("Export TEST trust", self.export_selected_test_trust),
                 ))
                 self.issue_website_test_licence_button = actions[1]
                 self.sync_website_test_licence_button = actions[2]
+                self.publish_website_licence_button = actions[3]
+                self.export_test_trust_button = actions[4]
                 self.website_activations_table.itemSelectionChanged.connect(self._update_website_licence_actions)
                 self._update_website_licence_actions()
             elif name == "Licences":
@@ -551,6 +556,8 @@ class LicenceManagerWindow(QMainWindow):
         self.issue_website_test_licence_button.setEnabled(bool(
             eligible and activation.device_public_key_hash and not local and not activation.licence_id))
         self.sync_website_test_licence_button.setEnabled(bool(eligible and local))
+        self.publish_website_licence_button.setEnabled(bool(eligible and local))
+        self.export_test_trust_button.setEnabled(bool(self.test_mode and local))
 
     def issue_selected_website_test_licence(self):
         activation = self._selected_website_activation()
@@ -579,6 +586,33 @@ class LicenceManagerWindow(QMainWindow):
             self._set_feedback(f"Website licence metadata {result}: {local['licence_id']}.", level="success")
         except Exception as error:
             self._show_error("Licence metadata sync failed", error, "Licence metadata sync")
+
+    def publish_selected_website_licence(self):
+        activation = self._selected_website_activation()
+        if not self.test_mode or activation is None or not self._local_website_licence(activation):
+            self._set_feedback("Select an existing local TEST licence to publish.", level="warning")
+            return
+        try:
+            envelope, _trust = stored_test_licence(self.database, activation)
+            sync_website_test_licence_metadata(activation, envelope, test_mode=True)
+            result = publish_website_test_licence(self.database, activation, test_mode=True)
+            self._set_feedback(f"Signed TEST licence {envelope['licence_id']} {result}. No new licence was issued.", level="success")
+        except Exception as error:
+            self._show_error("Licence publication failed", error, "Licence publication")
+
+    def export_selected_test_trust(self):
+        activation = self._selected_website_activation()
+        if not self.test_mode or activation is None:
+            return
+        try:
+            _envelope, trust = stored_test_licence(self.database, activation)
+            name, _ = QFileDialog.getSaveFileName(self, "Export explicit TEST issuer trust", "test-licence-trust.json", "JSON (*.json)")
+            if not name:
+                return
+            Path(name).write_text(json.dumps(trust, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+            self._set_feedback("Original TEST issuer public key exported. Trust it only with explicit local TEST licensing enabled.", level="success")
+        except Exception as error:
+            self._show_error("TEST trust export failed", error, "TEST trust export")
 
     def import_activation(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import Quantum Studio activation request", "", "JSON (*.json)")

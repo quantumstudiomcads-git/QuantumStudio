@@ -4,6 +4,9 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 import os
+import re
+import time
+import uuid
 from pathlib import Path
 import sys
 from typing import Protocol
@@ -91,6 +94,46 @@ class DeviceIdentityService:
         except (TypeError, ValueError) as error:
             raise SecureStorageUnavailable("The protected device identity is invalid and must be re-registered.") from error
         return device_identity_from_private_key(private_key)
+
+
+    def sign_licence_challenge(self, challenge, expected_identity, *, now=None):
+        """Sign only the bounded, domain-separated licence-retrieval challenge.
+
+        Reload the EXISTING protected key; never expose key bytes or create a
+        replacement identity when a proof is requested.
+        """
+        from .canonical import canonical_json, b64url_encode
+        fields = {"schema_version", "purpose", "challenge_id", "nonce", "activation_request_id",
+                  "installation_id", "device_public_key_hash", "expires_at"}
+        now = int(time.time()) if now is None else int(now)
+        try:
+            valid = (isinstance(challenge, dict) and set(challenge) == fields
+                and type(challenge["schema_version"]) is int and challenge["schema_version"] == 1
+                and challenge["purpose"] == "quantum-studio:licence-retrieve:v1"
+                and all(isinstance(challenge[k], str) and re.fullmatch(r"[0-9a-f]{64}", challenge[k]) for k in ("challenge_id", "nonce"))
+                and str(uuid.UUID(challenge["activation_request_id"])) == challenge["activation_request_id"].lower()
+                and challenge["installation_id"] == expected_identity.device_id
+                and challenge["device_public_key_hash"] == expected_identity.public_key_hash
+                and type(challenge["expires_at"]) is int and 0 < challenge["expires_at"] - now <= 120)
+        except (ValueError, TypeError, AttributeError, KeyError):
+            valid = False
+        if not valid:
+            raise SecureStorageUnavailable("The licence proof challenge is invalid or does not match this device.")
+        raw = self.store.load_private_key()
+        if raw is None:
+            raise SecureStorageUnavailable("The existing protected device key is unavailable; no replacement was generated.")
+        key = None
+        try:
+            key = Ed25519PrivateKey.from_private_bytes(raw)
+            if device_identity_from_private_key(key) != expected_identity:
+                raise SecureStorageUnavailable("The protected key does not match the current device identity.")
+            signature = key.sign(canonical_json(challenge))
+            return {"challenge_id": challenge["challenge_id"], "installation_id": expected_identity.device_id,
+                    "public_key": b64url_encode(expected_identity.public_key), "signature": b64url_encode(signature)}
+        except (TypeError, ValueError):
+            raise SecureStorageUnavailable("The protected device key could not create a licence proof.") from None
+        finally:
+            del raw, key
 
 
 def production_secure_store(paths: RuntimePaths | None = None) -> SecureKeyStore:

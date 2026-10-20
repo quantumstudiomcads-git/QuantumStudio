@@ -53,6 +53,14 @@ class WebsiteStatusResponseError(WebsiteStatusSyncError):
     """The status endpoint returned an invalid or unexpected response."""
 
 
+class WebsiteStatusConflictError(WebsiteStatusResponseError):
+    """Invalid transition or changed authoritative website state."""
+
+
+class WebsiteStatusNetworkError(WebsiteStatusSyncError):
+    """Status endpoint could not be reached."""
+
+
 @dataclass(frozen=True)
 class WebsiteSyncResult:
     fetched: int
@@ -316,21 +324,38 @@ class WebsiteStatusSyncClient:
             f"{self.base_url}/api/operator/applications/"
             f"{parse.quote(application_id, safe='')}/status"
         )
-        payload = json.dumps(
-            {"schema_version": 1, "status": status},
-            separators=(",", ":"),
-        ).encode("utf-8")
-        req = request.Request(
-            url,
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {self.token}",
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "User-Agent": "QuantumStudio-LicenceManager/1.0",
-            },
-            method="POST",
-        )
+        current = self._request_status(request.Request(
+            url, headers={"Authorization": f"Bearer {self.token}", "Accept": "application/json"},
+            method="GET"), application_id)["status"]
+        # Only forward review edges from the website state machine. Terminal,
+        # backward and divergent states have no automatic recovery path.
+        paths = {
+            ("APPLIED", "UNDER_REVIEW"): ("UNDER_REVIEW",),
+            ("APPLIED", "APPROVED"): ("UNDER_REVIEW", "APPROVED"),
+            ("APPLIED", "REJECTED"): ("UNDER_REVIEW", "REJECTED"),
+            ("UNDER_REVIEW", "APPROVED"): ("APPROVED",),
+            ("UNDER_REVIEW", "REJECTED"): ("REJECTED",),
+        }
+        path = (status,) if current == status else paths.get((current, status))
+        if path is None:
+            raise WebsiteStatusConflictError("Website review history conflicts with the local decision; no status was changed.")
+        changed = False
+        for next_status in path:
+            latest = database.connection.execute(
+                "SELECT status FROM applicants WHERE application_id = ?", (application_id,),
+            ).fetchone()
+            if not latest or latest[0] != status:
+                raise WebsiteStatusConflictError("Local decision changed during reconciliation; refresh before retrying.")
+            req = request.Request(url,
+                data=json.dumps({"schema_version": 1, "status": next_status}, separators=(",", ":")).encode("utf-8"),
+                headers={"Authorization": f"Bearer {self.token}", "Accept": "application/json",
+                         "Content-Type": "application/json", "X-QuantumStudio-Expected-Status": current}, method="POST")
+            response = self._request_status(req, application_id, expected_status=next_status)
+            changed = changed or response["result"] == "updated"
+            current = next_status
+        return WebsiteStatusSyncResult(application_id, status, "updated" if changed else "already_current")
+
+    def _request_status(self, req, application_id, *, expected_status=None):
         try:
             with build_opener(_NoRedirectHandler()).open(
                 req, timeout=self.timeout
@@ -355,8 +380,8 @@ class WebsiteStatusSyncClient:
                     "Website status endpoint rejected the request."
                 ) from None
             if exc.code == 409:
-                raise WebsiteStatusResponseError(
-                    "Website status changed unexpectedly; local status was preserved."
+                raise WebsiteStatusConflictError(
+                    "Website status conflict (HTTP 409); local status was preserved."
                 ) from None
             raise WebsiteStatusResponseError(
                 "Website status endpoint returned an unexpected status."
@@ -364,7 +389,7 @@ class WebsiteStatusSyncClient:
         except WebsiteSyncError:
             raise
         except (error.URLError, TimeoutError, OSError):
-            raise WebsiteStatusSyncError(
+            raise WebsiteStatusNetworkError(
                 "Unable to reach the website status endpoint."
             ) from None
         if len(body) > MAX_STATUS_RESPONSE_BYTES:
@@ -384,18 +409,17 @@ class WebsiteStatusSyncClient:
             or type(response_data.get("schema_version")) is not int
             or response_data["schema_version"] != 1
             or response_data["application_id"] != application_id
-            or response_data["status"] != status
+            or not isinstance(response_data["status"], str)
+            or response_data["status"] not in {"APPLIED", "UNDER_REVIEW", "APPROVED", "REJECTED", "LICENSE_ISSUED", "EXPIRED", "REVOKED"}
+            or (expected_status is not None and response_data["status"] != expected_status)
+            or (expected_status is None and response_data["result"] != "already_current")
             or not isinstance(response_data.get("result"), str)
             or response_data["result"] not in {"updated", "already_current"}
         ):
             raise WebsiteStatusResponseError(
                 "Website status response did not match the expected contract."
             )
-        return WebsiteStatusSyncResult(
-            application_id,
-            status,
-            response_data["result"],
-        )
+        return response_data
 
 
 def _is_application_id(value: str) -> bool:

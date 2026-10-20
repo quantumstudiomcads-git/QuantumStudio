@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {onRequestPost} from '../functions/api/operator/applications/[applicationId]/status.js';
+import {onRequestGet, onRequestPost} from '../functions/api/operator/applications/[applicationId]/status.js';
 
 const applicationId = '11111111-1111-4111-8111-111111111111';
 const statusToken = 'local-status-write-token';
@@ -236,5 +236,55 @@ describe('operator application status mirror endpoint', () => {
       params: {applicationId},
     });
     expect(response.status).toBe(403);
+  });
+});
+
+
+describe('authoritative status read and guarded reconciliation', () => {
+  const read = (env, authorization = auth()) => onRequestGet({
+    request: new Request(`http://localhost:8788/api/operator/applications/${applicationId}/status`,
+      {headers: {Authorization: authorization}}), env, params: {applicationId},
+  });
+  const guarded = (env, expected, status) => onRequestPost({
+    request: new Request(`http://localhost:8788/api/operator/applications/${applicationId}/status`, {
+      method: 'POST', headers: {Authorization: auth(), 'Content-Type': 'application/json',
+        'X-QuantumStudio-Expected-Status': expected}, body: JSON.stringify({schema_version: 1, status}),
+    }), env, params: {applicationId},
+  });
+  it('reads only authoritative status with the dedicated status token', async () => {
+    const {env, auditEvents} = makeEnv();
+    expect((await read(env, auth(readToken))).status).toBe(403);
+    expect((await read(env, 'Bearer invalid')).status).toBe(403);
+    const response = await read(env);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({schema_version: 1, application_id: applicationId,
+      status: 'APPLIED', result: 'already_current'});
+    expect(auditEvents).toHaveLength(0);
+  });
+  it('reconciles each valid edge and retries without duplicate audit', async () => {
+    const {env, auditEvents} = makeEnv();
+    expect((await guarded(env, (await (await read(env)).json()).status, 'UNDER_REVIEW')).status).toBe(200);
+    // A later invocation reads UNDER_REVIEW after a partial previous run.
+    expect((await guarded(env, (await (await read(env)).json()).status, 'APPROVED')).status).toBe(200);
+    expect((await (await guarded(env, 'APPROVED', 'APPROVED')).json()).result).toBe('already_current');
+    expect(auditEvents.map((e) => [e.old_status, e.new_status])).toEqual([
+      ['APPLIED', 'UNDER_REVIEW'], ['UNDER_REVIEW', 'APPROVED'],
+    ]);
+  });
+  it('still rejects a skipped edge even with the expected-state guard', async () => {
+    const {env, auditEvents} = makeEnv();
+    expect((await guarded(env, 'APPLIED', 'APPROVED')).status).toBe(409);
+    expect(auditEvents).toHaveLength(0);
+  });
+  it('rejects a stale snapshot even if a transition from the new state would be legal', async () => {
+    const {env, state, auditEvents} = makeEnv('UNDER_REVIEW');
+    expect((await guarded(env, 'APPLIED', 'APPROVED')).status).toBe(409);
+    expect(state.status).toBe('UNDER_REVIEW');
+    expect(auditEvents).toHaveLength(0);
+  });
+  it('rejects a concurrent writer reaching the same target instead of assuming ownership', async () => {
+    const {env, auditEvents} = makeEnv('APPLIED', {beforeBatch(state) { state.status = 'UNDER_REVIEW'; }});
+    expect((await guarded(env, 'APPLIED', 'UNDER_REVIEW')).status).toBe(409);
+    expect(auditEvents).toHaveLength(0);
   });
 });

@@ -148,6 +148,20 @@ def patch_status_response(
         if error is not None
         else FakeResponse(body, content_length=content_length)
     )
+    original_open = response.open
+    def open_with_status_read(req, timeout):
+        if req.get_method() == "GET" and req.full_url.endswith("/status") and error is None:
+            try:
+                target = json.loads(body).get("status", "APPLIED")
+                current = {"UNDER_REVIEW": "APPLIED", "APPROVED": "UNDER_REVIEW", "REJECTED": "UNDER_REVIEW"}.get(target, "APPLIED")
+            except (ValueError, TypeError):
+                current = "APPLIED"
+            response.request = req
+            response.timeout = timeout
+            return FakeResponse(json.dumps({"schema_version": 1, "application_id": APPLICATION_ID,
+                "status": current, "result": "already_current"}).encode())
+        return original_open(req, timeout)
+    response.open = open_with_status_read
     response.handlers = []
 
     def build_test_opener(*handlers):
@@ -415,7 +429,7 @@ def test_status_client_rejects_redirects_and_non_success_responses(monkeypatch):
             _LocalStatusDatabase("APPLIED"), APPLICATION_ID
         )
     assert location not in str(raised.value)
-    assert opener.request.get_method() == "POST"
+    assert opener.request.get_method() == "GET"
     no_redirect = next(
         handler for handler in opener.handlers
         if handler.__class__.__name__ == "_NoRedirectHandler"
@@ -727,8 +741,7 @@ def test_ui_reports_stale_mirror_without_reverting_local_decision(
         window.applications_table.selectRow(0)
         _button(window, "Sync status to website").click()
         assert window.feedback.text() == (
-            "Website status mirror is stale. The local decision is unchanged; "
-            "retry when available."
+            "Website status endpoint returned an unexpected response. The local decision is unchanged."
         )
         assert messages == [window.feedback.text()]
         assert database.connection.execute(
@@ -1017,3 +1030,168 @@ def test_local_pages_d1_operator_status_push_flow(app, tmp_path, monkeypatch):
     finally:
         window.close()
         db.close()
+
+
+@pytest.fixture
+def status_reconciliation_server():
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from threading import Thread
+    from types import SimpleNamespace
+    state = SimpleNamespace(status="APPLIED", posts=[], audit=[], fail_target=None, conflict=False,
+                            code=None, malformed=False, changed_after_read=False)
+    class Handler(BaseHTTPRequestHandler):
+        def reply(self, code, body):
+            self.send_response(code); self.end_headers()
+            self.wfile.write(json.dumps(body).encode())
+        def do_GET(self):
+            assert self.headers.get("Authorization") == "Bearer " + TEST_TOKEN
+            if state.code:
+                return self.reply(state.code,{"error":{"message":"PRIVATE BODY " + TEST_TOKEN}})
+            if state.malformed:
+                return self.reply(200,{"schema_version":1,"application_id":APPLICATION_ID,"status":[],"result":"already_current"})
+            current=state.status
+            if state.changed_after_read: state.status="REJECTED"
+            self.reply(200,{"schema_version":1,"application_id":APPLICATION_ID,"status":current,"result":"already_current"})
+        def do_POST(self):
+            target=json.loads(self.rfile.read(int(self.headers['Content-Length'])))['status']
+            state.posts.append(target)
+            if state.fail_target==target: return self.reply(503,{"error":{"code":"service_unavailable"}})
+            if state.conflict or self.headers.get('X-QuantumStudio-Expected-Status')!=state.status:
+                return self.reply(409,{"error":{"code":"status_conflict","message":"PRIVATE BODY"}})
+            if target!=state.status:
+                assert target in {'APPLIED':{'UNDER_REVIEW'},'UNDER_REVIEW':{'APPROVED','REJECTED'}}.get(state.status,set())
+                state.audit.append((state.status,target)); state.status=target
+                result='updated'
+            else: result='already_current'
+            self.reply(200,{"schema_version":1,"application_id":APPLICATION_ID,"status":state.status,"result":result})
+        def log_message(self,*_): pass
+    server=HTTPServer(('127.0.0.1',0),Handler)
+    thread=Thread(target=server.serve_forever,daemon=True); thread.start()
+    state.url=f'http://127.0.0.1:{server.server_port}'
+    yield state
+    server.shutdown();server.server_close();thread.join(timeout=2)
+
+
+@pytest.mark.parametrize('remote,target,expected',[
+    ('APPLIED','APPROVED',['UNDER_REVIEW','APPROVED']),
+    ('APPLIED','UNDER_REVIEW',['UNDER_REVIEW']),
+    ('UNDER_REVIEW','APPROVED',['APPROVED']),
+    ('APPLIED','REJECTED',['UNDER_REVIEW','REJECTED']),
+])
+def test_status_reconciliation_valid_paths(status_reconciliation_server,remote,target,expected):
+    state=status_reconciliation_server;state.status=remote
+    client=WebsiteStatusSyncClient(state.url,TEST_TOKEN,allow_http_local=True)
+    result=client.sync_local_application_status(_LocalStatusDatabase(target),APPLICATION_ID)
+    assert result==WebsiteStatusSyncResult(APPLICATION_ID,target,'updated')
+    assert state.posts==expected and state.status==target
+    assert len(state.audit)==len(expected)
+
+
+def test_status_reconciliation_already_current_is_idempotent(status_reconciliation_server):
+    state=status_reconciliation_server;state.status='APPROVED'
+    client=WebsiteStatusSyncClient(state.url,TEST_TOKEN,allow_http_local=True)
+    for _ in range(2):
+        assert client.sync_local_application_status(_LocalStatusDatabase('APPROVED'),APPLICATION_ID).result=='already_current'
+    assert state.status=='APPROVED' and state.audit==[]
+
+
+def test_status_reconciliation_partial_retry_continues_without_duplicate_audit(status_reconciliation_server):
+    state=status_reconciliation_server;state.fail_target='APPROVED'
+    client=WebsiteStatusSyncClient(state.url,TEST_TOKEN,allow_http_local=True)
+    with pytest.raises(WebsiteStatusResponseError):
+        client.sync_local_application_status(_LocalStatusDatabase('APPROVED'),APPLICATION_ID)
+    assert state.status=='UNDER_REVIEW' and state.audit==[('APPLIED','UNDER_REVIEW')]
+    state.fail_target=None
+    assert client.sync_local_application_status(_LocalStatusDatabase('APPROVED'),APPLICATION_ID).result=='updated'
+    assert state.audit==[('APPLIED','UNDER_REVIEW'),('UNDER_REVIEW','APPROVED')]
+
+
+@pytest.mark.parametrize('remote,target',[
+    ('REJECTED','APPROVED'),('LICENSE_ISSUED','APPROVED'),('REVOKED','APPROVED'),
+    ('EXPIRED','APPROVED'),('APPROVED','REJECTED'),('UNDER_REVIEW','APPLIED'),
+])
+def test_status_reconciliation_incompatible_histories_fail_closed(status_reconciliation_server,remote,target):
+    from operator_tools.licence_manager.website_sync import WebsiteStatusConflictError
+    state=status_reconciliation_server;state.status=remote
+    client=WebsiteStatusSyncClient(state.url,TEST_TOKEN,allow_http_local=True)
+    with pytest.raises(WebsiteStatusConflictError):
+        client.sync_local_application_status(_LocalStatusDatabase(target),APPLICATION_ID)
+    assert state.posts==[] and state.audit==[] and state.status==remote
+
+
+@pytest.mark.parametrize('code',[401,403,409])
+def test_status_reconciliation_http_categories_reach_gui_safely(status_reconciliation_server,code):
+    from operator_tools.licence_manager.website_sync import WebsiteStatusConflictError
+    state=status_reconciliation_server;state.code=code
+    expected=WebsiteStatusConflictError if code==409 else WebsiteStatusAuthenticationError
+    client=WebsiteStatusSyncClient(state.url,TEST_TOKEN,allow_http_local=True)
+    with pytest.raises(expected) as failure:
+        client.sync_local_application_status(_LocalStatusDatabase('APPROVED'),APPLICATION_ID)
+    message=LicenceManagerWindow._error_message(failure.value,'Website status sync')
+    assert ('conflict' if code==409 else 'authentication') in message.lower()
+    assert TEST_TOKEN not in message and 'PRIVATE BODY' not in message
+
+
+def test_status_reconciliation_concurrent_change_is_not_repaired(status_reconciliation_server):
+    from operator_tools.licence_manager.website_sync import WebsiteStatusConflictError
+    state=status_reconciliation_server;state.changed_after_read=True
+    client=WebsiteStatusSyncClient(state.url,TEST_TOKEN,allow_http_local=True)
+    with pytest.raises(WebsiteStatusConflictError):
+        client.sync_local_application_status(_LocalStatusDatabase('APPROVED'),APPLICATION_ID)
+    assert state.status=='REJECTED' and state.audit==[] and state.posts==['UNDER_REVIEW']
+
+
+def test_status_reconciliation_network_error_is_safe_and_distinct(monkeypatch):
+    from urllib.error import URLError
+    from operator_tools.licence_manager.website_sync import WebsiteStatusNetworkError
+    patch_status_response(monkeypatch,b'',error=URLError('PRIVATE BODY '+TEST_TOKEN))
+    with pytest.raises(WebsiteStatusNetworkError) as failure:
+        WebsiteStatusSyncClient('https://website.example.test',TEST_TOKEN).sync_local_application_status(_LocalStatusDatabase('APPROVED'),APPLICATION_ID)
+    message=LicenceManagerWindow._error_message(failure.value,'Website status sync')
+    assert 'could not be reached' in message and 'PRIVATE BODY' not in message and TEST_TOKEN not in message
+
+
+def test_status_reconciliation_malformed_read_is_safe(status_reconciliation_server):
+    state=status_reconciliation_server;state.malformed=True
+    with pytest.raises(WebsiteStatusResponseError) as failure:
+        WebsiteStatusSyncClient(state.url,TEST_TOKEN,allow_http_local=True).sync_local_application_status(_LocalStatusDatabase('APPROVED'),APPLICATION_ID)
+    assert 'unexpected response' in LicenceManagerWindow._error_message(failure.value,'Website status sync')
+    assert state.posts==[]
+
+
+@pytest.mark.parametrize('kind,fragment',[
+    ('authentication','authentication failed'),('network','could not be reached'),
+    ('conflict','status conflict'),('response','unexpected response'),
+])
+def test_status_error_categories_survive_actual_button_handler(app,database,monkeypatch,kind,fragment):
+    from operator_tools.licence_manager.website_sync import WebsiteStatusNetworkError, WebsiteStatusConflictError
+    classes={'authentication':WebsiteStatusAuthenticationError,'network':WebsiteStatusNetworkError,
+             'conflict':WebsiteStatusConflictError,'response':WebsiteStatusResponseError}
+    create_local_application(database)
+    def fail(*_,**__): raise classes[kind]('PRIVATE BODY '+TEST_TOKEN)
+    monkeypatch.setattr(main_window,'sync_local_application_status',fail)
+    dialogs=[]
+    monkeypatch.setattr(QMessageBox,'critical',lambda _p,_t,message:dialogs.append(message))
+    window=_make_window(database)
+    try:
+        window.applications_table.selectRow(0)
+        _button(window,'Sync status to website').click()
+        assert fragment in window.feedback.text().lower()
+        assert dialogs==[window.feedback.text()]
+        assert 'PRIVATE BODY' not in dialogs[0] and TEST_TOKEN not in dialogs[0]
+    finally: window.close()
+
+
+def test_status_local_decision_change_between_steps_stops_reconciliation(status_reconciliation_server):
+    from operator_tools.licence_manager.website_sync import WebsiteStatusConflictError
+    state=status_reconciliation_server
+    database=_LocalStatusDatabase('APPROVED')
+    client=WebsiteStatusSyncClient(state.url,TEST_TOKEN,allow_http_local=True)
+    actual_request=client._request_status
+    def change_after_step(*args,**kwargs):
+        response=actual_request(*args,**kwargs)
+        if kwargs.get('expected_status')=='UNDER_REVIEW': database.status='REJECTED'
+        return response
+    client._request_status=change_after_step
+    with pytest.raises(WebsiteStatusConflictError): client.sync_local_application_status(database,APPLICATION_ID)
+    assert state.posts==['UNDER_REVIEW'] and state.status=='UNDER_REVIEW'

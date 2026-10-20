@@ -58,7 +58,7 @@ function responseForState(applicationId, status, result) {
   return jsonResponse(200, {schema_version: 1, application_id: applicationId, status, result});
 }
 
-export async function onRequestPost({request, env, params}) {
+function validateOperatorRequest(request, env, params) {
   const applicationId = params?.applicationId;
   if (typeof applicationId !== 'string' || !APPLICATION_ID_PATTERN.test(applicationId)) {
     return jsonResponse(400, {error: {code: 'invalid_application_id'}});
@@ -83,6 +83,28 @@ export async function onRequestPost({request, env, params}) {
   if (!constantTimeEquals(token, configuredToken)) {
     return jsonResponse(403, {error: {code: 'forbidden'}});
   }
+
+  return null;
+}
+
+export async function onRequestGet({request, env, params}) {
+  const rejected = validateOperatorRequest(request, env, params);
+  if (rejected) return rejected;
+  try {
+    const application = await env.BETA_DB.prepare(
+      'SELECT status FROM beta_applications WHERE application_id = ?'
+    ).bind(params.applicationId).first();
+    if (!application) return jsonResponse(404, {error: {code: 'application_not_found'}});
+    return responseForState(params.applicationId, application.status, 'already_current');
+  } catch {
+    return jsonResponse(503, {error: {code: 'service_unavailable'}});
+  }
+}
+
+export async function onRequestPost({request, env, params}) {
+  const rejected = validateOperatorRequest(request, env, params);
+  if (rejected) return rejected;
+  const applicationId = params.applicationId;
 
   const contentLength = request.headers.get('Content-Length');
   if (contentLength && contentLength.trim() !== '' && Number(contentLength) > MAX_REQUEST_BYTES) {
@@ -130,6 +152,12 @@ export async function onRequestPost({request, env, params}) {
   }
   if (!application) {
     return jsonResponse(404, {error: {code: 'application_not_found'}});
+  }
+  // Optional expected-state guard for reconciliation clients. Legacy callers
+  // retain single-transition semantics; no state-machine edge is bypassed.
+  const expectedStatus = request.headers.get('X-QuantumStudio-Expected-Status');
+  if (expectedStatus !== null && expectedStatus !== application.status) {
+    return jsonResponse(409, {error: {code: 'status_conflict'}});
   }
   if (application.status === payload.status) {
     return responseForState(applicationId, payload.status, 'already_current');
@@ -181,6 +209,9 @@ export async function onRequestPost({request, env, params}) {
   }
   if (results?.[0]?.meta?.changes !== 0) {
     return jsonResponse(503, {error: {code: 'service_unavailable'}});
+  }
+  if (expectedStatus !== null) {
+    return jsonResponse(409, {error: {code: 'status_conflict'}});
   }
   try {
     application = await env.BETA_DB.prepare(

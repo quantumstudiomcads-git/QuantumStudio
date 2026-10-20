@@ -32,6 +32,10 @@ from .website_sync import (
     WebsiteLicenceSyncError,
     sync_website_test_licence_metadata,
     WebsiteStatusSyncError,
+    WebsiteStatusAuthenticationError,
+    WebsiteStatusNetworkError,
+    WebsiteStatusConflictError,
+    WebsiteStatusResponseError,
     WebsiteSyncError,
     fetch_website_activations,
     sync_local_application_status,
@@ -351,8 +355,16 @@ class LicenceManagerWindow(QMainWindow):
             return "Export needs operator review. Check the chosen destination before retrying."
         if isinstance(error, StorageError):
             return "Storage is unavailable. Preserve the existing data and request operator recovery."
+        if isinstance(error, WebsiteStatusAuthenticationError):
+            return "Website status authentication failed. Check the dedicated status-sync credential. The local decision is unchanged."
+        if isinstance(error, WebsiteStatusNetworkError):
+            return "Website status endpoint could not be reached. Retry when available. The local decision is unchanged."
+        if isinstance(error, WebsiteStatusConflictError):
+            return "Website status conflict (HTTP 409 or incompatible review history). Refresh and review before retrying. The local decision is unchanged."
+        if isinstance(error, WebsiteStatusResponseError):
+            return "Website status endpoint returned an unexpected response. The local decision is unchanged."
         if isinstance(error, WebsiteStatusSyncError):
-            return "Website status mirror is stale. The local decision is unchanged; retry when available."
+            return "Website status sync configuration or local review state is invalid. The local decision is unchanged."
         if isinstance(error, WebsiteLicenceSyncError):
             return str(error)
         if isinstance(error, WebsiteSyncError):

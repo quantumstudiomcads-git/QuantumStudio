@@ -25,7 +25,7 @@ export function configuredMaxActiveDevices(env) {
     : null;
 }
 
-function parseActivationPayload(rawText) {
+export function parseActivationPayload(rawText) {
   if (new TextEncoder().encode(rawText).byteLength > MAX_REQUEST_BYTES) {
     return {ok: false, response: errorResponse(413, 'request_too_large', 'Activation request is too large.')};
   }
@@ -169,6 +169,14 @@ export async function handleActivationRequest(request, env, method) {
   if (!parsed.ok) {
     return parsed.response;
   }
+  return registerActivationForUser(env, session.userId, parsed.value);
+}
+
+// Shared by authenticated browser registration and the confirmed desktop flow.
+// Account identity is supplied only by the existing validated website session.
+export async function registerActivationForUser(env, userId, facts) {
+  const parsed = parseActivationPayload(JSON.stringify(facts));
+  if (!parsed.ok) return parsed.response;
   const maxDevices = configuredMaxActiveDevices(env);
   if (maxDevices === null) {
     return errorResponse(503, 'service_unavailable', 'Beta activation is temporarily unavailable.');
@@ -178,7 +186,7 @@ export async function handleActivationRequest(request, env, method) {
   try {
     application = await env.BETA_DB.prepare(
       'SELECT application_id, status, licence_expires_at FROM beta_applications WHERE user_id = ? LIMIT 1',
-    ).bind(session.userId).first();
+    ).bind(userId).first();
   } catch {
     return errorResponse(503, 'service_unavailable', 'Beta activation is temporarily unavailable.');
   }
@@ -278,14 +286,14 @@ export async function handleActivationRequest(request, env, method) {
       maxDevices,
       now,
       parsed.value.device_public_key_hash ?? null,
-      session.userId,
+      userId,
     ).run();
     const activation = await env.BETA_DB.prepare(
       `SELECT activation_request_id, installation_id, platform, architecture,
               app_version, status, created_at, updated_at, authorized_at, device_public_key_hash
        FROM beta_activations
        WHERE user_id = ? AND installation_id = ?`,
-    ).bind(session.userId, installationId).first();
+    ).bind(userId, installationId).first();
     if (!activation || !PUBLIC_ACTIVATION_STATUSES.has(activation.status)) {
       return errorResponse(403, 'application_required', 'A linked beta application is required for device activation.');
     }

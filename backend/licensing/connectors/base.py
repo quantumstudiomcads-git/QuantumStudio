@@ -49,3 +49,13 @@ class BillingConnector(ABC):
 class StudentVerificationConnector(ABC):
     @abstractmethod
     def verification_status(self, account_id: str) -> str: ...
+
+
+class DesktopActivationConnector(ABC):
+    """Short-lived browser confirmation; independent of lease/session connectors."""
+    @abstractmethod
+    def start_activation(self, facts: Mapping[str, str]) -> Mapping[str, Any]: ...
+    @abstractmethod
+    def poll_activation(self, challenge_id: str, device_code: str) -> Mapping[str, Any]: ...
+    @abstractmethod
+    def cancel_activation(self, challenge_id: str, device_code: str) -> None: ...

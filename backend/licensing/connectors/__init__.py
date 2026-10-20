@@ -1,6 +1,7 @@
-"""Future licensing/account connector contracts and deterministic test connector."""
+"""Licensing connector contracts, desktop activation transport, and test connector."""
 
-from .base import AuthConnector, BillingConnector, LicensingConnector, PlanCatalogConnector, StudentVerificationConnector
+from .base import AuthConnector, BillingConnector, DesktopActivationConnector, LicensingConnector, PlanCatalogConnector, StudentVerificationConnector
 from .mock import InMemoryLicensingConnector
+from .desktop_auth import DesktopAuthError, WebsiteDesktopActivationConnector
 
-__all__ = ["AuthConnector", "BillingConnector", "InMemoryLicensingConnector", "LicensingConnector", "PlanCatalogConnector", "StudentVerificationConnector"]
+__all__ = ["DesktopActivationConnector", "DesktopAuthError", "WebsiteDesktopActivationConnector", "AuthConnector", "BillingConnector", "InMemoryLicensingConnector", "LicensingConnector", "PlanCatalogConnector", "StudentVerificationConnector"]

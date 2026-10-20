@@ -19,8 +19,8 @@ def install_help_menu(window, *, licensing_service=None) -> object:
     diagnostics = menu.addAction("Export Diagnostics…")
     diagnostics.setToolTip("Export privacy-safe application diagnostics")
     diagnostics.triggered.connect(lambda: export_diagnostics_from_ui(window))
-    licence_status = menu.addAction("License Status")
-    licence_status.setToolTip("Show safe local licence and entitlement status")
+    licence_status = menu.addAction("Account / Licensing")
+    licence_status.setToolTip("Show licence status and sign in to activate this device")
     licence_status.triggered.connect(lambda: show_license_status(window, licensing_service))
     return menu
 
@@ -56,13 +56,8 @@ def export_diagnostics_from_ui(parent) -> None:
 
 
 def show_license_status(parent, licensing_service=None) -> None:
-    """Show a concise status without displaying a raw lease or account token."""
-    if licensing_service is None:
-        text = "No licence service is configured for this window. Product data remains available."
-    else:
-        state = licensing_service.diagnostics_summary()
-        status = str(state.get("status", "auth_required")).replace("_", " ").title()
-        plan = state.get("plan_id") or "None"
-        expiry = state.get("expires_at") or "Not available"
-        text = f"Status: {status}\nPlan: {plan}\nExpiry: {expiry}\n\nExisting projects and results remain available when an entitlement expires."
-    QMessageBox.information(parent, "Quantum Studio License Status", text)
+    """Show local licence metadata and explicit system-browser activation."""
+    from .account_dialog import AccountLicensingDialog
+    dialog = AccountLicensingDialog(parent, licensing_service=licensing_service)
+    dialog.exec()
+    dialog.deleteLater()

@@ -1,6 +1,6 @@
 import {getValidatedSessionFromRequest, authRuntimeValidation} from './_lib/auth.js';
 
-const PROTECTED_PATHS = ['/beta-access', '/account'];
+const PROTECTED_PATHS = ['/beta-access', '/account', '/desktop-auth'];
 const PUBLIC_PATHS = [
   '/', '/login', '/signup', '/privacy', '/beta-terms', '/capabilities', '/applications', '/documentation',
   '/contact', '/technical-preview', '/resources', '/calculations', '/temporary-licence',
@@ -50,5 +50,14 @@ export async function onRequest(context) {
     }
   }
 
+  if (pathname === '/desktop-auth') {
+    const response = await next();
+    const headers = new Headers(response.headers);
+    headers.set('Cache-Control', 'no-store');
+    headers.set('Referrer-Policy', 'no-referrer');
+    headers.set('X-Frame-Options', 'DENY');
+    headers.set('Content-Security-Policy', "frame-ancestors 'none'");
+    return new Response(response.body, {status: response.status, headers});
+  }
   return next();
 }

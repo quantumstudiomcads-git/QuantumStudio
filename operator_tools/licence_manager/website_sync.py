@@ -96,6 +96,7 @@ class WebsiteActivation:
     licence_issued_at: str | None = None
     licence_expires_at: str | None = None
     licence_revoked_at: str | None = None
+    account_entitlement: dict | None = None
 
 
 def resolve_operator_sync_token() -> str:
@@ -559,7 +560,7 @@ def _parse_website_activation(value: object) -> WebsiteActivation:
     }
     optional = {
         "device_public_key_hash", "licence_id", "licence_status",
-        "licence_issued_at", "licence_expires_at", "licence_revoked_at",
+        "licence_issued_at", "licence_expires_at", "licence_revoked_at", "account_entitlement",
     }
     if not isinstance(value, dict) or not fields <= set(value) or set(value) - fields - optional:
         raise WebsiteResponseError(
@@ -630,6 +631,12 @@ def _parse_website_activation(value: object) -> WebsiteActivation:
         raise WebsiteResponseError("Website licence identifier is invalid.")
     if value.get("licence_status") not in (None, "ISSUED"):
         raise WebsiteResponseError("Website licence status is invalid.")
+    if value.get("account_entitlement") is not None:
+        from .entitlements import validate_entitlement
+        try:
+            validate_entitlement(value["account_entitlement"], value["application_id"])
+        except ValueError:
+            raise WebsiteResponseError("Website account entitlement is invalid.") from None
     return WebsiteActivation(
         activation_request_id=value["activation_request_id"],
         application_id=value["application_id"],

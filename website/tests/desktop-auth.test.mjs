@@ -160,6 +160,8 @@ describe('desktop browser activation protocol with real SQLite', () => {
   });
 
   it('reports missing application without fabricating an activation', async () => {
+    await db.prepare('DELETE FROM account_entitlements').run();
+    await db.prepare('DELETE FROM beta_audit_events').run();
     await db.prepare('DELETE FROM beta_applications').run();
     const challenge = await (await start()).json();
     expect((await confirm(challenge)).status).toBe(403);

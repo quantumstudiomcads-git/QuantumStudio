@@ -59,9 +59,13 @@ export async function onRequestGet({request, env}) {
   let rows;
   try {
     const result = await env.BETA_DB.prepare(
-      `SELECT ${ACTIVATION_FIELDS.join(', ')}
-       FROM beta_activations
-       ORDER BY created_at ASC, activation_request_id ASC
+      `SELECT ${ACTIVATION_FIELDS.map((field) => `a.${field}`).join(', ')},
+         e.entitlement_id, e.user_id AS entitlement_user_id, e.application_id AS entitlement_application_id,
+         e.plan_id, e.starts_at, e.expires_at, e.device_limit, e.revision,
+         e.created_at AS entitlement_created_at, e.updated_at AS entitlement_updated_at
+       FROM beta_activations a LEFT JOIN account_entitlements e
+         ON e.application_id=a.application_id AND e.user_id=a.user_id
+       ORDER BY a.created_at ASC, a.activation_request_id ASC
        LIMIT ${MAX_EXPORT_ACTIVATIONS + 1}`,
     ).all();
     rows = Array.isArray(result.results) ? result.results : [];
@@ -73,7 +77,13 @@ export async function onRequestGet({request, env}) {
   }
 
   const activations = rows.map((row) => Object.fromEntries(
-    ACTIVATION_FIELDS.map((field) => [field, row[field] ?? null]),
+    [...ACTIVATION_FIELDS.map((field) => [field, row[field] ?? null]),
+      ['account_entitlement', row.entitlement_id ? {
+        entitlement_id:row.entitlement_id, user_id:row.entitlement_user_id, application_id:row.entitlement_application_id,
+        plan_id:row.plan_id, starts_at:row.starts_at, expires_at:row.expires_at,
+        device_limit:row.device_limit, revision:row.revision,
+        created_at:row.entitlement_created_at, updated_at:row.entitlement_updated_at,
+      } : null]],
   ));
   const payload = {schema_version: 1, activations};
   if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > MAX_EXPORT_BYTES) {

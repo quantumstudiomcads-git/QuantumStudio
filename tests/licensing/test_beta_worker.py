@@ -12,6 +12,8 @@ from types import SimpleNamespace
 import time
 import secrets
 
+from tests.helpers.licensing import beta_entitlement
+
 import pytest
 
 from backend.licensing.canonical import canonical_json
@@ -35,7 +37,7 @@ def setup(tmp_path, monkeypatch):
     identity = identity_service.load_or_create()
     activation = WebsiteActivation("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "12345678-1234-4123-8123-123456789abc",
         identity.device_id, "windows", "x86_64", "0.2.0", "AUTHORIZED", None,
-        "2026-10-20T00:00:00Z", "2026-10-20T00:00:00Z", "2026-10-20T00:00:00Z", None, identity.public_key_hash)
+        "2026-10-20T00:00:00Z", "2026-10-20T00:00:00Z", "2026-10-20T00:00:00Z", None, identity.public_key_hash, account_entitlement=beta_entitlement(device_limit=2))
     state = SimpleNamespace(activation=activation, metadata=None, envelope=None, failure=None, calls=[])
     class Handler(BaseHTTPRequestHandler):
         def reply(self, code, data):
@@ -435,3 +437,28 @@ def test_canonical_cli_with_real_dpapi_storage_restarts_idempotently(setup,tmp_p
         assert connection.execute('SELECT COUNT(*) FROM website_activation_licences').fetchone()[0]==1
         assert json.loads(connection.execute('SELECT envelope_json FROM website_activation_licences').fetchone()[0])==envelope
     assert (root/'data-key.dpapi').is_file()
+
+
+
+def test_missing_account_entitlement_fails_closed_with_safe_operator_diagnostic(setup):
+    b=setup;b.state.activation=replace(b.state.activation,account_entitlement=None)
+    result=b.worker.run_once()[0]
+    assert result.stage=='issuance' and result.result=='failed'
+    assert 'account entitlement' in result.message and count(b)==0 and b.state.calls==[]
+
+
+def test_revoked_historical_activation_does_not_block_same_device_new_activation(setup,monkeypatch):
+    b=setup
+    assert b.worker.run_once()[0].result=='published'
+    original=b.state.envelope.copy()
+    historical=replace(b.state.activation,status='REVOKED',revoked_at='2026-10-22T00:00:00Z')
+    current=replace(b.state.activation,activation_request_id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        licence_id=None,licence_status=None,licence_issued_at=None,licence_expires_at=None)
+    b.state.activation=current;b.state.metadata=None;b.state.envelope=None
+    monkeypatch.setattr(module,'fetch_website_activations',lambda **_: (historical,current))
+    results=b.worker.run_once()
+    assert results[0].result=='not_authorized' and results[1].result=='published'
+    assert b.state.envelope['expires_at']==original['expires_at']
+    assert b.state.envelope['licence_id']!=original['licence_id'] and count(b)==2
+    old=b.db.connection.execute('SELECT envelope_json FROM website_activation_licences WHERE activation_request_id=?',(historical.activation_request_id,)).fetchone()
+    assert json.loads(old[0])==original

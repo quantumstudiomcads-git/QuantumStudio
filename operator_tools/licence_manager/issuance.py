@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from copy import deepcopy
 import json
 import hashlib
 import re
@@ -292,6 +293,13 @@ def issue_website_activation_for_testing(database, test_authority, activation, *
             return json.loads(existing["envelope_json"])
         issued = int(now.timestamp()) if isinstance(now, datetime) else int(
             now if now is not None else datetime.now(timezone.utc).timestamp())
+        from .entitlements import require_current_entitlement, remember_entitlement
+        try:
+            entitlement = deepcopy(activation.account_entitlement)
+            starts, expires = require_current_entitlement(entitlement, activation.application_id, issued)
+            remember_entitlement(db, entitlement)
+        except ValueError as error:
+            raise IssuanceRejected(str(error)) from None
         grants = derive_profile(Profile.PROFESSOR_BETA)
         licence_id = "lic_" + str(uuid.uuid4())
         subject = "sub_" + activation.application_id
@@ -302,11 +310,11 @@ def issue_website_activation_for_testing(database, test_authority, activation, *
             "product": PRODUCT, "channel": "beta", "plan_id": "pro",
             "device_id": activation.installation_id,
             "device_public_key_hash": activation.device_public_key_hash,
-            "issued_at": issued, "not_before": issued,
-            "expires_at": issued + DURATION_SECONDS, "offline_until": issued + DURATION_SECONDS,
+            "issued_at": issued, "not_before": max(issued, starts),
+            "expires_at": expires, "offline_until": expires,
             "entitlement_version": 1, "feature_entitlements": list(grants.features),
             "calculation_entitlements": list(grants.calculations),
-            "registered_device_limit": 1, "concurrent_session_limit": 1, "offline_device_limit": 1,
+            "registered_device_limit": entitlement["device_limit"], "concurrent_session_limit": 1, "offline_device_limit": 1,
             "nonce": str(uuid.uuid4()), "policy_profile": Profile.PROFESSOR_BETA.value,
             "issuer_label": "Quantum Studio Licence Manager",
         }

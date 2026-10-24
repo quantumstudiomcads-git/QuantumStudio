@@ -14,7 +14,7 @@ import time
 from backend.licensing.canonical import b64url_decode, canonical_json
 from backend.licensing.local_test_trust import load_test_trust
 from .audit import append_event, current_operator_id
-from .issuance import issue_website_activation_for_testing
+from .issuance import IssuanceRejected, issue_website_activation_for_testing
 from .licence_delivery import stored_test_licence, publish_website_test_licence
 from .paths import data_root
 from .signing import TestEphemeralAuthority, public_key_record
@@ -192,7 +192,7 @@ class BetaLicenceWorker:
         # M4 allows multiple distinct authorized devices per applicant. Do not
         # impose the separate legacy imported-request single-device limit here.
         for other in activations:
-            if other.activation_request_id != activation.activation_request_id and other.installation_id == activation.installation_id:
+            if other.activation_request_id != activation.activation_request_id and other.installation_id == activation.installation_id and other.status != "REVOKED":
                 return "conflicting_device_activation"
         return None
 
@@ -219,9 +219,12 @@ class BetaLicenceWorker:
                 self._audit(aid, stage, "recovered_original")
             else:
                 now = int(time.time())
-                for row in self.database.connection.execute("SELECT installation_id,envelope_json FROM website_activation_licences"):
+                for row in self.database.connection.execute("SELECT activation_request_id,installation_id,envelope_json FROM website_activation_licences"):
                     old = json.loads(row["envelope_json"])
-                    if row["installation_id"] == activation.installation_id and old["expires_at"] > now:
+                    confirmed_revoked = any(a.activation_request_id == row["activation_request_id"]
+                        and a.status == "REVOKED" and a.installation_id == row["installation_id"]
+                        and a.device_public_key_hash == old["device_public_key_hash"] for a in activations)
+                    if row["installation_id"] == activation.installation_id and old["expires_at"] > now and not confirmed_revoked:
                         raise WorkerError("Conflicting active local device licence; manual recovery required.")
                 if self.database.connection.execute("SELECT 1 FROM licences WHERE application_id=? AND revoked_at IS NULL AND expires_at>?", (activation.application_id, now)).fetchone():
                     raise WorkerError("Conflicting active legacy licence; manual recovery required.")
@@ -247,7 +250,7 @@ class BetaLicenceWorker:
                 test_mode=True, base_url=self.config.base_url, token=self.config.publish_token)
             self._audit(aid, stage, publication)
             return ActivationResult(aid, "complete", "already_current" if metadata == publication == "already_current" else "published")
-        except (WorkerError, WebsiteLicenceSyncError) as error:
+        except (WorkerError, WebsiteLicenceSyncError, IssuanceRejected) as error:
             self._audit(aid, stage, "conflict" if stage == "trust" and isinstance(error, WorkerError) else "failed")
             return ActivationResult(aid, stage, "failed", str(error))
         except Exception:

@@ -32,10 +32,11 @@ from operator_tools.licence_manager.issuance import issue_website_activation_for
 from operator_tools.licence_manager.website_sync import WebsiteActivation
 from backend.licensing.canonical import canonical_json
 from datetime import datetime,timezone
+from tests.helpers.licensing import beta_entitlement
 with tempfile.TemporaryDirectory() as root:
  db=Database(root,DataProtector.for_testing(b'T'*32))
  facts=json.load(sys.stdin)
- a=WebsiteActivation(activation_request_id=facts['activation'],application_id=facts['app'],installation_id=facts['installation'],device_public_key_hash=facts['hash'],platform='windows',architecture='x86_64',app_version='0.2.0',status='AUTHORIZED',flag_reason=None,created_at='2026-10-20T12:00:00Z',updated_at='2026-10-20T12:00:00Z',authorized_at='2026-10-20T12:00:00Z',revoked_at=None)
+ a=WebsiteActivation(activation_request_id=facts['activation'],application_id=facts['app'],installation_id=facts['installation'],device_public_key_hash=facts['hash'],platform='windows',architecture='x86_64',app_version='0.2.0',status='AUTHORIZED',flag_reason=None,created_at='2026-10-20T12:00:00Z',updated_at='2026-10-20T12:00:00Z',authorized_at='2026-10-20T12:00:00Z',revoked_at=None,account_entitlement=beta_entitlement())
  e=issue_website_activation_for_testing(db,TestEphemeralAuthority(),a,now=int(datetime(2026,10,20,12,tzinfo=timezone.utc).timestamp()))
  print(json.dumps({'envelope':e,'sha':hashlib.sha256(canonical_json(e)).hexdigest()})); db.close()`;
   const result = JSON.parse(execFileSync(python,['-c',script],{encoding:'utf8',input:JSON.stringify({activation,app,installation,hash:digest})}));

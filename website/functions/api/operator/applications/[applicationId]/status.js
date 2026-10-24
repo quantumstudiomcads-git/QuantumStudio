@@ -58,6 +58,32 @@ function responseForState(applicationId, status, result) {
   return jsonResponse(200, {schema_version: 1, application_id: applicationId, status, result});
 }
 
+async function responseForCheckedState(env, applicationId, status, result) {
+  if (status !== 'APPROVED') return responseForState(applicationId, status, result);
+  let row;
+  try {
+    row = await env.BETA_DB.prepare(`SELECT a.status, e.entitlement_id, e.plan_id,
+      e.starts_at, e.expires_at, e.device_limit, e.revision
+      FROM beta_applications a LEFT JOIN account_entitlements e
+        ON e.application_id = a.application_id AND e.user_id = a.user_id
+      WHERE a.application_id = ?`).bind(applicationId).first();
+  } catch {
+    // A committed approval is never repeated to repair a failed read. A retry
+    // checks the same immutable grant through the already-current path.
+    return jsonResponse(503, {error: {code: 'service_unavailable'}});
+  }
+  if (row?.status !== status) return jsonResponse(409, {error: {code: 'status_conflict'}});
+  const starts = Date.parse(row.starts_at), expires = Date.parse(row.expires_at);
+  if (typeof row.entitlement_id !== 'string' || !row.entitlement_id
+      || row.plan_id !== 'beta' || !Number.isFinite(starts) || !Number.isFinite(expires)
+      || expires - starts !== 90 * 86400 * 1000
+      || !Number.isSafeInteger(row.device_limit) || row.device_limit < 1
+      || !Number.isSafeInteger(row.revision) || row.revision < 1) {
+    return jsonResponse(409, {error: {code: 'entitlement_unavailable'}});
+  }
+  return responseForState(applicationId, status, result);
+}
+
 function validateOperatorRequest(request, env, params) {
   const applicationId = params?.applicationId;
   if (typeof applicationId !== 'string' || !APPLICATION_ID_PATTERN.test(applicationId)) {
@@ -95,7 +121,7 @@ export async function onRequestGet({request, env, params}) {
       'SELECT status FROM beta_applications WHERE application_id = ?'
     ).bind(params.applicationId).first();
     if (!application) return jsonResponse(404, {error: {code: 'application_not_found'}});
-    return responseForState(params.applicationId, application.status, 'already_current');
+    return responseForCheckedState(env, params.applicationId, application.status, 'already_current');
   } catch {
     return jsonResponse(503, {error: {code: 'service_unavailable'}});
   }
@@ -160,7 +186,7 @@ export async function onRequestPost({request, env, params}) {
     return jsonResponse(409, {error: {code: 'status_conflict'}});
   }
   if (application.status === payload.status) {
-    return responseForState(applicationId, payload.status, 'already_current');
+    return responseForCheckedState(env, applicationId, payload.status, 'already_current');
   }
   try {
     assertTransition(application.status, payload.status);
@@ -204,10 +230,13 @@ export async function onRequestPost({request, env, params}) {
     return jsonResponse(503, {error: {code: 'service_unavailable'}});
   }
 
-  if (results?.[0]?.meta?.changes === 1) {
-    return responseForState(applicationId, payload.status, 'updated');
+  const changes = results?.[0]?.meta?.changes;
+  // D1 includes AFTER-trigger writes in meta.changes. The guarded UPDATE can
+  // match only one application, but approval also provisions a grant and audit.
+  if (Number.isSafeInteger(changes) && changes > 0) {
+    return responseForCheckedState(env, applicationId, payload.status, 'updated');
   }
-  if (results?.[0]?.meta?.changes !== 0) {
+  if (changes !== 0) {
     return jsonResponse(503, {error: {code: 'service_unavailable'}});
   }
   if (expectedStatus !== null) {
@@ -221,7 +250,7 @@ export async function onRequestPost({request, env, params}) {
     return jsonResponse(503, {error: {code: 'service_unavailable'}});
   }
   if (application?.status === payload.status) {
-    return responseForState(applicationId, payload.status, 'already_current');
+    return responseForCheckedState(env, applicationId, payload.status, 'already_current');
   }
   return jsonResponse(409, {error: {code: 'status_conflict'}});
 }

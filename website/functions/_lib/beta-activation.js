@@ -2,7 +2,7 @@ import {buildJsonResponse, authRuntimeValidation, getValidatedSessionFromRequest
 import {errorResponse, expectedOrigin} from './beta-registration.js';
 
 const MAX_REQUEST_BYTES = 4096;
-const DEFAULT_MAX_ACTIVE_DEVICES = 2;
+const DEFAULT_MAX_ACTIVE_DEVICES = 1;
 const MAX_CONFIGURED_ACTIVE_DEVICES = 20;
 const INSTALLATION_ID_PATTERN = /^dev_[0-9a-f]{32}$/;
 const APP_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -177,8 +177,7 @@ export async function handleActivationRequest(request, env, method) {
 export async function registerActivationForUser(env, userId, facts) {
   const parsed = parseActivationPayload(JSON.stringify(facts));
   if (!parsed.ok) return parsed.response;
-  const maxDevices = configuredMaxActiveDevices(env);
-  if (maxDevices === null) {
+  if (configuredMaxActiveDevices(env) === null) {
     return errorResponse(503, 'service_unavailable', 'Beta activation is temporarily unavailable.');
   }
 
@@ -195,6 +194,23 @@ export async function registerActivationForUser(env, userId, facts) {
   }
 
   const now = new Date().toISOString();
+  // Expiry belongs to the account, not a device-state transition. Do not
+  // demote an existing AUTHORIZED activation when its account term ends.
+  if (['APPROVED', 'LICENSE_ISSUED'].includes(application.status)) {
+    let entitlement;
+    try {
+      entitlement = await env.BETA_DB.prepare(
+        'SELECT starts_at, expires_at FROM account_entitlements WHERE application_id = ? AND user_id = ?',
+      ).bind(application.application_id, userId).first();
+    } catch {
+      return errorResponse(503, 'service_unavailable', 'Account entitlement is temporarily unavailable.');
+    }
+    const starts = entitlement ? Date.parse(entitlement.starts_at) : NaN;
+    const expires = entitlement ? Date.parse(entitlement.expires_at) : NaN;
+    if (!Number.isFinite(starts) || !Number.isFinite(expires) || starts > Date.parse(now) || expires <= Date.parse(now)) {
+      return errorResponse(403, 'entitlement_unavailable', 'A current account entitlement is required.');
+    }
+  }
   const requestId = crypto.randomUUID();
   const {installation_id: installationId, platform, architecture, app_version: appVersion} = parsed.value;
   try {
@@ -206,43 +222,49 @@ export async function registerActivationForUser(env, userId, facts) {
       )
       SELECT ?, app.user_id, app.application_id, ?, ?, ?, ?,
         CASE
-          WHEN app.status = 'APPROVED'
-            OR (app.status = 'LICENSE_ISSUED' AND app.licence_expires_at > ?)
+          WHEN app.status IN ('APPROVED','LICENSE_ISSUED')
+            AND EXISTS (SELECT 1 FROM account_entitlements ent
+              WHERE ent.application_id=app.application_id AND ent.user_id=app.user_id
+                AND unixepoch(ent.starts_at) <= unixepoch(?) AND unixepoch(ent.expires_at) > unixepoch(?))
           THEN CASE WHEN (
             SELECT COUNT(*) FROM beta_activations active
             WHERE active.user_id = app.user_id
               AND active.status = 'AUTHORIZED'
               AND active.installation_id <> ?
-          ) < ? THEN 'AUTHORIZED' ELSE 'FLAGGED' END
+          ) < (SELECT device_limit FROM account_entitlements WHERE application_id=app.application_id AND user_id=app.user_id) THEN 'AUTHORIZED' ELSE 'FLAGGED' END
           ELSE 'FLAGGED'
         END,
         CASE
-          WHEN app.status = 'APPROVED'
-            OR (app.status = 'LICENSE_ISSUED' AND app.licence_expires_at > ?)
+          WHEN app.status IN ('APPROVED','LICENSE_ISSUED')
+            AND EXISTS (SELECT 1 FROM account_entitlements ent
+              WHERE ent.application_id=app.application_id AND ent.user_id=app.user_id
+                AND unixepoch(ent.starts_at) <= unixepoch(?) AND unixepoch(ent.expires_at) > unixepoch(?))
           THEN CASE WHEN (
             SELECT COUNT(*) FROM beta_activations active
             WHERE active.user_id = app.user_id
               AND active.status = 'AUTHORIZED'
               AND active.installation_id <> ?
-          ) < ? THEN NULL ELSE 'DEVICE_LIMIT' END
+          ) < (SELECT device_limit FROM account_entitlements WHERE application_id=app.application_id AND user_id=app.user_id) THEN NULL ELSE 'DEVICE_LIMIT' END
           ELSE 'APPLICATION_NOT_ELIGIBLE'
         END,
         ?, ?, CASE
-          WHEN app.status = 'APPROVED'
-            OR (app.status = 'LICENSE_ISSUED' AND app.licence_expires_at > ?)
+          WHEN app.status IN ('APPROVED','LICENSE_ISSUED')
+            AND EXISTS (SELECT 1 FROM account_entitlements ent
+              WHERE ent.application_id=app.application_id AND ent.user_id=app.user_id
+                AND unixepoch(ent.starts_at) <= unixepoch(?) AND unixepoch(ent.expires_at) > unixepoch(?))
           THEN CASE WHEN (
             SELECT COUNT(*) FROM beta_activations active
             WHERE active.user_id = app.user_id
               AND active.status = 'AUTHORIZED'
               AND active.installation_id <> ?
-          ) < ? THEN ? ELSE NULL END
+          ) < (SELECT device_limit FROM account_entitlements WHERE application_id=app.application_id AND user_id=app.user_id) THEN ? ELSE NULL END
           ELSE NULL
         END,
         NULL, ?
       FROM beta_applications app
       WHERE app.user_id = ? AND 1 = 1
       LIMIT 1
-      ON CONFLICT(user_id, installation_id) DO UPDATE SET
+      ON CONFLICT(user_id, installation_id) WHERE status <> 'REVOKED' DO UPDATE SET
         device_public_key_hash = COALESCE(beta_activations.device_public_key_hash, excluded.device_public_key_hash),
         platform = excluded.platform,
         architecture = excluded.architecture,
@@ -274,16 +296,16 @@ export async function registerActivationForUser(env, userId, facts) {
       architecture,
       appVersion,
       now,
-      installationId,
-      maxDevices,
       now,
       installationId,
-      maxDevices,
-      now,
       now,
       now,
       installationId,
-      maxDevices,
+      now,
+      now,
+      now,
+      now,
+      installationId,
       now,
       parsed.value.device_public_key_hash ?? null,
       userId,
@@ -292,7 +314,8 @@ export async function registerActivationForUser(env, userId, facts) {
       `SELECT activation_request_id, installation_id, platform, architecture,
               app_version, status, created_at, updated_at, authorized_at, device_public_key_hash
        FROM beta_activations
-       WHERE user_id = ? AND installation_id = ?`,
+       WHERE user_id = ? AND installation_id = ?
+       ORDER BY (status <> 'REVOKED') DESC, created_at DESC, activation_request_id DESC LIMIT 1`,
     ).bind(userId, installationId).first();
     if (!activation || !PUBLIC_ACTIVATION_STATUSES.has(activation.status)) {
       return errorResponse(403, 'application_required', 'A linked beta application is required for device activation.');

@@ -8,9 +8,9 @@ $script:QSWebsite = Join-Path $script:QSRepo 'website'
 # M8 QA paths
 # ------------------------------------------------------------------
 
-$script:QSOperatorRoot = 'C:\Temp\QuantumStudio-M8-Operator'
-$script:QSTrustFile    = 'C:\Temp\QuantumStudio-M8-issuer.json'
-$script:QSDesktopRoot  = 'C:\Temp\QuantumStudio-M8-Desktop'
+$script:QSOperatorRoot = 'C:\Temp\QuantumStudio-M9A-Operator'
+$script:QSTrustFile    = 'C:\Temp\QuantumStudio-M9A-issuer.json'
+$script:QSDesktopRoot  = 'C:\Temp\QuantumStudio-M9A-Desktop-1'
 
 $script:QSWebsiteUrl = 'http://127.0.0.1:8788'
 
@@ -80,6 +80,8 @@ function Start-QSWebsite {
     Set-Location $script:QSWebsite
 
     $env:CLOUDFLARE_LOCAL = 'true'
+    $env:BETA_TURNSTILE_TEST_MODE = 'true'
+    $env:TURNSTILE_SITE_KEY = 'local-public-test-value'
 
     Write-Host ''
     Write-Host '=== Quantum Studio Website ==='
@@ -87,7 +89,6 @@ function Start-QSWebsite {
     Write-Host "URL : $script:QSWebsiteUrl"
     Write-Host ''
 
-    # Build before Pages, matching our verified local QA workflow.
     npm run build
 
     if ($LASTEXITCODE -ne 0) {

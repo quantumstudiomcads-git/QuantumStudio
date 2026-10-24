@@ -19,6 +19,10 @@ function makeEnv(initialStatus = 'APPLIED', {beforeBatch} = {}) {
           return this;
         },
         async first() {
+          if (this.sql.startsWith('SELECT a.status')) {
+            return state.status === null ? null : {status:state.status, entitlement_id:'ent_'+'a'.repeat(32),
+              plan_id:'beta', starts_at:'2026-10-24T00:00:00Z', expires_at:'2027-01-22T00:00:00Z', device_limit:1, revision:1};
+          }
           if (this.sql.startsWith('SELECT status')) {
             return state.status === null ? null : {status: state.status};
           }

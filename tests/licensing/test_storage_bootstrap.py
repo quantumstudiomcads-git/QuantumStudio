@@ -53,16 +53,29 @@ class StorageBootstrapTests(unittest.TestCase):
         for item in self.patches: item.start()
         self.addCleanup(lambda: [item.stop() for item in reversed(self.patches)])
 
-    def test_complete_v4_pair_reopens_and_migrates_to_v5(self):
+    def test_complete_v4_pair_reopens_and_migrates_to_v6(self):
         database = bootstrap_storage(self.root)
         with database.transaction() as db:
             db.execute("DROP TABLE website_activation_licences")
-            db.execute("DELETE FROM schema_migrations WHERE version=5")
+            db.execute("DROP TABLE website_account_entitlements")
+            db.execute("DELETE FROM schema_migrations WHERE version>=5")
         database.close()
         reopened = bootstrap_storage(self.root)
         self.addCleanup(reopened.close)
-        self.assertEqual(reopened.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 5)
+        self.assertEqual(reopened.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 6)
         self.assertEqual(reopened.connection.execute("SELECT COUNT(*) FROM website_activation_licences").fetchone()[0], 0)
+        self.assertEqual(self.generation_count, 1)
+
+    def test_complete_v5_pair_reopens_and_migrates_to_v6(self):
+        database = bootstrap_storage(self.root)
+        with database.transaction() as db:
+            db.execute("DROP TABLE website_account_entitlements")
+            db.execute("DELETE FROM schema_migrations WHERE version=6")
+        database.close()
+        reopened = bootstrap_storage(self.root)
+        self.addCleanup(reopened.close)
+        self.assertEqual(reopened.connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 6)
+        self.assertEqual(reopened.connection.execute("SELECT COUNT(*) FROM website_account_entitlements").fetchone()[0], 0)
         self.assertEqual(self.generation_count, 1)
 
     def test_first_run_initializes_one_matching_pair(self):

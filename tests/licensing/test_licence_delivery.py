@@ -12,6 +12,8 @@ from threading import Event, Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from tests.helpers.licensing import beta_entitlement
+
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from PySide6.QtWidgets import QFileDialog
@@ -44,7 +46,7 @@ def bundle(tmp_path):
     activation = WebsiteActivation(activation_request_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         application_id="12345678-1234-4123-8123-123456789abc",installation_id=device.device_id,
         device_public_key_hash=device.public_key_hash,platform="windows",architecture="x86_64",app_version="0.2.0",
-        status="AUTHORIZED",flag_reason=None,created_at="2026-10-20T00:00:00Z",updated_at="2026-10-20T00:00:00Z",authorized_at="2026-10-20T00:00:00Z",revoked_at=None)
+        status="AUTHORIZED",flag_reason=None,created_at="2026-10-20T00:00:00Z",updated_at="2026-10-20T00:00:00Z",authorized_at="2026-10-20T00:00:00Z",revoked_at=None,account_entitlement=beta_entitlement())
     signer = _TestSigner()
     now = int(time.time())
     envelope = issue_website_activation_for_testing(db, signer, activation, now=now)

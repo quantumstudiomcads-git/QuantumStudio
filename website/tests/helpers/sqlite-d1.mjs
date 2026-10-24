@@ -7,9 +7,16 @@ const venv = resolve('..', '.venv', process.platform === 'win32' ? 'Scripts/pyth
 const python = process.env.QS_TEST_PYTHON || (existsSync(venv) ? venv : process.platform === 'win32' ? 'python' : 'python3');
 const bridge = `import json,sqlite3,sys
 p=json.load(sys.stdin)
-c=sqlite3.connect(p['db']); c.row_factory=sqlite3.Row
+c=sqlite3.connect(p['db']); c.row_factory=sqlite3.Row; c.execute('PRAGMA foreign_keys=ON')
 if 'script' in p:
  c.executescript(p['script']); result={}
+elif 'batch' in p:
+ result=[]
+ with c:
+  for item in p['batch']:
+   before=c.total_changes
+   cursor=c.execute(item['sql'],item['values']); rows=[dict(r) for r in cursor.fetchall()] if cursor.description else []
+   result.append({'results':rows,'meta':{'changes':c.total_changes-before}})
 else:
  cursor=c.execute(p['sql'],p['values']); rows=[dict(r) for r in cursor.fetchall()] if cursor.description else []
  result={'results':rows,'meta':{'changes':c.total_changes}}
@@ -20,8 +27,9 @@ export class SQLiteD1 {
     return JSON.parse(execFileSync(python, ['-c', bridge], {input: JSON.stringify({db: this.path, ...payload}), encoding: 'utf8'}));
   }
   script(script) { this.invoke({script}); }
+  async batch(statements) { return this.invoke({batch:statements.map((s)=>({sql:s.sql,values:s.values}))}); }
   prepare(sql) {
-    const statement = {values: [], bind: (...values) => { statement.values = values; return statement; },
+    const statement = {sql, values: [], bind: (...values) => { statement.values = values; return statement; },
       all: async () => this.invoke({sql, values: statement.values}),
       first: async () => this.invoke({sql, values: statement.values}).results[0] || null,
       run: async () => this.invoke({sql, values: statement.values})};

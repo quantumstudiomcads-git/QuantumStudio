@@ -23,6 +23,7 @@ const makeApplication = (userId = 'user-a', status = 'APPROVED') => ({
   user_id: userId,
   status,
   licence_expires_at: '2099-01-01T00:00:00.000Z',
+  entitlement: {starts_at:'2020-01-01T00:00:00Z',expires_at:'2099-01-01T00:00:00Z',device_limit:1},
 });
 
 class FakeD1 {
@@ -46,13 +47,16 @@ class FakeD1 {
         if (sql.includes('FROM sessions WHERE session_id = ?')) {
           return this.sessions.get(statement.values[0]) ?? null;
         }
+        if (sql.includes('FROM account_entitlements')) {
+          return this.applications.find((row)=>row.application_id===statement.values[0] && row.user_id===statement.values[1])?.entitlement ?? null;
+        }
         if (sql.includes('FROM beta_applications WHERE user_id = ?')) {
           return this.applications.find((row) => row.user_id === statement.values[0]) ?? null;
         }
         if (sql.includes('FROM beta_activations') && sql.includes('installation_id = ?')) {
           const [userId, installationId] = statement.values;
           return this.activations.find(
-            (row) => row.user_id === userId && row.installation_id === installationId,
+            (row) => row.user_id === userId && row.installation_id === installationId && row.status !== 'REVOKED',
           ) ?? null;
         }
         throw new Error(`Unexpected first query: ${sql}`);
@@ -67,7 +71,7 @@ class FakeD1 {
                 || left.activation_request_id.localeCompare(right.activation_request_id)),
           };
         }
-        if (sql.includes('FROM beta_activations') && sql.includes('ORDER BY created_at ASC')) {
+        if (sql.includes('FROM beta_activations') && sql.includes('ORDER BY a.created_at ASC')) {
           this.operatorQueries += 1;
           return {
             results: [...this.activations]
@@ -92,7 +96,7 @@ class FakeD1 {
         const platform = values[2];
         const architecture = values[3];
         const appVersion = values[4];
-        const maxDevices = values[15];
+        const maxDevices = this.applications.find((row) => row.user_id === values[18])?.entitlement?.device_limit ?? 1;
         const createdAt = values[11];
         const updatedAt = values[12];
         const authorizedAt = values[16];
@@ -100,10 +104,10 @@ class FakeD1 {
         const userId = values[18];
         const app = this.applications.find((row) => row.user_id === userId);
         const now = values[5];
-        const eligible = app?.status === 'APPROVED'
-          || (app?.status === 'LICENSE_ISSUED' && app.licence_expires_at > now);
+        const eligible = ['APPROVED','LICENSE_ISSUED'].includes(app?.status)
+          && app?.entitlement?.starts_at <= now && app?.entitlement?.expires_at > now;
         const existing = this.activations.find(
-          (row) => row.user_id === userId && row.installation_id === installationId,
+          (row) => row.user_id === userId && row.installation_id === installationId && row.status !== 'REVOKED',
         );
         const activeCount = this.activations.filter(
           (row) => row.user_id === userId
@@ -242,13 +246,15 @@ describe('authenticated beta activation API', () => {
 
     db.activations[0].status = 'REVOKED';
     await register(db, 'user-a', requestPayload());
-    expect(db.activations).toHaveLength(1);
+    expect(db.activations).toHaveLength(2);
     expect(db.activations[0].status).toBe('REVOKED');
-    expect(db.activations[0].flag_reason).toBe('INSTALLATION_REVOKED');
+    expect(db.activations[1].status).toBe('AUTHORIZED');
+    expect(db.activations[1].activation_request_id).not.toBe(firstPayload.activation.activation_request_id);
   });
 
   it('flags only installations exceeding the configured active-device limit', async () => {
-    const db = new FakeD1({applications: [makeApplication()]});
+    const application = makeApplication(); application.entitlement.device_limit = 2;
+    const db = new FakeD1({applications: [application]});
     const maxDevices = 2;
     const first = await register(db, 'user-a', requestPayload(`dev_${'1'.repeat(32)}`));
     const second = await register(db, 'user-a', requestPayload(`dev_${'2'.repeat(32)}`));

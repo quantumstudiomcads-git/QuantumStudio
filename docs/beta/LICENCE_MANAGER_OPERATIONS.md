@@ -22,7 +22,7 @@ New beta applications submitted by signed-in users are associated with the authe
 
 ## Automatic beta-device activation
 
-An approved beta applicant can register an installation through the authenticated `POST /api/beta/activation` endpoint. The endpoint uses the signed-in account and its linked application; clients cannot submit an account ID, application ID, activation status, or licence claim. It accepts the desktop's stable installation ID (`dev_` plus the public-key hash prefix), platform, architecture, and application version. No hardware fingerprint is collected. An approved application is automatically authorized up to `BETA_MAX_ACTIVE_DEVICES` active installations per account (default 2; configured values must be integers from 1 through 20). A non-eligible application or an installation over the limit is flagged for support rather than automatically authorized. Repeating a registration is idempotent; an installation already marked revoked remains revoked.
+An approved beta applicant can register an installation through the authenticated `POST /api/beta/activation` endpoint. The endpoint uses the signed-in account and its linked application; clients cannot submit an account ID, application ID, activation status, or licence claim. It accepts the desktop's stable installation ID (`dev_` plus the public-key hash prefix), platform, architecture, and application version. No hardware fingerprint is collected. An approved account must have a current fixed account entitlement. Its persisted `device_limit` controls automatic authorization (beta default 1; future limits of 2+ use the same schema). `BETA_MAX_ACTIVE_DEVICES` retains legacy configuration validation but cannot expand an account grant. A non-eligible application or an installation over the limit is flagged for support rather than automatically authorized. Repeating a current registration is idempotent. Revoked activation records remain historical; a new authenticated registration can create a separate activation when the account has a free slot.
 
 The authenticated `/account` page shows each user's own compact device ID, platform, and safe status. The operator's **Activation Requests** page has a separate **Refresh website activations** view that reads through `/api/operator/activations` using the existing read-only `QS_OPERATOR_SYNC_TOKEN` / `OPERATOR_SYNC_TOKEN` bearer credential. It does not add website rows to local activation requests. TEST MODE provides the separate issuance and metadata actions described below. The endpoint requires HTTPS in production; local HTTP use is only for local Pages testing. No production token is configured or committed.
 
@@ -38,7 +38,7 @@ Review the activation request and its policy profile. Explicitly confirm issuanc
 
 ## Renewal, expiry, and revocation
 
-Initial beta licences last 90 days and bind to one device. Renewal requires a fresh operator review and controlled activation. Local expiry/revocation entries update the administrative record. Revocation does not immediately invalidate an already delivered offline licence; the client enforces its signed expiry until authenticated refresh/revocation exists.
+M9A beta account entitlements last 90 days from approval. Website-path device licences bind to a device and inherit that fixed account expiry, including later/replacement devices; activation never restarts the term. The legacy manually imported request path is unchanged. Renewal requires a fresh operator review and controlled activation. Local expiry/revocation entries update the administrative record. Revocation does not immediately invalidate an already delivered offline licence; the client enforces its signed expiry until authenticated refresh/revocation exists.
 
 ## Audit, recovery, and key loss
 
@@ -108,3 +108,5 @@ update account-wide application approval status, or implement automatic issuance
 The website account device summary continues to show activation status only.
 Manual click-through against local Pages/D1 is separate from automated offscreen
 Qt/loopback HTTP verification and must be recorded explicitly before freeze.
+
+M9A provisioning, migration and legacy-data instructions: [ACCOUNT_ENTITLEMENTS.md](ACCOUNT_ENTITLEMENTS.md). Online status validation and revocation remain later phases; no offline-grace mechanism is introduced by M9A.

@@ -8,6 +8,8 @@ from pathlib import Path
 import sqlite3
 from threading import Thread
 
+from tests.helpers.licensing import beta_entitlement
+
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -48,7 +50,7 @@ def activation(device):
         installation_id=device.device_id, device_public_key_hash=device.public_key_hash,
         platform="linux", architecture="x86_64", app_version="0.1.0",
         status="AUTHORIZED", flag_reason=None, created_at="2026-10-19T00:00:00Z",
-        updated_at="2026-10-19T00:00:00Z", authorized_at="2026-10-19T00:00:00Z", revoked_at=None)
+        updated_at="2026-10-19T00:00:00Z", authorized_at="2026-10-19T00:00:00Z", revoked_at=None, account_entitlement=beta_entitlement())
 
 
 def test_authorized_issuance_verifies_and_is_idempotent(db, activation, device):
@@ -254,21 +256,23 @@ def test_website_migration_applies_on_verified_v5_baseline():
 def test_activation_upsert_and_metadata_sql_on_real_sqlite():
     db = sqlite3.connect(":memory:")
     try:
+        for path in sorted(Path("website/migrations").glob("*.sql")):
+            db.executescript(path.read_text(encoding="utf-8"))
         db.executescript("""
-            CREATE TABLE users(user_id TEXT PRIMARY KEY);
-            CREATE TABLE beta_applications(application_id TEXT PRIMARY KEY, user_id TEXT, status TEXT, licence_expires_at TEXT);
-            INSERT INTO users VALUES('user-a');
-            INSERT INTO beta_applications VALUES('12345678-1234-4123-8123-123456789abc','user-a','APPROVED',NULL);
+            INSERT INTO users(user_id,full_name,institution,email,normalized_email,email_lookup_hash,status,created_at,updated_at)
+            VALUES('user-a','Test','Test','a@example.test','a@example.test','hash','VERIFIED','2026-10-19','2026-10-19');
+            INSERT INTO beta_applications(application_id,user_id,full_name,email,normalized_email,email_lookup_hash,institution,country,research_area,
+                operating_system,privacy_consent,privacy_version,terms_consent,terms_version,communications_consent,status,submitted_at,updated_at)
+            VALUES('12345678-1234-4123-8123-123456789abc','user-a','Test','a@example.test','a@example.test','hash','Test','Test','Test',
+                'Windows',1,'1',1,'1',0,'APPROVED','2026-10-19','2026-10-19');
         """)
-        for name in ("0005_beta_activations.sql", "0006_beta_activation_licences.sql"):
-            db.executescript((Path("website/migrations") / name).read_text())
         source = Path("website/functions/_lib/beta-activation.js").read_text()
         sql = re.search(r"prepare\(`\s*(INSERT INTO beta_activations.*?)`\)\.bind", source, re.S).group(1)
         stamp = "2026-10-19T12:00:00.000Z"
         installation = "dev_" + "a" * 32
         def register(digest):
             db.execute(sql, ("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", installation, "linux", "x86_64", "0.1.0",
-                stamp, installation, 2, stamp, installation, 2, stamp, stamp, stamp, installation, 2, stamp, digest, "user-a"))
+                stamp, stamp, installation, stamp, stamp, installation, stamp, stamp, stamp, stamp, installation, stamp, digest, "user-a"))
         register(None)  # Legacy registration remains valid.
         register("a" * 64)  # Add the full public hash without replacing the activation.
         register("a" * 32 + "b" * 32)  # Rebinding is not allowed even for a colliding short ID.

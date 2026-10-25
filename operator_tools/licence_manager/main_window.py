@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 from datetime import datetime, timezone
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -17,6 +18,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from .device_revocation import (
+    REVOCATION_REASONS, DeviceRevocationError, DeviceRevocationAuthenticationError,
+    DeviceRevocationNetworkError, DeviceRevocationConflictError, revoke_website_device,
+)
 from .audit import append_event, current_operator_id, verify_chain
 from .crypto import DataProtector
 from .database import Database
@@ -199,6 +204,9 @@ class LicenceManagerWindow(QMainWindow):
                 self.sync_website_test_licence_button = actions[2]
                 self.publish_website_licence_button = actions[3]
                 self.export_test_trust_button = actions[4]
+                self.revoke_website_device_button = self._actions(box, (
+                    ("Revoke device", self.revoke_selected_website_device),
+                ))[0]
                 self.website_activations_table.itemSelectionChanged.connect(self._update_website_licence_actions)
                 self._update_website_licence_actions()
             elif name == "Licences":
@@ -355,6 +363,14 @@ class LicenceManagerWindow(QMainWindow):
             return "Export needs operator review. Check the chosen destination before retrying."
         if isinstance(error, StorageError):
             return "Storage is unavailable. Preserve the existing data and request operator recovery."
+        if isinstance(error, DeviceRevocationAuthenticationError):
+            return "Device revocation authentication failed. Check the dedicated revocation credential."
+        if isinstance(error, DeviceRevocationNetworkError):
+            return "Device revocation endpoint could not be reached. The outcome is unknown; retry with the same reason."
+        if isinstance(error, DeviceRevocationConflictError):
+            return "Device revocation conflict. Refresh activation state and review the original reason before retrying."
+        if isinstance(error, DeviceRevocationError):
+            return "Device revocation configuration is invalid or the endpoint returned an unexpected response. Refresh before retrying."
         if isinstance(error, WebsiteStatusAuthenticationError):
             return "Website status authentication failed. Check the dedicated status-sync credential. The local decision is unchanged."
         if isinstance(error, WebsiteStatusNetworkError):
@@ -525,7 +541,7 @@ class LicenceManagerWindow(QMainWindow):
             self._website_activations = fetch_website_activations(test_mode=self.test_mode)
             self._render_website_activations()
             self._set_feedback(
-                f"Loaded {len(self._website_activations)} website activation record(s). Website facts are read-only; TEST issuance is local.",
+                f"Loaded {len(self._website_activations)} website activation record(s). Website refresh is read-only; revocation is a separate operator action.",
                 level="success")
         except Exception as error:
             self._show_error("Website activations unavailable", error, "Website activation refresh")
@@ -570,6 +586,37 @@ class LicenceManagerWindow(QMainWindow):
         self.sync_website_test_licence_button.setEnabled(bool(eligible and local))
         self.publish_website_licence_button.setEnabled(bool(eligible and local))
         self.export_test_trust_button.setEnabled(bool(self.test_mode and local))
+        self.revoke_website_device_button.setEnabled(bool(activation and activation.status == "AUTHORIZED"))
+
+    def revoke_selected_website_device(self):
+        activation = self._selected_website_activation()
+        if activation is None or activation.status != "AUTHORIZED":
+            self._set_feedback("Select one AUTHORIZED website activation to revoke.", level="warning")
+            return
+        reason, ok = QInputDialog.getItem(self, "Revoke device", "Select the revocation reason:", list(REVOCATION_REASONS), 0, False)
+        if not ok:
+            return
+        if QMessageBox.question(self, "Confirm device revocation",
+                f"Revoke activation {activation.activation_request_id} for {reason}? Its active device slot will be released. This activation cannot be restored.") != QMessageBox.Yes:
+            return
+        try:
+            result = revoke_website_device(activation.activation_request_id, reason, test_mode=self.test_mode)
+        except Exception as error:
+            self._show_error("Device revocation failed", error, "Device revocation")
+            return
+        # The validated server response is authoritative even if the subsequent
+        # list refresh fails. Do not leave issuance enabled for this activation.
+        self._website_activations = tuple(replace(item, status="REVOKED", revoked_at=result.revoked_at)
+            if item.activation_request_id == activation.activation_request_id else item for item in self._website_activations)
+        self._render_website_activations()
+        try:
+            self._website_activations = fetch_website_activations(test_mode=self.test_mode)
+            self._render_website_activations()
+        except WebsiteSyncError:
+            self._set_feedback("Device revocation confirmed; activation list refresh failed. Refresh when available.", level="warning")
+            return
+        self._set_feedback("Device already revoked; original revocation preserved." if result.result == "already_revoked"
+            else "Device revoked and active device slot released. Activation history and licences are preserved.", level="success")
 
     def issue_selected_website_test_licence(self):
         activation = self._selected_website_activation()

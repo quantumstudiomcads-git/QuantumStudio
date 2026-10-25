@@ -6,6 +6,7 @@ import {resolve, join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {SQLiteD1} from './helpers/sqlite-d1.mjs';
 import {canonicalJson} from '../functions/_lib/licence-delivery.js';
+import {onRequestPost as revokeRoute} from '../functions/api/operator/activations/[activationId]/revoke.js';
 import {onRequestPost as publishRoute} from '../functions/api/operator/activations/[activationId]/publish.js';
 import {onRequestPost as challengeRoute} from '../functions/api/licence/device-challenge.js';
 import {onRequestPost as retrieveRoute} from '../functions/api/licence/device-retrieve.js';
@@ -173,4 +174,17 @@ describe('M7 immutable signed licence publication and real device proof',()=>{
     env.BETA_ENVIRONMENT='production';expect((await publish()).status).toBe(403);
     expect((await challenge()).status).toBe(403);
   });
+});
+
+it('M9B revocation preserves the actual published signed envelope and blocks publication as active authorization',async()=>{
+  expect((await publish()).status).toBe(200);
+  const original=await db.prepare('SELECT * FROM published_licences').first();
+  const licence=await db.prepare('SELECT licence_id,licence_status FROM beta_activations').first();
+  env.OPERATOR_ACTIVATION_REVOKE_TOKEN='synthetic-revoke';
+  const response=await post(revokeRoute,{schema_version:1,reason_code:'DEVICE_LOST',expected_status:'AUTHORIZED'},'synthetic-revoke');
+  expect(response.status).toBe(200);
+  expect(await db.prepare('SELECT * FROM published_licences').first()).toEqual(original);
+  expect(await db.prepare('SELECT licence_id,licence_status FROM beta_activations').first()).toEqual(licence);
+  expect((await publish()).status).toBe(403);
+  expect(await db.prepare('SELECT * FROM published_licences').first()).toEqual(original);
 });

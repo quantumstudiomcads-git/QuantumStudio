@@ -462,3 +462,17 @@ def test_revoked_historical_activation_does_not_block_same_device_new_activation
     assert b.state.envelope['licence_id']!=original['licence_id'] and count(b)==2
     old=b.db.connection.execute('SELECT envelope_json FROM website_activation_licences WHERE activation_request_id=?',(historical.activation_request_id,)).fetchone()
     assert json.loads(old[0])==original
+
+
+def test_m9b_revoked_published_activation_never_reissues_or_republishes(setup,monkeypatch):
+    b=setup
+    assert b.worker.run_once()[0].result=='published'
+    original=b.state.envelope.copy()
+    stored=b.db.connection.execute('SELECT envelope_json FROM website_activation_licences').fetchone()[0]
+    calls=list(b.state.calls)
+    b.state.activation=replace(b.state.activation,status='REVOKED',revoked_at='2026-10-24T00:00:00Z')
+    forbid_signing(monkeypatch,b.signer)
+    assert b.worker.run_once()[0].result=='not_authorized'
+    assert b.worker.run_once()[0].result=='not_authorized'
+    assert b.state.calls==calls and b.state.envelope==original and count(b)==1
+    assert b.db.connection.execute('SELECT envelope_json FROM website_activation_licences').fetchone()[0]==stored

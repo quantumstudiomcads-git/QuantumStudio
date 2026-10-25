@@ -109,4 +109,4 @@ The website account device summary continues to show activation status only.
 Manual click-through against local Pages/D1 is separate from automated offscreen
 Qt/loopback HTTP verification and must be recorded explicitly before freeze.
 
-M9A provisioning, migration and legacy-data instructions: [ACCOUNT_ENTITLEMENTS.md](ACCOUNT_ENTITLEMENTS.md). Online status validation and revocation remain later phases; no offline-grace mechanism is introduced by M9A.
+M9A provisioning, migration and legacy-data instructions: [ACCOUNT_ENTITLEMENTS.md](ACCOUNT_ENTITLEMENTS.md). M9B operator device revocation and local TEST QA: [DEVICE_REVOCATION.md](DEVICE_REVOCATION.md). Desktop online validation remains M9C; no offline-grace mechanism is introduced.

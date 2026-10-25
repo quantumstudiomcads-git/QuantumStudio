@@ -9,8 +9,8 @@ $script:QSWebsite = Join-Path $script:QSRepo 'website'
 # ------------------------------------------------------------------
 
 $script:QSOperatorRoot = 'C:\Temp\QuantumStudio-M9A-Operator'
-$script:QSTrustFile    = 'C:\Temp\QuantumStudio-M9A-issuer.json'
-$script:QSDesktopRoot  = 'C:\Temp\QuantumStudio-M9A-Desktop-1'
+$script:QSTrustFile = 'C:\Temp\QuantumStudio-M9B-Replacement-issuer.json'
+$script:QSDesktopRoot  = 'C:\Temp\QuantumStudio-M9A-Desktop-2'
 
 $script:QSWebsiteUrl = 'http://127.0.0.1:8788'
 
@@ -52,6 +52,12 @@ function Import-QSLocalSecrets {
     if ($values.ContainsKey('OPERATOR_STATUS_SYNC_TOKEN')) {
         $env:QS_OPERATOR_STATUS_SYNC_TOKEN =
             $values['OPERATOR_STATUS_SYNC_TOKEN']
+    }
+
+    # Dedicated device-revocation token
+    if ($values.ContainsKey('OPERATOR_ACTIVATION_REVOKE_TOKEN')) {
+        $env:QS_OPERATOR_ACTIVATION_REVOKE_TOKEN =
+            $values['OPERATOR_ACTIVATION_REVOKE_TOKEN']
     }
 
     # Licence metadata write token

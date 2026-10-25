@@ -32,6 +32,9 @@ class DeviceBuilderAccessController:
     def authorize(self):
         if self.licensing_service is None:
             return None
+        gate = self.licensing_service.can_start_protected_work()
+        if not gate.allowed:
+            raise EntitlementDenied(gate)
         decision = self.licensing_service.authorize_feature(self.FEATURE_ID)
         if not decision.allowed:
             raise EntitlementDenied(decision)

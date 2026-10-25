@@ -12,7 +12,8 @@ def calculation_feature(calculation_id: str) -> str:
 
 
 class EntitlementPolicy:
-    def __init__(self, lease: DeviceLease | None = None, *, now: Callable[[], int] | None = None, clock_validation_required: bool = False):
+    def __init__(self, lease: DeviceLease | None = None, *, now: Callable[[], int] | None = None, clock_validation_required: bool = False, authorization_state: str | None = None):
+        self.authorization_state = authorization_state
         self.lease = lease
         self._now = now or (lambda: int(datetime.now(timezone.utc).timestamp()))
         self.clock_validation_required = clock_validation_required
@@ -55,6 +56,16 @@ class EntitlementPolicy:
     def _lease_state(self, feature_id: str) -> LicenseDecision | None:
         if self.lease is None:
             return LicenseDecision(False, DecisionReason.AUTH_REQUIRED, ImplementationState.READY, EntitlementState.AUTH_REQUIRED, feature_id, remediation="Sign in and refresh a valid Quantum Studio licence.")
+        if self.authorization_state is not None and self.authorization_state != "active":
+            reason, state, message = {
+                "revoked": (DecisionReason.DEVICE_REVOKED, EntitlementState.REVOKED, "This device activation is revoked."),
+                "expired": (DecisionReason.SUBSCRIPTION_EXPIRED, EntitlementState.EXPIRED, "The account entitlement has expired."),
+                "invalid_licence": (DecisionReason.LICENCE_INVALID, EntitlementState.INVALID, "Invalid licence or server authorization response."),
+                "invalid_device": (DecisionReason.LICENCE_INVALID, EntitlementState.INVALID, "Invalid device or device mismatch."),
+            }.get(self.authorization_state, (DecisionReason.ONLINE_VALIDATION_REQUIRED, EntitlementState.ONLINE_VALIDATION_REQUIRED,
+                "Online validation required before starting protected work."))
+            return LicenseDecision(False, reason, ImplementationState.READY, state, feature_id,
+                self.lease.plan_id, self.lease.expires_at, message)
         now = self._now()
         if self.clock_validation_required:
             return LicenseDecision(False, DecisionReason.CLOCK_VALIDATION_REQUIRED, ImplementationState.READY, EntitlementState.CLOCK_VALIDATION_REQUIRED, feature_id, self.lease.plan_id, self.lease.expires_at, "Reconnect to validate the system clock and refresh the licence.")

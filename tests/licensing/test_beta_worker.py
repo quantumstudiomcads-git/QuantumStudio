@@ -339,7 +339,7 @@ def test_local_signing_failure_is_audited_without_secret_output(setup,monkeypatc
     assert json.loads(row[0])=={'stage':'issuance','result':'failed'}
 
 
-def test_worker_to_existing_desktop_delivery_then_offline_cache(setup,tmp_path,monkeypatch):
+def test_worker_to_existing_desktop_delivery_then_cache_still_requires_online_status(setup,tmp_path,monkeypatch):
     from backend.licensing.service import LicensingService
     from backend.licensing.lease_store import LeaseStore
     from backend.runtime.paths import runtime_paths
@@ -356,15 +356,15 @@ def test_worker_to_existing_desktop_delivery_then_offline_cache(setup,tmp_path,m
     assert service.lease is None and not b.config.trust_file.exists()
     assert b.worker.run_once()[0].result=='published'
     assert delivery.retrieve_and_install(b.state.activation.activation_request_id)=='installed'
-    assert service.diagnostics_summary()['status']=='active'
+    assert service.diagnostics_summary()['status']=='online_validation_required'
     original=service.lease.licence_id
     # New service/store, with no connector or worker: cached signed licence only.
     restarted=LicensingService(trusted_public_keys=load_test_trust(b.config.trust_file),
         device_identity=DeviceIdentityService(b.identity_service.store).load_or_create(),lease_store=LeaseStore(paths),test_mode=True)
     assert restarted.lease.licence_id==original
     assert restarted.device_identity.device_id==b.identity.device_id
-    assert restarted.diagnostics_summary()['status']=='active'
-    assert restarted.authorize_feature('workspace:device_builder').allowed
+    assert restarted.diagnostics_summary()['status']=='online_validation_required'
+    assert not restarted.authorize_feature('workspace:device_builder').allowed
 
 
 def test_trust_publication_race_never_overwrites_winner(setup,monkeypatch):

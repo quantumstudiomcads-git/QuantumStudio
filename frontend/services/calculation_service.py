@@ -425,6 +425,13 @@ class CalculationService:
         from backend.engines.qe import QuantumEspressoAdapter
         return QuantumEspressoAdapter().materialize_existing_workflow(workflow_root)
 
+    def require_protected_work(self):
+        if self._licensing_service is not None:
+            from backend.licensing.enforcement import EntitlementDenied
+            decision = self._licensing_service.can_start_protected_work()
+            if not decision.allowed:
+                raise EntitlementDenied(decision)
+
     def execution_workflow(self, prepared_request: PreparedCalculationRequest, workflow_root):
         """Normalize an already exported workflow for the generic local executor."""
         from backend.execution import normalize_adapter_tasks

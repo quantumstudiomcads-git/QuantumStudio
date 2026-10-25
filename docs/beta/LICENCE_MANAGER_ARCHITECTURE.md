@@ -117,3 +117,5 @@ existing LeaseStore/service. M5 issuance remains unchanged. See
 M9A adds separate fixed account entitlements and activation history; see [ACCOUNT_ENTITLEMENTS.md](ACCOUNT_ENTITLEMENTS.md). The TEST issuer inherits the account expiry rather than starting a new term for each device. Earlier milestone descriptions below describe their original baseline.
 
 M9B adds a dedicated operator device-revocation endpoint/client and confirmed UI action. The additive migration preserves activation/licence history; guarded revocation and its audit share one transaction. Existing AUTHORIZED-only slot counting and M8 eligibility are unchanged. See [DEVICE_REVOCATION.md](DEVICE_REVOCATION.md) for the contract and QA. M9C desktop enforcement remains deferred.
+
+M9C desktop authorization is now implemented; the earlier milestone descriptions above are historical. See [ONLINE_AUTHORIZATION.md](ONLINE_AUTHORIZATION.md) for current no-offline-grace behavior, protocol, gating, and two-device QA.

@@ -97,3 +97,5 @@ licence inherits the original account expiry, rather than a fresh 90-day term.
 These are manual QA instructions, not a claim of completed manual click-through.
 No M9C online checks, offline grace, billing, renewal, self-service, or production
 signing changes are included.
+
+M9C desktop authorization is now implemented; the earlier milestone descriptions above are historical. See [ONLINE_AUTHORIZATION.md](ONLINE_AUTHORIZATION.md) for current no-offline-grace behavior, protocol, gating, and two-device QA.

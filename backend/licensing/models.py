@@ -29,6 +29,8 @@ class ImplementationState(str, Enum):
 
 
 class EntitlementState(str, Enum):
+    ONLINE_VALIDATION_REQUIRED = "online_validation_required"
+    REVOKED = "revoked"
     INCLUDED = "included"
     NOT_INCLUDED = "not_included"
     TRIAL = "trial"
@@ -40,6 +42,7 @@ class EntitlementState(str, Enum):
 
 
 class DecisionReason(str, Enum):
+    ONLINE_VALIDATION_REQUIRED = "online_validation_required"
     ALLOWED = "allowed"
     NOT_IMPLEMENTED = "not_implemented"
     NOT_ENTITLED = "not_entitled"

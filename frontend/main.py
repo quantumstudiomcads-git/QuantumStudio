@@ -45,6 +45,8 @@ def main():
     hub = ProjectHub(licensing_service=configured_licensing_service())
 
     hub.show()
+    from frontend.app.account_dialog import schedule_startup_authorization
+    schedule_startup_authorization(hub)
     # Network failures and absent pre-release endpoint configuration never
     # affect startup.  The checker owns its own worker thread.
     from frontend.app.update_actions import schedule_startup_update_check

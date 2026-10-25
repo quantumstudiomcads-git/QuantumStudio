@@ -356,6 +356,8 @@ class LicenceManagerTests(unittest.TestCase):
         for forbidden in ("Ada Beta Fixture", "ada@example.test", "Example Institute"):
             self.assertNotIn(forbidden, json.dumps(envelope))
         service = LicensingService.for_testing(trusted_public_keys={authority.kid: authority.public_key}, device_identity=self.device, lease=envelope, now=lambda: envelope["issued_at"] + 1)
+        from tests.helpers.licensing import grant_policy_status_fixture
+        grant_policy_status_fixture(service,envelope,envelope["issued_at"]+1)
         self.assertTrue(service.authorize_calculation("scf", ImplementationState.READY).allowed)
         other = device_identity_from_private_key(Ed25519PrivateKey.generate())
         with self.assertRaises(LeaseValidationError): LeaseVerifier({authority.kid: authority.public_key}).verify(envelope, other)
@@ -377,6 +379,8 @@ class LicenceManagerTests(unittest.TestCase):
         envelope, _ = issue_for_request_for_testing(self.db, authority, self.request["request_id"], now=self.issue_time(), confirmed=True)
         self.assertEqual(len(envelope["calculation_entitlements"]), 35)
         service = LicensingService.for_testing(trusted_public_keys={authority.kid: authority.public_key}, device_identity=self.device, lease=envelope, now=lambda: envelope["issued_at"] + 1)
+        from tests.helpers.licensing import grant_policy_status_fixture
+        grant_policy_status_fixture(service,envelope,envelope["issued_at"]+1)
         self.assertFalse(service.authorize_calculation("relax", ImplementationState.PARTIAL).allowed)
         report = reconcile_catalog(CALCULATIONS, registry, strict=True)
         executable_partials = tuple(item for item in report.descriptors if item.execution_support is ExecutionSupport.PARTIAL and item.backend_supported)

@@ -119,6 +119,35 @@ class DeviceIdentityService:
             valid = False
         if not valid:
             raise SecureStorageUnavailable("The licence proof challenge is invalid or does not match this device.")
+        return self._sign_device_proof(challenge, expected_identity)
+
+    def sign_device_status_challenge(self, challenge, expected_identity):
+        """Separate status domain; server clock bounds avoid local-clock rollback dependence."""
+        fields = {"schema_version", "purpose", "challenge_id", "nonce", "activation_request_id",
+                  "installation_id", "device_public_key_hash", "licence_id", "envelope_sha256", "server_time", "expires_at"}
+        try:
+            valid = (isinstance(challenge, dict) and set(challenge) == fields
+                and type(challenge["schema_version"]) is int and challenge["schema_version"] == 1
+                and challenge["purpose"] == "quantum-studio:device-status:v1"
+                and all(isinstance(challenge[k], str) and re.fullmatch(r"[0-9a-f]{64}", challenge[k])
+                        for k in ("challenge_id", "nonce"))
+                and (challenge["envelope_sha256"] is None or isinstance(challenge["envelope_sha256"], str)
+                    and re.fullmatch(r"[0-9a-f]{64}",challenge["envelope_sha256"]))
+                and str(uuid.UUID(challenge["activation_request_id"])) == challenge["activation_request_id"].lower()
+                and challenge["installation_id"] == expected_identity.device_id
+                and challenge["device_public_key_hash"] == expected_identity.public_key_hash
+                and (challenge["licence_id"] is None or isinstance(challenge["licence_id"], str) and challenge["licence_id"].startswith("lic_"))
+                and type(challenge["server_time"]) is int and challenge["server_time"] > 0
+                and type(challenge["expires_at"]) is int
+                and 0 < challenge["expires_at"] - challenge["server_time"] <= 120)
+        except (ValueError, TypeError, AttributeError, KeyError):
+            valid = False
+        if not valid:
+            raise SecureStorageUnavailable("The device-status proof challenge is invalid.")
+        return self._sign_device_proof(challenge, expected_identity)
+
+    def _sign_device_proof(self, challenge, expected_identity):
+        from .canonical import canonical_json, b64url_encode
         raw = self.store.load_private_key()
         if raw is None:
             raise SecureStorageUnavailable("The existing protected device key is unavailable; no replacement was generated.")

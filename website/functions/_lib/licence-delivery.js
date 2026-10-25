@@ -188,3 +188,6 @@ export async function deviceRetrieve(request,env) {
     return buildJsonResponse(200,{state:'available',envelope,envelope_sha256:saved.envelope_sha256});
   } catch { return fail(503,'service_unavailable'); }
 }
+
+// Shared bounded device-proof primitives; delivery behavior is unchanged.
+export {read as readDeviceRequest, decode as decodeDeviceProof, exact as exactDeviceFields, quota as deviceProofQuota};

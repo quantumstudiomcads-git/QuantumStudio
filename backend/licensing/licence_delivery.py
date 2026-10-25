@@ -40,4 +40,5 @@ class LicenceDeliveryService:
             self.trust_loader()  # Explicit LOCAL file configuration only, never response keys.
         check_cancelled()
         self.licensing.install_delivered_lease(envelope)
+        self.licensing.refresh_online_authorization()
         return "installed"

@@ -28,6 +28,9 @@ class CalculationAuthorizationBoundary:
         self.licensing_service = licensing_service
 
     def authorize(self, descriptors) -> tuple[LicenseDecision, ...]:
+        gate = self.licensing_service.can_start_protected_work()
+        if not gate.allowed:
+            raise EntitlementDenied(gate)
         decisions = []
         for descriptor in descriptors:
             state = implementation_state_from_catalog(

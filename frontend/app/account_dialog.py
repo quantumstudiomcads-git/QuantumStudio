@@ -102,6 +102,43 @@ class DeliveryWorker(QThread):
             self.result.emit("delivery_error", "The signed licence could not be retrieved or verified.")
 
 
+class AuthorizationWorker(QThread):
+    result = Signal(str, str)
+
+    def __init__(self, service):
+        super().__init__(QApplication.instance())
+        self.service = service
+        self.cancelled = Event()
+
+    def cancel(self):
+        self.cancelled.set()
+
+    def shutdown(self):
+        self.cancel()
+        self.wait(11000)
+
+    def run(self):
+        if self.cancelled.is_set():
+            return
+        state = self.service.refresh_online_authorization()
+        if not self.cancelled.is_set():
+            self.result.emit(state, "")
+
+
+def schedule_startup_authorization(window):
+    """One startup check; no timer/polling and no dependency on a browser session."""
+    service = getattr(window, "licensing_service", None)
+    if service is None or service.lease is None:
+        return
+    worker = AuthorizationWorker(service)
+    window._licensing_authorization_worker = worker
+    _RUNNING.add(worker)
+    worker.finished.connect(lambda: _RUNNING.discard(worker))
+    worker.finished.connect(worker.deleteLater)
+    QApplication.instance().aboutToQuit.connect(worker.shutdown)
+    worker.start()
+
+
 class AccountLicensingDialog(QDialog):
     def __init__(self, parent=None, *, licensing_service=None, connector=None, open_browser=None, delivery_factory=None):
         super().__init__(parent)
@@ -154,7 +191,7 @@ class AccountLicensingDialog(QDialog):
         close.clicked.connect(self.reject)
         self._refresh_licence_summary()
         if summary.get("status") == "active":
-            self.status.setText("Your verified cached licence is Active. Browser sign-in is not required while it remains valid.")
+            self.status.setText("Your signed licence and current online device authorization are Active.")
 
     def start_activation(self):
         if self._worker is not None:
@@ -242,7 +279,9 @@ class AccountLicensingDialog(QDialog):
         raw_status = summary.get("status", "auth_required")
         status = {"active": "Active", "auth_required": "Auth Required", "expired": "Expired",
                   "invalid": "Invalid licence", "licence_cache_invalid": "Invalid licence",
-                  "test_trust_invalid": "Invalid TEST trust configuration"}.get(raw_status, str(raw_status).replace("_", " ").title())
+                  "test_trust_invalid": "Invalid TEST trust configuration",
+                  "online_validation_required": "Online validation required", "invalid_licence": "Invalid licence",
+                  "invalid_device": "Invalid device / device mismatch", "revoked": "Revoked"}.get(raw_status, str(raw_status).replace("_", " ").title())
         expiry = summary.get("expires_at")
         if expiry:
             expiry = datetime.fromtimestamp(expiry, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -252,6 +291,21 @@ class AccountLicensingDialog(QDialog):
 
     def check_licence(self):
         if self._worker is not None or self._closing or self._retrieval_blocked:
+            return
+        if self._service is not None and self._service.lease is not None and self._delivery_factory is None:
+            worker = AuthorizationWorker(self._service)
+            self._worker = worker
+            _RUNNING.add(worker)
+            worker.result.connect(self._show_delivery_result)
+            worker.finished.connect(self._finished)
+            worker.finished.connect(lambda: _RUNNING.discard(worker))
+            worker.finished.connect(worker.deleteLater)
+            QApplication.instance().aboutToQuit.connect(worker.shutdown)
+            self.start_button.setEnabled(False)
+            self.check_button.setEnabled(False)
+            self.cancel_button.setEnabled(True)
+            self.status.setText("Checking current device authorization...")
+            worker.start()
             return
         try:
             if self._delivery_factory:
@@ -287,7 +341,11 @@ class AccountLicensingDialog(QDialog):
             return
         self._refresh_licence_summary()
         if state == "installed":
-            self.status.setText("Active - signed licence verified and stored for offline startup.")
+            summary = self._service.diagnostics_summary() if self._service else {}
+            self.status.setText("Active - signed licence and current online authorization verified." if summary.get("status") == "active"
+                else self.licence_summary.text())
+        elif state in {"active", "revoked", "expired", "online_validation_required", "invalid_licence", "invalid_device"}:
+            self.status.setText(self.licence_summary.text())
         elif state == "pending":
             self.status.setText("Device authorized - licence pending. No signed licence has been published yet.")
         else:

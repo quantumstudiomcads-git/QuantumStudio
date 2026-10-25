@@ -52,7 +52,9 @@ def bundle(tmp_path):
     envelope = issue_website_activation_for_testing(db, signer, activation, now=now)
     paths = runtime_paths(environ={"QUANTUM_STUDIO_DATA_ROOT":str(tmp_path / "desktop")},home=tmp_path)
     store = LeaseStore(paths)
-    service = LicensingService(trusted_public_keys={signer.kid:signer.public_key},device_identity=device,lease_store=store,now=lambda:now,test_mode=True)
+    from tests.helpers.licensing import StatusFixture
+    status = StatusFixture(envelope,now,identity_service)
+    service = LicensingService(status_connector=status,identity_service=identity_service,trusted_public_keys={signer.kid:signer.public_key},device_identity=device,lease_store=store,now=lambda:now,test_mode=True)
     trust_path = tmp_path / "trust.json"
     trust_path.write_text(json.dumps(stored_test_licence(db,activation)[1]),encoding="utf-8")
     b = SimpleNamespace(identity_service=identity_service,device=device,db=db,activation=activation,signer=signer,
@@ -94,7 +96,7 @@ def resign(b,**changes):
     return b.signer.sign_test_fixture_only(payload)
 
 
-def test_valid_retrieval_verifies_persists_and_reopens_offline(bundle):
+def test_valid_retrieval_verifies_persists_but_restart_requires_fresh_online_authorization(bundle):
     b=bundle
     assert delivery(b).retrieve_and_install(b.activation.activation_request_id)=='installed'
     assert b.store.load_lease()==b.envelope
@@ -103,8 +105,8 @@ def test_valid_retrieval_verifies_persists_and_reopens_offline(bundle):
     device=DeviceIdentityService(b.identity_service.store).load_or_create()
     restarted=LicensingService(trusted_public_keys=load_test_trust(b.trust_path),device_identity=device,lease_store=LeaseStore(b.paths),now=lambda:b.now,test_mode=True)
     assert restarted.lease.licence_id==b.envelope['licence_id']
-    assert restarted.diagnostics_summary()['status']=='active'
-    assert restarted.authorize_feature('workspace:device_builder').allowed
+    assert restarted.diagnostics_summary()['status']=='online_validation_required'
+    assert not restarted.authorize_feature('workspace:device_builder').allowed
 
 
 def test_repeated_install_is_idempotent_and_conflicting_envelope_is_preserved(bundle):
@@ -145,6 +147,11 @@ def test_expired_cache_uses_existing_policy_and_reports_expired(bundle):
     b=bundle
     b.store.save_lease(resign(b,issued_at=b.now-100,not_before=b.now-100,expires_at=b.now-1,offline_until=b.now-1))
     restarted=LicensingService(trusted_public_keys={b.signer.kid:b.signer.public_key},device_identity=b.device,lease_store=b.store,now=lambda:b.now)
+    from tests.helpers.licensing import StatusFixture
+    assert restarted.diagnostics_summary()['status']=='online_validation_required'
+    restarted._online.connector=StatusFixture(b.store.load_lease(),b.now,b.identity_service)
+    restarted._online.identity_service=b.identity_service
+    assert restarted.refresh_online_authorization()=='expired'
     assert restarted.diagnostics_summary()['status']=='expired'
     assert not restarted.authorize_feature('workspace:device_builder').allowed
     assert restarted.authorize_read().allowed
@@ -291,7 +298,7 @@ def test_operator_ui_exports_original_test_trust_without_resigning(qtbot,bundle,
     assert stored_test_licence(b.db,b.activation)[0]==b.envelope
 
 
-def test_ui_installs_and_reopens_active_without_browser(qtbot,bundle):
+def test_ui_installs_online_and_reopens_requiring_fresh_authorization(qtbot,bundle):
     b=bundle
     dialog=AccountLicensingDialog(licensing_service=b.service,delivery_factory=lambda:delivery(b))
     qtbot.addWidget(dialog);dialog.check_button.click()
@@ -301,8 +308,8 @@ def test_ui_installs_and_reopens_active_without_browser(qtbot,bundle):
     assert b.envelope['licence_id'] in dialog.licence_summary.text()
     reopened=AccountLicensingDialog(licensing_service=LicensingService(trusted_public_keys=load_test_trust(b.trust_path),device_identity=b.device,lease_store=b.store,test_mode=True))
     qtbot.addWidget(reopened)
-    assert 'Licence status: Active' in reopened.licence_summary.text()
-    assert reopened.start_button.isHidden()
+    assert 'Licence status: Online validation required' in reopened.licence_summary.text()
+    assert not reopened.start_button.isHidden()
 
 
 def test_ui_pending_and_flagged_never_grant(qtbot,bundle):

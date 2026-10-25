@@ -10,7 +10,7 @@ $script:QSWebsite = Join-Path $script:QSRepo 'website'
 
 $script:QSOperatorRoot = 'C:\Temp\QuantumStudio-M9A-Operator'
 $script:QSTrustFile = 'C:\Temp\QuantumStudio-M9B-Replacement-issuer.json'
-$script:QSDesktopRoot  = 'C:\Temp\QuantumStudio-M9A-Desktop-2'
+$script:QSDesktopRoot  = 'C:\Temp\QuantumStudio-M9A-Desktop-1'
 
 $script:QSWebsiteUrl = 'http://127.0.0.1:8788'
 

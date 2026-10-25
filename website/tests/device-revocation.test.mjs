@@ -46,7 +46,7 @@ describe('M9B specific-device revocation with real migrations and SQL',()=>{
     expect(await response.json()).toEqual({schema_version:1,activation_request_id:deviceA.activation_request_id,
       status:'REVOKED',result:'revoked',revoked_at:'2027-01-01T00:00:00.000Z',reason_code:'DEVICE_REPLACED'});
     const current=await row();expect(current).toEqual({...before,status:'REVOKED',revoked_at:'2027-01-01T00:00:00.000Z',
-      revocation_reason_code:'DEVICE_REPLACED',revocation_reason_text:'Replacement requested'});
+      revocation_reason_code:'DEVICE_REPLACED',revocation_reason_text:'Replacement requested',authorization_revision:before.authorization_revision+1});
     expect(await grant()).toEqual(entitlement);
     expect((await db.prepare('SELECT status FROM beta_applications').first()).status).toBe('APPROVED');
     const audit=await events();expect(audit).toHaveLength(1);

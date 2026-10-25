@@ -29,10 +29,13 @@ class LicensingService:
         lease_store: LeaseStore | None = None,
         now: Callable[[], int] | None = None,
         test_mode: bool = False,
+        status_connector=None,
+        identity_service=None,
     ):
         self.test_mode = bool(test_mode)
         self._install_lock = RLock()
         self._envelope_digest = None
+        self._verified_envelope = None
         self._trusted_public_keys = dict(trusted_public_keys or {})
         self.device_identity = device_identity
         self.lease_store = lease_store
@@ -40,6 +43,8 @@ class LicensingService:
         self.lease: DeviceLease | None = None
         self.error_code: str | None = None
         self.clock_validation_required = False
+        from .online_authorization import OnlineAuthorization
+        self._online = OnlineAuthorization(self, status_connector, identity_service)
         self._load_cached_lease()
 
     @classmethod
@@ -67,7 +72,8 @@ class LicensingService:
 
     @property
     def policy(self) -> EntitlementPolicy:
-        return EntitlementPolicy(self.lease, now=self._now, clock_validation_required=self.clock_validation_required)
+        return EntitlementPolicy(self.lease, now=(lambda: self._online.server_time) if self._online.server_time is not None else self._now,
+            clock_validation_required=self.clock_validation_required, authorization_state=self._online.status)
 
     def accept_lease(self, envelope: Mapping, *, persist: bool = True, reset_clock_validation: bool = True) -> DeviceLease:
         if self.device_identity is None:
@@ -75,8 +81,10 @@ class LicensingService:
             raise LeaseValidationError("A protected device identity is required before accepting a licence.")
         verification = LeaseVerifier(self._trusted_public_keys).verify(envelope, self.device_identity)
         self.lease = verification.lease
+        self._verified_envelope = deepcopy(dict(verification.envelope))
         self._envelope_digest = hashlib.sha256(canonical_json(verification.envelope)).hexdigest()
         self.error_code = None
+        self._online.reset()
         if reset_clock_validation:
             # A newly verified server-issued timestamp is the recovery route
             # for a prior local-clock rollback warning.
@@ -142,6 +150,18 @@ class LicensingService:
         envelope = connector.refresh_device_lease(account_id, self.device_identity.device_id)
         return self.accept_lease(envelope)
 
+    def refresh_online_authorization(self):
+        with self._install_lock:
+            status = self._online.validate()
+            if status == "active" and self.error_code == "clock_validation_required":
+                self.error_code = None
+            return status
+
+    def can_start_protected_work(self) -> LicenseDecision:
+        """Always authenticate afresh for a NEW operation; never cancel running jobs."""
+        self.refresh_online_authorization()
+        return self.policy.validity_decision()
+
     def authorize_feature(self, feature_id: str, **kwargs) -> LicenseDecision:
         return self.policy.authorize_feature(feature_id, **kwargs)
 
@@ -155,7 +175,8 @@ class LicensingService:
         """Safe metadata only; never return a token, signature, or public key."""
         validity = self.policy.validity_decision()
         return {
-            "status": self.error_code or ("active" if validity.allowed else validity.entitlement_state.value),
+            "status": (self._online.status if self.lease is not None else
+                       self.error_code or validity.entitlement_state.value),
             "test_mode": self.test_mode,
             "licence_id": self.lease.licence_id if self.lease else None,
             "plan_id": self.lease.plan_id if self.lease else None,
@@ -167,6 +188,7 @@ class LicensingService:
     def _load_cached_lease(self) -> None:
         if self.lease_store is None or self.device_identity is None:
             return
+        cached = None
         try:
             last_trusted = self.lease_store.load_last_trusted_time()
             if last_trusted is not None and self._now() + CLOCK_ROLLBACK_TOLERANCE_SECONDS < last_trusted:
@@ -176,7 +198,9 @@ class LicensingService:
             if cached is not None:
                 self.accept_lease(cached, persist=False, reset_clock_validation=False)
         except (LeaseStoreError, LeaseValidationError, OSError) as error:
-            self.error_code = "licence_cache_invalid"
+            self.error_code = ("invalid_device" if cached is not None and
+                (cached.get("device_id") != self.device_identity.device_id
+                 or cached.get("device_public_key_hash") != self.device_identity.public_key_hash) else "licence_cache_invalid")
             LOGGER.warning("Cached licence was rejected safely: %s", error)
 
     def _record_trusted_time(self, issued_at: int) -> None:
@@ -184,7 +208,7 @@ class LicensingService:
             return
         try:
             current = self.lease_store.load_last_trusted_time() or 0
-            self.lease_store.save_last_trusted_time(max(current, issued_at, self._now()))
+            self.lease_store.save_last_trusted_time(max(current, issued_at))
         except (LeaseStoreError, OSError) as error:
             LOGGER.warning("Trusted clock metadata was not persisted: %s", error)
 

@@ -51,10 +51,12 @@ def envelope(device, issuer, *, kid="test-key", plan="pro", expires_at=NOW + 100
 
 
 def service_for(envelope_value, device, issuer, *, now=lambda: NOW):
-    return LicensingService.for_testing(
+    service = LicensingService.for_testing(
         trusted_public_keys={"test-key": public_key_bytes(issuer)}, device_identity=device,
         lease=envelope_value, now=now,
     )
+    from tests.helpers.licensing import grant_policy_status_fixture
+    return grant_policy_status_fixture(service,envelope_value,now())
 
 
 def test_signed_lease_accepts_only_canonical_trusted_envelope_and_rotation_key():

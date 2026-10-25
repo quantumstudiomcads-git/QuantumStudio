@@ -29,6 +29,16 @@ class LeaseStore:
     def clock_path(self) -> Path:
         return self.root / "trusted-clock.json"
 
+    @property
+    def authorization_path(self) -> Path:
+        return self.root / "device-authorization.json"
+
+    def load_authorization_state(self):
+        return self._load(self.authorization_path)
+
+    def save_authorization_state(self, records):
+        self._atomic_write(self.authorization_path, {"schema_version": 1, "records": records})
+
     def save_lease(self, envelope: Mapping[str, Any]) -> None:
         self._atomic_write(self.lease_path, envelope)
 

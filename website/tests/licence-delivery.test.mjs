@@ -1,6 +1,10 @@
 import {afterEach, beforeEach, beforeAll, describe, expect, it, vi} from 'vitest';
 import {generateKeyPairSync, createHash, sign} from 'node:crypto';
-import {execFileSync} from 'node:child_process';
+import {execFile, execFileSync} from 'node:child_process';
+import {promisify} from 'node:util';
+import {createServer} from 'node:http';
+import {onRequestPost as statusChallengeRoute} from '../functions/api/licence/device-status-challenge.js';
+import {onRequestPost as statusProofRoute} from '../functions/api/licence/device-status.js';
 import {existsSync, mkdtempSync, readFileSync, readdirSync, rmSync} from 'node:fs';
 import {resolve, join} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -19,7 +23,7 @@ const pair = generateKeyPairSync('ed25519');
 const publicKey = pair.publicKey.export({format:'der',type:'spki'}).subarray(-32);
 const digest = createHash('sha256').update(publicKey).digest('hex');
 const installation = `dev_${digest.slice(0,32)}`;
-let envelope, expectedHash, root, db, env;
+let envelope, expectedHash, issuerPublic, root, db, env;
 const pythonPath = resolve('..','.venv',process.platform === 'win32' ? 'Scripts/python.exe':'bin/python');
 const python = process.env.QS_TEST_PYTHON || (existsSync(pythonPath) ? pythonPath : process.platform === 'win32' ? 'python':'python3');
 beforeAll(() => {
@@ -38,10 +42,11 @@ with tempfile.TemporaryDirectory() as root:
  db=Database(root,DataProtector.for_testing(b'T'*32))
  facts=json.load(sys.stdin)
  a=WebsiteActivation(activation_request_id=facts['activation'],application_id=facts['app'],installation_id=facts['installation'],device_public_key_hash=facts['hash'],platform='windows',architecture='x86_64',app_version='0.2.0',status='AUTHORIZED',flag_reason=None,created_at='2026-10-20T12:00:00Z',updated_at='2026-10-20T12:00:00Z',authorized_at='2026-10-20T12:00:00Z',revoked_at=None,account_entitlement=beta_entitlement())
- e=issue_website_activation_for_testing(db,TestEphemeralAuthority(),a,now=int(datetime(2026,10,20,12,tzinfo=timezone.utc).timestamp()))
- print(json.dumps({'envelope':e,'sha':hashlib.sha256(canonical_json(e)).hexdigest()})); db.close()`;
+ issuer=TestEphemeralAuthority()
+ e=issue_website_activation_for_testing(db,issuer,a,now=int(datetime(2026,10,20,12,tzinfo=timezone.utc).timestamp()))
+ print(json.dumps({'envelope':e,'sha':hashlib.sha256(canonical_json(e)).hexdigest(),'issuer_public':issuer.public_key.hex()})); db.close()`;
   const result = JSON.parse(execFileSync(python,['-c',script],{encoding:'utf8',input:JSON.stringify({activation,app,installation,hash:digest})}));
-  envelope = result.envelope; expectedHash=result.sha;
+  envelope = result.envelope; expectedHash=result.sha;issuerPublic=result.issuer_public;
 });
 beforeEach(async () => {
   vi.useFakeTimers({toFake:['Date']}); vi.setSystemTime(new Date('2026-10-20T12:00:00Z'));
@@ -187,4 +192,62 @@ it('M9B revocation preserves the actual published signed envelope and blocks pub
   expect(await db.prepare('SELECT licence_id,licence_status FROM beta_activations').first()).toEqual(licence);
   expect((await publish()).status).toBe(403);
   expect(await db.prepare('SELECT * FROM published_licences').first()).toEqual(original);
+});
+
+it('M9C real Python desktop becomes Active, learns revocation, and remains Revoked offline after restart',async()=>{
+  expect((await publish()).status).toBe(200);
+  // Match the historical test issuer's original account grant exactly.
+  await db.prepare('UPDATE account_entitlements SET starts_at=?,expires_at=?')
+    .bind(new Date((envelope.expires_at-90*86400)*1000).toISOString().replace('.000Z','Z'),new Date(envelope.expires_at*1000).toISOString().replace('.000Z','Z')).run();
+  env.OPERATOR_ACTIVATION_REVOKE_TOKEN='synthetic-revoke';
+  const server=createServer(async(incoming,outgoing)=>{
+    try {
+      if(incoming.url==='/test/revoke'){
+        const response=await post(revokeRoute,{schema_version:1,reason_code:'DEVICE_REPLACED',expected_status:'AUTHORIZED'},'synthetic-revoke');
+        outgoing.writeHead(response.status);outgoing.end(await response.text());return;
+      }
+      const chunks=[];for await(const chunk of incoming)chunks.push(chunk);
+      const request=new Request('http://localhost:8788'+incoming.url,{method:incoming.method,headers:incoming.headers,body:Buffer.concat(chunks)});
+      const route=incoming.url.endsWith('device-status-challenge')?statusChallengeRoute:statusProofRoute;
+      const response=await route({env,request});outgoing.writeHead(response.status,Object.fromEntries(response.headers));outgoing.end(await response.text());
+    }catch{outgoing.writeHead(500);outgoing.end();}
+  });
+  await new Promise((done)=>server.listen(0,'127.0.0.1',done));
+  try {
+    const code=`import sys,json,tempfile,urllib.request
+sys.path.insert(0,'..')
+from backend.licensing.service import LicensingService
+from backend.licensing.connectors.device_status import WebsiteDeviceStatusConnector,DeviceStatusNetworkError
+from backend.licensing.device_identity import DeviceIdentityService,InMemorySecureKeyStore
+from backend.licensing.lease_store import LeaseStore
+from backend.runtime.paths import runtime_paths
+facts=json.loads(sys.argv[1]);url=sys.argv[2]
+key=InMemorySecureKeyStore();key.save_private_key(bytes.fromhex(facts['device_private']))
+identity=DeviceIdentityService(key);device=identity.load_or_create()
+with tempfile.TemporaryDirectory() as root:
+ store=LeaseStore(runtime_paths(environ={'QUANTUM_STUDIO_DATA_ROOT':root}))
+ def service(connector):
+  return LicensingService(trusted_public_keys={facts['envelope']['kid']:bytes.fromhex(facts['issuer_public'])},
+    device_identity=device,lease_store=store,now=lambda:facts['now'],status_connector=connector,identity_service=identity)
+ connector=WebsiteDeviceStatusConnector(url,allow_local_http=True)
+ s=service(connector);s.accept_lease(facts['envelope'])
+ assert s.can_start_protected_work().allowed,s.diagnostics_summary()
+ assert s.diagnostics_summary()['status']=='active'
+ urllib.request.urlopen(url+'/test/revoke').read()
+ assert not s.can_start_protected_work().allowed
+ assert s.diagnostics_summary()['status']=='revoked'
+ class Offline:
+  def challenge(self,*args): raise DeviceStatusNetworkError('offline')
+ restarted=service(Offline())
+ assert restarted.diagnostics_summary()['status']=='revoked'
+ restarted.accept_lease(facts['envelope'])
+ assert not restarted.can_start_protected_work().allowed
+ assert restarted.diagnostics_summary()['status']=='revoked'
+ assert store.load_lease()==facts['envelope']
+ print('real desktop Active -> Revoked -> offline Revoked passed')`;
+    const facts={envelope,issuer_public:issuerPublic,device_private:pair.privateKey.export({format:'der',type:'pkcs8'}).subarray(-32).toString('hex'),now:Date.now()/1000};
+    const result=await promisify(execFile)(python,['-c',code,JSON.stringify(facts),`http://127.0.0.1:${server.address().port}`],{timeout:25000});
+    expect(result.stdout.trim()).toBe('real desktop Active -> Revoked -> offline Revoked passed');
+    expect((await db.prepare('SELECT * FROM published_licences').first()).envelope_json).toBe(canonicalJson(envelope));
+  }finally{server.closeAllConnections();await new Promise((done)=>server.close(done));}
 });

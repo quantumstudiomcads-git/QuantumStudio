@@ -1947,6 +1947,16 @@ class CalculateWorkspace(QWidget):
         self._batch_current = (prepared, workflow, root, request_ids)
         self._request_status.update({request_id: "RUNNING" for request_id in request_ids})
         store = ExecutionStore(root)
+        try:
+            self.calculation_service.require_protected_work()
+        except Exception as error:
+            self._batch_queue = []
+            self._batch_current = None
+            self._request_status.update({request_id: "FAILED" for request_id in request_ids})
+            self.execute_button.setText("Run")
+            self.workflow_status.setText("Status: Authorization required before starting new work")
+            QMessageBox.warning(self, "Licence Authorization Required", str(error))
+            return
         record = store.create(workflow)
         self._local_execution_service = LocalExecutionService(LocalExecutionManager(self.local_tool_configuration))
         self._active_execution = self._local_execution_service.start(workflow, record=record, store=store)
@@ -1995,6 +2005,7 @@ class CalculateWorkspace(QWidget):
                     record = assessment.record
             elif assessment.state in {RecoveryState.INCOMPATIBLE, RecoveryState.MODIFIED_INPUTS}:
                 QMessageBox.information(self, "Execution History", assessment.message + " A new execution attempt will be created.")
+            self.calculation_service.require_protected_work()
             record = record or store.create(workflow)
             self._local_execution_service = LocalExecutionService(manager)
             self._active_execution = self._local_execution_service.start(workflow, record=record, store=store)

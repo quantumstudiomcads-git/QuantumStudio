@@ -251,3 +251,30 @@ with tempfile.TemporaryDirectory() as root:
     expect((await db.prepare('SELECT * FROM published_licences').first()).envelope_json).toBe(canonicalJson(envelope));
   }finally{server.closeAllConnections();await new Promise((done)=>server.close(done));}
 });
+
+it.each(['before-insert','after-insert'])('M10 revocation racing publication (%s) never restores authorization',async(order)=>{
+  env.OPERATOR_ACTIVATION_REVOKE_TOKEN='synthetic-revoke';
+  const grant=await db.prepare('SELECT * FROM account_entitlements').first();
+  const prepare=db.prepare.bind(db);let injected=false;
+  db.prepare=(sql)=>{
+    const statement=prepare(sql);
+    const inject=async()=>{
+      if(injected)return;injected=true;
+      const response=await post(revokeRoute,{schema_version:1,reason_code:'DEVICE_LOST',expected_status:'AUTHORIZED'},'synthetic-revoke');
+      expect(response.status).toBe(200);
+    };
+    if(order==='before-insert' && sql.includes('INSERT INTO published_licences')){
+      const run=statement.run;statement.run=async()=>{await inject();return run();};
+    }
+    if(order==='after-insert' && sql.includes('SELECT * FROM published_licences') && sql.includes('OR licence_id')){
+      const first=statement.first;statement.first=async()=>{await inject();return first();};
+    }
+    return statement;
+  };
+  const response=await publish();expect(response.status).toBe(order==='before-insert'?409:200);
+  expect((await db.prepare('SELECT status FROM beta_activations').first()).status).toBe('REVOKED');
+  expect((await challenge()).status).toBe(403);
+  expect(await db.prepare('SELECT * FROM account_entitlements').first()).toEqual(grant);
+  const saved=await db.prepare('SELECT * FROM published_licences').first();
+  if(saved)expect(saved.envelope_json).toBe(canonicalJson(envelope));
+});

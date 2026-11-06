@@ -66,7 +66,8 @@ class OnlineAuthorization:
             from datetime import datetime
             try:
                 stamp = datetime.fromisoformat(data['revoked_at'].replace('Z','+00:00'))
-                if stamp.tzinfo is None or stamp.timestamp() > data['server_time']: raise ValueError
+                # revoked_at carries milliseconds; server_time is floored Unix seconds.
+                if stamp.tzinfo is None or stamp.timestamp() >= data['server_time'] + 1: raise ValueError
             except (ValueError, TypeError, AttributeError): raise DeviceStatusError('Invalid revocation time.') from None
             if data['reason_code'] not in REASONS | {None}: raise DeviceStatusError('Invalid revocation reason.')
         elif data['revoked_at'] is not None or data['reason_code'] is not None:

@@ -109,7 +109,7 @@ def _check_trust(path, record):
         if Path(path).is_symlink() or load_test_trust(path) != {record["kid"]: b64url_decode(record["public_key"])}:
             raise ValueError
     except (ValueError, RuntimeError, OSError):
-        raise WorkerError("TEST trust conflict: existing file was preserved; recover the original issuer/trust.") from None
+        raise WorkerError("TEST trust conflict: existing file was preserved. TEST signers are ephemeral: keep the original worker alive for new devices. A restarted worker can recover old envelopes, but a new signing session needs separate fresh TEST operator storage and trust; never overwrite the original trust.") from None
     return True
 
 
@@ -234,7 +234,7 @@ class BetaLicenceWorker:
                 # A missing file is not permission to rotate a persisted issuer.
                 for row in self.database.connection.execute("SELECT envelope_json FROM website_activation_licences"):
                     if json.loads(row[0])["kid"] != trust["kid"]:
-                        raise WorkerError("Prior TEST issuer exists; recover its trust. Fresh signing requires explicit separate TEST storage/trust.")
+                        raise WorkerError("Prior TEST issuer exists; TEST signing keys are ephemeral and are not saved. Recover original envelopes/trust for existing devices. Keep the original worker process alive for replacement signing, or use explicit separate fresh TEST storage/trust for a new signing session.")
                 stage = "issuance"
                 envelope = issue_website_activation_for_testing(self.database, self.authority, activation, operator_id=self.operator_id)
                 self._audit(aid, stage, "issued")

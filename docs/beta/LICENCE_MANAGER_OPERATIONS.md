@@ -112,3 +112,5 @@ Qt/loopback HTTP verification and must be recorded explicitly before freeze.
 M9A provisioning, migration and legacy-data instructions: [ACCOUNT_ENTITLEMENTS.md](ACCOUNT_ENTITLEMENTS.md). M9B operator device revocation and local TEST QA: [DEVICE_REVOCATION.md](DEVICE_REVOCATION.md). Desktop online validation remains M9C; no offline-grace mechanism is introduced.
 
 M9C desktop authorization is now implemented; the earlier milestone descriptions above are historical. See [ONLINE_AUTHORIZATION.md](ONLINE_AUTHORIZATION.md) for current no-offline-grace behavior, protocol, gating, and two-device QA.
+
+Final M10 automated coverage and supported workflow: [LICENSING_ACCEPTANCE.md](LICENSING_ACCEPTANCE.md). Exact final manual checklist: [LICENSING_MANUAL_QA.md](LICENSING_MANUAL_QA.md).

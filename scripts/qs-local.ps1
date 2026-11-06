@@ -4,15 +4,28 @@
 $script:QSRepo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $script:QSWebsite = Join-Path $script:QSRepo 'website'
 
-# ------------------------------------------------------------------
-# M8 QA paths
-# ------------------------------------------------------------------
-
-$script:QSOperatorRoot = 'C:\Temp\QuantumStudio-M9A-Operator'
-$script:QSTrustFile = 'C:\Temp\QuantumStudio-M9B-Replacement-issuer.json'
-$script:QSDesktopRoot  = 'C:\Temp\QuantumStudio-M9A-Desktop-1'
-
-$script:QSWebsiteUrl = 'http://127.0.0.1:8788'
+# One coherent TEST session. Set overrides BEFORE dot-sourcing this helper.
+$script:QSHelperPath = $PSCommandPath
+$script:QSTestRoot = if ($env:QS_LOCAL_TEST_ROOT) { $env:QS_LOCAL_TEST_ROOT } else {
+    Join-Path ([IO.Path]::GetTempPath()) 'QuantumStudio-M10'
+}
+$script:QSWebsiteStateRoot = if ($env:QS_LOCAL_WEBSITE_STATE_ROOT) { $env:QS_LOCAL_WEBSITE_STATE_ROOT } else {
+    Join-Path $script:QSTestRoot 'website-state'
+}
+$script:QSOperatorRoot = if ($env:QS_LOCAL_OPERATOR_ROOT) { $env:QS_LOCAL_OPERATOR_ROOT } else {
+    Join-Path $script:QSTestRoot 'operator'
+}
+$script:QSTrustFile = if ($env:QS_LOCAL_TRUST_FILE) { $env:QS_LOCAL_TRUST_FILE } else {
+    Join-Path $script:QSTestRoot 'issuer.json'
+}
+$script:QSDesktopARoot = if ($env:QS_LOCAL_DESKTOP_A_ROOT) { $env:QS_LOCAL_DESKTOP_A_ROOT } else {
+    Join-Path $script:QSTestRoot 'desktop-a'
+}
+$script:QSDesktopBRoot = if ($env:QS_LOCAL_DESKTOP_B_ROOT) { $env:QS_LOCAL_DESKTOP_B_ROOT } else {
+    Join-Path $script:QSTestRoot 'desktop-b'
+}
+$script:QSDesktopRoot = $script:QSDesktopARoot # Start-QSDesktop remains the Device A alias.
+$script:QSWebsiteUrl = if ($env:QS_LOCAL_WEBSITE_URL) { $env:QS_LOCAL_WEBSITE_URL } else { 'http://127.0.0.1:8788' }
 
 
 function Import-QSLocalSecrets {
@@ -43,33 +56,11 @@ function Import-QSLocalSecrets {
         $values[$name] = $value
     }
 
-    # Operator read token
-    if ($values.ContainsKey('OPERATOR_SYNC_TOKEN')) {
-        $env:QS_OPERATOR_SYNC_TOKEN = $values['OPERATOR_SYNC_TOKEN']
-    }
-
-    # Application-status write token
-    if ($values.ContainsKey('OPERATOR_STATUS_SYNC_TOKEN')) {
-        $env:QS_OPERATOR_STATUS_SYNC_TOKEN =
-            $values['OPERATOR_STATUS_SYNC_TOKEN']
-    }
-
-    # Dedicated device-revocation token
-    if ($values.ContainsKey('OPERATOR_ACTIVATION_REVOKE_TOKEN')) {
-        $env:QS_OPERATOR_ACTIVATION_REVOKE_TOKEN =
-            $values['OPERATOR_ACTIVATION_REVOKE_TOKEN']
-    }
-
-    # Licence metadata write token
-    if ($values.ContainsKey('OPERATOR_LICENCE_SYNC_TOKEN')) {
-        $env:QS_OPERATOR_LICENCE_SYNC_TOKEN =
-            $values['OPERATOR_LICENCE_SYNC_TOKEN']
-    }
-
-    # Signed-envelope publication token
-    if ($values.ContainsKey('OPERATOR_LICENCE_PUBLISH_TOKEN')) {
-        $env:QS_OPERATOR_LICENCE_PUBLISH_TOKEN =
-            $values['OPERATOR_LICENCE_PUBLISH_TOKEN']
+    # Clear stale credentials when this file omits a value; never print values.
+    foreach ($name in @('OPERATOR_SYNC_TOKEN', 'OPERATOR_STATUS_SYNC_TOKEN',
+        'OPERATOR_ACTIVATION_REVOKE_TOKEN', 'OPERATOR_LICENCE_SYNC_TOKEN', 'OPERATOR_LICENCE_PUBLISH_TOKEN')) {
+        $value = if ($values.ContainsKey($name)) { $values[$name] } else { $null }
+        [Environment]::SetEnvironmentVariable("QS_$name", $value, 'Process')
     }
 }
 
@@ -83,6 +74,7 @@ function Set-QSCommonOperatorEnvironment {
 
 
 function Start-QSWebsite {
+    param([switch]$SkipBuild)
     Set-Location $script:QSWebsite
 
     $env:CLOUDFLARE_LOCAL = 'true'
@@ -95,13 +87,13 @@ function Start-QSWebsite {
     Write-Host "URL : $script:QSWebsiteUrl"
     Write-Host ''
 
-    npm run build
-
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Website build failed.'
+    if (-not $SkipBuild) {
+        npm.cmd run build
+        if ($LASTEXITCODE -ne 0) { throw 'Website build failed.' }
+    } elseif (-not (Test-Path -LiteralPath (Join-Path $script:QSWebsite 'build'))) {
+        throw 'No website build exists. Run Start-QSWebsite without -SkipBuild first.'
     }
-
-    npm run pages:dev
+    npm.cmd run pages:dev -- --port ([uri]$script:QSWebsiteUrl).Port --persist-to $script:QSWebsiteStateRoot
 }
 
 
@@ -143,9 +135,14 @@ function Start-QSWorker {
 
 
 function Start-QSDesktop {
+    param([string]$DataRoot = $script:QSDesktopRoot)
     Set-Location $script:QSRepo
 
-    $env:QUANTUM_STUDIO_DATA_ROOT = $script:QSDesktopRoot
+    $env:QUANTUM_STUDIO_DATA_ROOT = $DataRoot
+    # Desktop proof never requires operator credentials, even after an operator helper ran.
+    foreach ($name in @('SYNC', 'STATUS_SYNC', 'ACTIVATION_REVOKE', 'LICENCE_SYNC', 'LICENCE_PUBLISH')) {
+        [Environment]::SetEnvironmentVariable("QS_OPERATOR_${name}_TOKEN", $null, 'Process')
+    }
 
     $env:QS_WEBSITE_URL = $script:QSWebsiteUrl
     $env:QS_DESKTOP_AUTH_ALLOW_LOCAL_HTTP = '1'
@@ -155,7 +152,7 @@ function Start-QSDesktop {
 
     Write-Host ''
     Write-Host '=== Quantum Studio Desktop ==='
-    Write-Host "Data root : $script:QSDesktopRoot"
+    Write-Host "Data root : $DataRoot"
     Write-Host "Trust file: $script:QSTrustFile"
     Write-Host "Website   : $script:QSWebsiteUrl"
     Write-Host ''
@@ -164,38 +161,42 @@ function Start-QSDesktop {
 }
 
 
+function Start-QSDesktopA { Start-QSDesktop -DataRoot $script:QSDesktopARoot }
+function Start-QSDesktopB { Start-QSDesktop -DataRoot $script:QSDesktopBRoot }
+
 function Start-QSStack {
-    $helper = $PSCommandPath
+    $helper = $script:QSHelperPath
 
     if (-not $helper) {
         throw 'Start-QSStack must be loaded from qs-local.ps1.'
     }
 
+    $quotedHelper = $helper.Replace("'", "''")
     Write-Host 'Starting Quantum Studio local TEST stack...'
 
-    Start-Process powershell.exe -ArgumentList @(
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
         '-NoExit',
         '-ExecutionPolicy', 'Bypass',
         '-Command',
-        "& '$helper'; Start-QSWebsite"
+        ". '$quotedHelper'; Start-QSWebsite"
     )
 
     Start-Sleep -Seconds 3
 
-    Start-Process powershell.exe -ArgumentList @(
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
         '-NoExit',
         '-ExecutionPolicy', 'Bypass',
         '-Command',
-        "& '$helper'; Start-QSWorker"
+        ". '$quotedHelper'; Start-QSWorker"
     )
 
     Start-Sleep -Seconds 2
 
-    Start-Process powershell.exe -ArgumentList @(
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
         '-NoExit',
         '-ExecutionPolicy', 'Bypass',
         '-Command',
-        "& '$helper'; Start-QSDesktop"
+        ". '$quotedHelper'; Start-QSDesktop"
     )
 }
 
@@ -206,8 +207,10 @@ function Show-QSConfig {
     Write-Host '----------------------------------'
     Write-Host "Repository    : $script:QSRepo"
     Write-Host "Website       : $script:QSWebsiteUrl"
+    Write-Host "Website state : $script:QSWebsiteStateRoot"
     Write-Host "Operator root : $script:QSOperatorRoot"
-    Write-Host "Desktop root  : $script:QSDesktopRoot"
+    Write-Host "Device A root : $script:QSDesktopARoot"
+    Write-Host "Device B root : $script:QSDesktopBRoot"
     Write-Host "Trust file    : $script:QSTrustFile"
     Write-Host ''
 }

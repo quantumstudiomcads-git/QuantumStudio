@@ -1,6 +1,6 @@
 # Copy to .dev.vars for local Wrangler Pages development. Never commit .dev.vars.
 BETA_ENVIRONMENT=local
-BETA_ALLOWED_ORIGIN=http://localhost:8788
+BETA_ALLOWED_ORIGIN=http://127.0.0.1:8788
 BETA_PRIVACY_VERSION=draft-0.1
 BETA_TERMS_VERSION=draft-0.1
 BETA_IDENTITY_PEPPER=replace-with-a-long-local-development-only-value

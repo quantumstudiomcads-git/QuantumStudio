@@ -142,3 +142,5 @@ Automated tests cover protocol proof/replay/expiry/domain separation, real Pytho
 client versus JavaScript endpoints with a real M5 envelope, offline revocation
 restart, replacement binding, policy gating, startup/UI, and migration preservation.
 Manual two-device click-through is separate and must be recorded explicitly.
+
+Final M10 automated coverage and supported workflow: [LICENSING_ACCEPTANCE.md](LICENSING_ACCEPTANCE.md). Exact final manual checklist: [LICENSING_MANUAL_QA.md](LICENSING_MANUAL_QA.md).

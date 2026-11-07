@@ -94,6 +94,14 @@ class Database:
         db.execute("INSERT OR IGNORE INTO schema_migrations VALUES(6,datetime('now'))")
         db.commit()
 
+    @property
+    def storage_identity(self):
+        return str(self.path.resolve())
+
+    def run_transaction(self, action):
+        with self.transaction() as connection:
+            return action(connection)
+
     def transaction(self):
         return _Transaction(self)
 

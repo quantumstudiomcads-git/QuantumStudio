@@ -10,7 +10,6 @@ from urllib import error, parse, request
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, build_opener
 
-from .imports import ImportRejected, import_applicants_json
 
 DEFAULT_TIMEOUT_SECONDS = 15.0
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -247,6 +246,7 @@ class WebsiteSyncClient:
         payload = self.fetch_applications(status=status)
         fetched = len(payload["applications"])
         try:
+            from .imports import ImportRejected, import_applicants_json
             imported = import_applicants_json(
                 json.dumps(payload).encode("utf-8"), database, operator_id=operator_id
             )

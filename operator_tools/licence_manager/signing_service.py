@@ -16,7 +16,7 @@ from backend.licensing.configuration import Environment, deployment_environment,
 from .entitlements import require_current_entitlement
 from .issuance import (IssuanceRejected, issue_website_activation,
     website_activation_eligibility, validate_website_issuance_history)
-from .signing import SigningUnavailable
+from .signing_contract import SigningUnavailable
 from .signing_runtime import configured_licence_signer, require_signer_environment
 from .signing_service_auth import (HmacServiceAuthenticator, ServiceAuthenticator, SqliteRequestJournal,
     RequestRejected, ServiceConfigurationError, ISSUE_PATH, FRESHNESS_SECONDS)
@@ -91,7 +91,7 @@ class PrivateSigningService:
     No listener, key generation, or website publication is performed here.
     """
     def __init__(self, *, database_factory, source: ActivationSource, signer,
-                 authenticator: ServiceAuthenticator, journal, clock=time.time):
+                 authenticator: ServiceAuthenticator, journal, clock=time.time, profile_provider=None):
         try:
             require_signer_environment(signer)
             environment = signer.environment
@@ -105,6 +105,7 @@ class PrivateSigningService:
         self._database_factory, self._source, self._signer = database_factory, source, signer
         self._auth, self._journal, self._clock = authenticator, journal, clock
         self.environment = environment
+        self._profile_provider = profile_provider
 
     @classmethod
     def from_environment(cls, database_factory, *, clock=time.time):
@@ -155,6 +156,12 @@ class PrivateSigningService:
     def _read(self, activation_id):
         try:
             values = tuple(self._source.read_activations())
+        except Exception:
+            raise RequestRejected(503, "source_unavailable") from None
+        return self.validate_activations(activation_id, values)
+
+    def validate_activations(self, activation_id, values):
+        try:
             if len(values) > MAX_WEBSITE_ACTIVATIONS: raise ValueError
             records = tuple(_parse_website_activation(asdict(value)) for value in values)
             ids = [value.activation_request_id for value in records]
@@ -173,16 +180,18 @@ class PrivateSigningService:
     def _bind_database(self, database):
         # Public deployment metadata, not a migration or key persistence. Prevent
         # two environments/journals from independently issuing through one database.
-        if database.path.resolve() == self._journal.path.resolve(): raise ServiceConfigurationError()
-        with database.transaction() as db:
+        if database.storage_identity == self._journal.storage_identity: raise ServiceConfigurationError()
+        def bind(db):
             if db.execute("SELECT 1 FROM signing_keys WHERE domain!='licence' OR kid LIKE 'test-%' LIMIT 1").fetchone():
                 raise ServiceConfigurationError()
             for name, value in (("private_signing_environment", self.environment.value),
                     ("private_signing_origin", self._source.origin),
-                    ("private_signing_journal", str(self._journal.path.resolve()))):
+                    ("private_signing_journal", self._journal.storage_identity)):
                 row = db.execute("SELECT value FROM storage_metadata WHERE name=?", (name,)).fetchone()
                 if row and row[0] != value: raise ServiceConfigurationError()
                 db.execute("INSERT OR IGNORE INTO storage_metadata VALUES(?,?)", (name, value))
+
+        database.run_transaction(bind)
 
     def _check_existing(self, database, activation, envelope=None):
         row = database.connection.execute("SELECT envelope_json FROM website_activation_licences WHERE activation_request_id=?",
@@ -208,31 +217,37 @@ class PrivateSigningService:
             raise RequestRejected(409, "licence_conflict") from None
         return True
 
+    def persist_activation(self, database, activation, records, caller):
+        """One checked persistence implementation for sync and Cloudflare adapters."""
+        self._bind_database(database)
+        existing = self._check_existing(database, activation)
+        try:
+            if not existing:
+                validate_website_issuance_history(database, activation, records, int(self._clock()))
+            envelope = issue_website_activation(database, self._signer, activation,
+                operator_id="operator-" + hashlib.sha256(
+                    ("private-service:" + self.environment.value + ":" + caller).encode()).hexdigest()[:16],
+                now=int(self._clock()), profile_provider=self._profile_provider)
+        except IssuanceRejected:
+            raise RequestRejected(409, "licence_conflict") from None
+        except SigningUnavailable:
+            raise RequestRejected(409 if existing else 503,
+                "licence_conflict" if existing else "issuance_unavailable") from None
+        self._check_existing(database, activation, envelope)
+        return envelope, existing
+
+    def completed_response(self, activation, current, envelope, existing):
+        if asdict(current) != asdict(activation): raise RequestRejected(409, "authoritative_state_changed")
+        return SigningServiceResponse(200, {"schema_version": 1,
+            "result": "already_current" if existing else "persisted",
+            "envelope_sha256": hashlib.sha256(canonical_json(envelope)).hexdigest(), "envelope": envelope})
+
     def _issue(self, activation_id, caller):
         activation, records = self._read(activation_id)
         with self._database_factory() as database:
-            self._bind_database(database)
-            existing = self._check_existing(database, activation)
-            try:
-                if not existing:
-                    validate_website_issuance_history(database, activation, records, int(self._clock()))
-                envelope = issue_website_activation(database, self._signer, activation,
-                    operator_id="operator-" + hashlib.sha256(
-                        ("private-service:" + self.environment.value + ":" + caller).encode()).hexdigest()[:16],
-                    now=int(self._clock()))
-            except IssuanceRejected:
-                raise RequestRejected(409, "licence_conflict") from None
-            except SigningUnavailable:
-                raise RequestRejected(409 if existing else 503,
-                    "licence_conflict" if existing else "issuance_unavailable") from None
-            self._check_existing(database, activation, envelope)
-            # Distributed reads cannot be made atomic with private persistence.
-            # Detect observed changes and withhold the envelope; never re-sign it.
+            envelope, existing = self.persist_activation(database, activation, records, caller)
             current, _ = self._read(activation_id)
-            if asdict(current) != asdict(activation): raise RequestRejected(409, "authoritative_state_changed")
-            return SigningServiceResponse(200, {"schema_version": 1,
-                "result": "already_current" if existing else "persisted",
-                "envelope_sha256": hashlib.sha256(canonical_json(envelope)).hexdigest(), "envelope": envelope})
+            return self.completed_response(activation, current, envelope, existing)
 
 
 def signing_service_wsgi(service):

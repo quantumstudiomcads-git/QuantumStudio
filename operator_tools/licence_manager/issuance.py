@@ -12,8 +12,7 @@ from backend.licensing.canonical import canonical_json, b64url_decode, b64url_en
 from backend.licensing.verifier import public_key_hash
 from .audit import append_event
 from .models import ApplicantStatus, Profile, TRANSITIONS
-from .policy import derive_profile
-from .signing import AuthorityState, SigningUnavailable
+from .signing_contract import AuthorityState, SigningUnavailable
 
 
 PRODUCT = "Quantum Studio"
@@ -21,6 +20,12 @@ DURATION_SECONDS = 90 * 24 * 60 * 60
 
 
 class IssuanceRejected(RuntimeError): pass
+
+
+def derive_profile(profile):
+    """Keep the existing policy boundary lazy for portable private runtimes."""
+    from .policy import derive_profile as canonical_profile
+    return canonical_profile(profile)
 
 
 def authorize_activation_profile(database, request_id: str, profile: Profile | str, *, operator_id="operator", confirmed=False):
@@ -271,7 +276,7 @@ def issue_website_activation_for_testing(database, test_authority, activation, *
     return issue_website_activation(database, test_authority, activation, operator_id=operator_id, now=now)
 
 
-def issue_website_activation(database, authority, activation, *, operator_id="operator", now=None):
+def issue_website_activation(database, authority, activation, *, operator_id="operator", now=None, profile_provider=None):
     """Reusable checked issuance; transport and signing implementation stay separate.
 
     Callers must supply authoritative website records through the existing review/
@@ -294,7 +299,7 @@ def issue_website_activation(database, authority, activation, *, operator_id="op
         valid = False
     if not valid:
         raise IssuanceRejected("An AUTHORIZED activation with a matching full device public-key hash is required.")
-    with database.transaction() as db:
+    def persist(db):
         existing = db.execute(
             "SELECT * FROM website_activation_licences WHERE activation_request_id=?",
             (activation.activation_request_id,),
@@ -331,7 +336,10 @@ def issue_website_activation(database, authority, activation, *, operator_id="op
             remember_entitlement(db, entitlement)
         except ValueError as error:
             raise IssuanceRejected(str(error)) from None
-        grants = derive_profile(Profile.PROFESSOR_BETA)
+        if profile_provider is None:
+            grants = derive_profile(Profile.PROFESSOR_BETA)
+        else:
+            grants = profile_provider(Profile.PROFESSOR_BETA)
         licence_id = "lic_" + str(uuid.uuid4())
         subject = "sub_" + activation.application_id
         payload = {
@@ -358,6 +366,8 @@ def issue_website_activation(database, authority, activation, *, operator_id="op
             activation.installation_id, activation.device_public_key_hash, licence_id,
             canonical_json(envelope).decode(), event))
         return envelope
+    return database.run_transaction(persist)
+
 
 
 def website_activation_eligibility(activation, activations):

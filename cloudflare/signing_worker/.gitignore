@@ -1,0 +1,10 @@
+.venv/
+.wrangler/
+.generated/
+.dev.vars*
+.env*
+__pycache__/
+node_modules/
+python_modules/
+.venv-pyodide/
+.venv*/

@@ -263,3 +263,11 @@ Remaining gates include approved key/caller credential provisioning and custody,
 private hosting/network/TLS setup, shared durable storage/recovery, production
 publication/retrieval adapters, real email delivery, audit-listed auth hardening,
 release public trust and a real HTTPS production-style acceptance pilot.
+
+
+## Selected Cloudflare adapter
+
+The separate Python Worker and SQLite Durable Object adapter is now implemented in
+`cloudflare/signing_worker/`. See `CLOUDFLARE_SIGNING_WORKER.md` for its bindings,
+secret contract, local dry runs and remaining manual deployment gates. This is the
+selected closed-beta hosting path; no VPS or public website change is required.

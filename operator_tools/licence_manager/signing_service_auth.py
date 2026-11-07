@@ -8,7 +8,6 @@ import hmac
 import json
 from pathlib import Path
 import re
-import sqlite3
 from typing import Protocol
 
 from backend.licensing.canonical import b64url_decode, b64url_encode, canonical_json
@@ -137,8 +136,13 @@ class SqliteRequestJournal:
             db.execute("INSERT OR IGNORE INTO service_metadata VALUES('environment',?)", (environment.value,))
             db.commit()
 
+    @property
+    def storage_identity(self):
+        return str(self.path.resolve())
+
     @contextmanager
     def _connection(self):
+        import sqlite3
         db = sqlite3.connect(self.path, timeout=5, isolation_level=None)
         try: yield db
         finally: db.close()

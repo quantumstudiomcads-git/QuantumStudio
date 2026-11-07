@@ -15,7 +15,7 @@ from backend.licensing.configuration import (
 )
 from backend.licensing.models import DeviceIdentity, DeviceLease
 from backend.licensing.verifier import LeaseVerifier, issue_lease, public_key_bytes
-from .signing import AuthorityState, AuthorityStatus, SigningUnavailable
+from .signing_contract import AuthorityState, AuthorityStatus, SigningUnavailable
 
 
 class LicenceSigner(Protocol):
@@ -74,8 +74,9 @@ def _payload_snapshot(payload):
 def require_signer_environment(signer: LicenceSigner):
     """Fail before signing or recovering if a signer belongs to another profile."""
     try:
-        environment = deployment_environment()
-        validate_switches(os.environ, environment)
+        values = getattr(signer, "_bound_deployment", os.environ)
+        environment = deployment_environment(values)
+        validate_switches(values, environment)
         if signer.environment is not environment:
             raise ValueError
         if environment is Environment.LOCAL:
@@ -124,7 +125,7 @@ class RuntimeEd25519Signer:
     No generation, files, database, logging, fallback, or export of private bytes.
     Issuer identity is the existing signed kid, not a new licence-schema field.
     """
-    def __init__(self, environ=None):
+    def __init__(self, environ=None, *, bind_environment=False):
         values = os.environ if environ is None else environ
         try:
             environment = deployment_environment(values)
@@ -159,6 +160,9 @@ class RuntimeEd25519Signer:
         except Exception:
             raise _failure("invalid-private-key") from None
         self._environment, self._kid, self._public_key, self._key = environment, issuer, public, key
+        if bind_environment:
+            # Binding runtimes have no process-wide environment. Retain PUBLIC mode only.
+            self._bound_deployment = {"BETA_ENVIRONMENT": environment.value}
 
     @property
     def environment(self): return self._environment

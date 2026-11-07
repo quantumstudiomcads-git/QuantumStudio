@@ -26,10 +26,13 @@ An absent Python selector chooses the strict production profile, never local.
 An absent website selector is invalid. Neither deployed profile inherits the
 local origin, local credentials, or TEST trust.
 
-Configure each process independently. Shell environment variables for a static
-build do not become Pages Functions bindings; `.dev.vars` is a local Wrangler
-input, not a release configuration loader. The checked-in Wrangler production
-origin/database ID are deliberately unusable placeholders. Do not deploy them.
+Configure each process independently. A shell-only static build setting does not
+configure deployed Functions. In Pages, configure the matching dashboard environment
+so the required values reach both the build process and runtime. `.dev.vars` is a
+local Wrangler input, not a release configuration loader. `website/wrangler.toml`
+is local-only: it has no `pages_build_output_dir` and no `[vars]` deployment defaults.
+Its all-zero D1 identity is only for local tools; real Pages D1 bindings belong to
+the dashboard. The existing local helper/package commands supply `build` explicitly.
 Use the existing Pages/Functions/D1 architecture; a hosting migration is not
 needed for this boundary.
 
@@ -125,6 +128,76 @@ profiles are `website/config/staging.env.example` and
 `website/config/production.env.example`. They contain blanks deliberately, are not
 automatically loaded, and must not be filled with secrets in Git. `.dev.vars`
 and all suffixed local-secret variants are ignored, except the committed example.
+
+## Cloudflare Pages dashboard ownership
+
+Pages can read tracked Wrangler variables into its build/deployment configuration.
+Previously `pages_build_output_dir` opted `website/wrangler.toml` into that role,
+so top-level production mode and a placeholder origin overrode the intended staging
+settings. Removing `[vars]` alone would leave a deployed Wrangler configuration
+managing bindings. The file now omits that deployment opt-in entirely; it remains
+usable by `wrangler pages dev build` and `d1:migrate:local`.
+
+Cloudflare documents the no-output-directory local-only mode and Wrangler's source
+of truth behavior in [Pages Wrangler configuration](https://developers.cloudflare.com/pages/functions/wrangler-configuration/).
+Do not reintroduce `pages_build_output_dir` or deploy-time `[vars]` without explicitly
+changing this dashboard-managed deployment model. No validator was relaxed.
+
+In the Pages project dashboard set root directory `website`, build command
+`npm run build`, and build output directory `build` (relative to that root).
+Configure the Functions compatibility date separately to the reviewed local value
+`2026-09-20`; the local-only Wrangler file no longer supplies remote settings.
+
+Choose the actual Pages deployment slot, not just the name of the branch:
+
+- A dedicated staging Pages project's **Production** slot can and should have
+  `BETA_ENVIRONMENT=staging` when its production branch is `production-beta-v0.2`.
+- A branch preview on a shared Pages project uses that project's **Preview** slot.
+- The actual production site's Production slot uses `BETA_ENVIRONMENT=production`.
+
+The application never infers deployment mode from branch names, `CF_PAGES_URL`, or
+Pages' Production/Preview label. Set each environment explicitly. Replace any
+previously saved production/placeholder values in that slot; do not assume removing
+them from Git edits existing account settings. Dashboard variables apply at build
+and runtime; verify the selected environment in both views after configuration.
+[Pages environment variables](https://developers.cloudflare.com/pages/functions/bindings/#environment-variables).
+
+For STAGING set the following public values manually, without putting real hosts
+or identifiers into tracked defaults:
+
+| Name | Dashboard value |
+| --- | --- |
+| `BETA_ENVIRONMENT` | `staging` |
+| `BETA_ALLOWED_ORIGIN` | The approved staging HTTPS origin, root only; no path |
+| `TURNSTILE_SITE_KEY` | Real public staging widget key registered for that hostname |
+| `BETA_TURNSTILE_TEST_MODE` | `false` |
+| `AUTH_EMAIL_TEST_MODE` | `false` |
+| `CLOUDFLARE_LOCAL` | `false` or absent |
+| `BETA_PRIVACY_VERSION` | The actual staging privacy document version |
+| `BETA_TERMS_VERSION` | The actual staging beta terms version |
+
+The first three values plus disabled TEST flags are necessary for a valid static
+build. For a usable Functions runtime also configure encrypted staging secret
+bindings `AUTH_OTP_PEPPER`, `BETA_IDENTITY_PEPPER`, `TURNSTILE_SECRET_KEY`,
+`OPERATOR_SYNC_TOKEN`, `OPERATOR_STATUS_SYNC_TOKEN`, `OPERATOR_LICENCE_SYNC_TOKEN`,
+`OPERATOR_LICENCE_PUBLISH_TOKEN`, and `OPERATOR_ACTIVATION_REVOKE_TOKEN`.
+Use independent non-placeholder staging values and purpose-specific credentials.
+Bind `BETA_DB` to the real staging D1 database in the same Pages deployment slot;
+the reviewed existing migrations must be present. `BETA_DB` is a resource binding,
+not a plaintext environment variable or the local all-zero database ID.
+
+If using Google sign-in, set `GOOGLE_CLIENT_ID`, encrypted `GOOGLE_CLIENT_SECRET`,
+and `GOOGLE_REDIRECT_URI=<STAGING_HTTPS_ORIGIN>/api/auth/google/callback`, and register
+that exact callback externally. Keep `QS_TEST_LICENSING`, local HTTP exceptions and
+TEST trust files absent; staging uses production-style gates. Never add a private
+licence signing key or signing-service caller allowlist to Pages. Production uses
+the same variable names with independently approved production values and secrets.
+
+Local development still uses `.dev.vars`, local D1 and `scripts/qs-local.ps1`.
+Nothing automatically loads `website/config/*.env.example`. Missing deployed mode,
+origin, public widget key or runtime bindings remain failures rather than local
+fallbacks. This configuration fix does not enable the deferred email/licence
+production adapters or perform a deployment.
 
 ## Operator processes and local helpers
 

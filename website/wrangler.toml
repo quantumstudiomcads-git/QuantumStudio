@@ -1,22 +1,16 @@
+# LOCAL DEVELOPMENT ONLY. Do not add pages_build_output_dir here: that opts this
+# file into deployed Pages configuration and overrides dashboard-managed settings.
+# Pages build/runtime variables and real D1 bindings belong to the matching Pages
+# project's dashboard environment. No deployment environment is selected here.
+# npm run pages:dev supplies the local build directory explicitly.
 name = "quantum-studio-website"
-pages_build_output_dir = "./build"
 compatibility_date = "2026-09-20"
 send_metrics = false
 
-# Replace the database ID only after an operator creates the D1 database in the
-# intended Cloudflare account. The all-zero value is deliberately non-production.
+# Local-only D1 identity for wrangler pages dev and d1:migrate:local.
+# Never replace this with a staging/production database ID in tracked configuration.
 [[d1_databases]]
 binding = "BETA_DB"
 database_name = "quantum-studio-beta"
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "migrations"
-
-[vars]
-# Public/non-secret deployment settings. Review before any deployment.
-BETA_ALLOWED_ORIGIN = "https://replace-before-deployment.example"
-BETA_PRIVACY_VERSION = "draft-0.1"
-BETA_TERMS_VERSION = "draft-0.1"
-BETA_ENVIRONMENT = "production"
-BETA_TURNSTILE_TEST_MODE = "false"
-AUTH_EMAIL_TEST_MODE = "false"
-# AUTH_OTP_PEPPER and operator/provider credentials are encrypted secret bindings.

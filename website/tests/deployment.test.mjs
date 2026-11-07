@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import {describe, expect, it, vi} from 'vitest';
 import {deploymentEnvironment, validateDeployment, websiteBuildConfiguration} from '../functions/_lib/deployment.js';
 import {verifyTurnstile} from '../functions/_lib/beta-registration.js';
@@ -112,5 +113,52 @@ describe('deployment environment boundary', () => {
     const next = vi.fn(async () => new Response('existing route'));
     const response = await onRequest({request: new Request('https://production.unit-fixture.org/api/auth/session'), env: deployed(), next});
     expect(await response.text()).toBe('existing route'); expect(next).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe('dashboard-managed Pages deployment configuration', () => {
+  const localWrangler = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8')
+    .split(/\r?\n/).filter((line) => !line.trim().startsWith('#')).join('\n');
+
+  it('keeps Wrangler local-only so Pages does not override dashboard configuration', () => {
+    expect(localWrangler).not.toMatch(/^\s*pages_build_output_dir\s*=/m);
+    expect(localWrangler).not.toMatch(/^\s*\[(?:vars|env\.[^\]]+\.vars)\]/m);
+    expect(localWrangler).not.toMatch(/^\s*(?:BETA_ENVIRONMENT|BETA_ALLOWED_ORIGIN|BETA_PRIVACY_VERSION|BETA_TERMS_VERSION|BETA_TURNSTILE_TEST_MODE|AUTH_EMAIL_TEST_MODE)\s*=/m);
+    expect(localWrangler).not.toContain('replace-before-deployment');
+  });
+
+  it('retains the local D1 identity and the explicit local build-directory command', () => {
+    expect(localWrangler).toMatch(/\[\[d1_databases\]\]/);
+    expect(localWrangler).toContain('binding = "BETA_DB"');
+    expect(localWrangler).toContain('database_name = "quantum-studio-beta"');
+    expect(localWrangler).toContain('migrations_dir = "migrations"');
+    const scripts = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).scripts;
+    expect(scripts['pages:dev']).toContain('wrangler pages dev build');
+    expect(scripts['d1:migrate:local']).toContain('--local --config wrangler.toml');
+  });
+
+  it.each(['staging', 'production'])('builds %s from externally supplied process variables', (mode) => {
+    const supplied = {BETA_ENVIRONMENT: mode, BETA_ALLOWED_ORIGIN: `https://${mode}.unit-fixture.org`,
+      TURNSTILE_SITE_KEY: 'synthetic-public-widget', BETA_TURNSTILE_TEST_MODE: 'false',
+      AUTH_EMAIL_TEST_MODE: 'false', CLOUDFLARE_LOCAL: 'false', QS_TEST_LICENSING: '0',
+      QS_DESKTOP_AUTH_ALLOW_LOCAL_HTTP: '0', QS_TEST_LICENCE_TRUST_FILE: ''};
+    try {
+      for (const [name, value] of Object.entries(supplied)) vi.stubEnv(name, value);
+      expect(websiteBuildConfiguration(process.env)).toEqual({environment: mode,
+        url: supplied.BETA_ALLOWED_ORIGIN, baseUrl: '/',
+        turnstileSiteKey: supplied.TURNSTILE_SITE_KEY, turnstileTestMode: false});
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.each(['staging', 'production'])('%s still refuses the previous tracked placeholder origin', (mode) => {
+    expect(() => websiteBuildConfiguration({...deployed(mode),
+      BETA_ALLOWED_ORIGIN: 'https://replace-before-deployment.example'})).toThrow('invalid-deployment-origin');
+  });
+
+  it.each(['staging', 'production'])('%s still refuses missing external configuration', (mode) => {
+    expect(() => websiteBuildConfiguration({BETA_ENVIRONMENT: mode})).toThrow('invalid-deployment-origin');
+    expect(() => websiteBuildConfiguration({...deployed(mode), BETA_ALLOWED_ORIGIN: ''})).toThrow('invalid-deployment-origin');
+    expect(() => websiteBuildConfiguration({...deployed(mode), TURNSTILE_SITE_KEY: ''})).toThrow('missing-turnstile-site-key');
   });
 });

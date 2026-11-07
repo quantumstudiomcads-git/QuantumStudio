@@ -358,3 +358,39 @@ def issue_website_activation(database, authority, activation, *, operator_id="op
             activation.installation_id, activation.device_public_key_hash, licence_id,
             canonical_json(envelope).decode(), event))
         return envelope
+
+
+def website_activation_eligibility(activation, activations):
+    from dataclasses import asdict
+    from .website_sync import _parse_website_activation, WebsiteSyncError
+    try:
+        _parse_website_activation(asdict(activation))
+    except (WebsiteSyncError, TypeError, ValueError):
+        return "invalid_activation"
+    if activation.status != "AUTHORIZED":
+        return "not_authorized"
+    if activation.flag_reason or activation.revoked_at or activation.licence_revoked_at:
+        return "flagged_or_revoked"
+    if not activation.device_public_key_hash or not activation.authorized_at:
+        return "missing_identity_or_authorization"
+    if not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", activation.app_version):
+        return "invalid_activation_facts"
+    # M4 allows multiple distinct authorized devices per applicant. Do not
+    # impose the separate legacy imported-request single-device limit here.
+    for other in activations:
+        if other.activation_request_id != activation.activation_request_id and other.installation_id == activation.installation_id and other.status != "REVOKED":
+            return "conflicting_device_activation"
+    return None
+
+
+def validate_website_issuance_history(database, activation, activations, now):
+    """Preserve existing local/legacy conflict checks before a new issuance."""
+    for row in database.connection.execute("SELECT activation_request_id,installation_id,envelope_json FROM website_activation_licences"):
+        old = json.loads(row["envelope_json"])
+        confirmed_revoked = any(a.activation_request_id == row["activation_request_id"]
+            and a.status == "REVOKED" and a.installation_id == row["installation_id"]
+            and a.device_public_key_hash == old["device_public_key_hash"] for a in activations)
+        if row["installation_id"] == activation.installation_id and old["expires_at"] > now and not confirmed_revoked:
+            raise IssuanceRejected("Conflicting active local device licence; manual recovery required.")
+    if database.connection.execute("SELECT 1 FROM licences WHERE application_id=? AND revoked_at IS NULL AND expires_at>?", (activation.application_id, now)).fetchone():
+        raise IssuanceRejected("Conflicting active legacy licence; manual recovery required.")

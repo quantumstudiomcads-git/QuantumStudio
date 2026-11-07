@@ -207,3 +207,11 @@ private service authentication/orchestration, production metadata/publication/
 retrieval adapters, real email delivery, audit-listed OTP/OAuth hardening, actual
 external configuration, release public-trust provisioning and a real HTTPS
 acceptance pilot. This document does not certify a production deployment.
+
+
+## Private service follow-up
+
+The authenticated identifier-only orchestration and durable replay contract is now
+implemented and documented in `PRODUCTION_SIGNING_SERVICE.md`. It returns private
+persistence results and starts no listener. Public website production publication,
+secret provisioning and actual deployment remain separate gates.

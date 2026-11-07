@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
@@ -14,13 +14,14 @@ import time
 from backend.licensing.canonical import b64url_decode, canonical_json
 from backend.licensing.local_test_trust import load_test_trust
 from .audit import append_event, current_operator_id
-from .issuance import IssuanceRejected, issue_website_activation_for_testing
+from .issuance import (IssuanceRejected, issue_website_activation_for_testing,
+    website_activation_eligibility, validate_website_issuance_history)
 from .licence_delivery import stored_test_licence, publish_website_test_licence
 from .paths import data_root
 from .signing import TestEphemeralAuthority, public_key_record
 from .storage import bootstrap_storage
 from .website_sync import (
-    WebsiteSyncError, WebsiteLicenceSyncError, _parse_website_activation,
+    WebsiteSyncError, WebsiteLicenceSyncError,
     _validated_base_url, fetch_website_activations, sync_website_test_licence_metadata,
 )
 
@@ -177,24 +178,7 @@ class BetaLicenceWorker:
             return tuple(self._process(a, activations) for a in activations)
 
     def _eligibility(self, activation, activations):
-        try:
-            _parse_website_activation(asdict(activation))
-        except (WebsiteSyncError, TypeError, ValueError):
-            return "invalid_activation"
-        if activation.status != "AUTHORIZED":
-            return "not_authorized"
-        if activation.flag_reason or activation.revoked_at or activation.licence_revoked_at:
-            return "flagged_or_revoked"
-        if not activation.device_public_key_hash or not activation.authorized_at:
-            return "missing_identity_or_authorization"
-        if not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", activation.app_version):
-            return "invalid_activation_facts"
-        # M4 allows multiple distinct authorized devices per applicant. Do not
-        # impose the separate legacy imported-request single-device limit here.
-        for other in activations:
-            if other.activation_request_id != activation.activation_request_id and other.installation_id == activation.installation_id and other.status != "REVOKED":
-                return "conflicting_device_activation"
-        return None
+        return website_activation_eligibility(activation, activations)
 
     def _process(self, activation, activations):
         aid = activation.activation_request_id
@@ -219,15 +203,7 @@ class BetaLicenceWorker:
                 self._audit(aid, stage, "recovered_original")
             else:
                 now = int(time.time())
-                for row in self.database.connection.execute("SELECT activation_request_id,installation_id,envelope_json FROM website_activation_licences"):
-                    old = json.loads(row["envelope_json"])
-                    confirmed_revoked = any(a.activation_request_id == row["activation_request_id"]
-                        and a.status == "REVOKED" and a.installation_id == row["installation_id"]
-                        and a.device_public_key_hash == old["device_public_key_hash"] for a in activations)
-                    if row["installation_id"] == activation.installation_id and old["expires_at"] > now and not confirmed_revoked:
-                        raise WorkerError("Conflicting active local device licence; manual recovery required.")
-                if self.database.connection.execute("SELECT 1 FROM licences WHERE application_id=? AND revoked_at IS NULL AND expires_at>?", (activation.application_id, now)).fetchone():
-                    raise WorkerError("Conflicting active legacy licence; manual recovery required.")
+                validate_website_issuance_history(self.database, activation, activations, now)
                 trust = dict(schema_version=1, domain="test-licence", **public_key_record(self.authority))
                 stage = "trust"
                 _check_trust(self.config.trust_file, trust)  # Before any new signature.

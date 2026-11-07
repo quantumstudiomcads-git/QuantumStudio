@@ -187,3 +187,13 @@ delivery adapters, real email transport, OTP/OAuth security hardening, approved
 public copy/consent, actual external resource configuration, desktop public-profile
 provisioning, installer/release validation and a real HTTPS acceptance pilot.
 No keys, domains, credentials, resources or deployments were provisioned here.
+
+
+## Private signing runtime follow-up
+
+The separately implemented signing contract is documented in
+`PRODUCTION_SIGNING_AUTHORITY.md`: `QS_LICENCE_SIGNING_ISSUER_ID`,
+`QS_LICENCE_SIGNING_PUBLIC_KEY`, and secret `QS_LICENCE_SIGNING_KEY` belong only
+to the private signing runtime. They are not website bindings or desktop build
+settings. The implementation does not provision keys or enable production website
+publication; key custody, private orchestration and deployment remain blocked.

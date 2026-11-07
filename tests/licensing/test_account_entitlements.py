@@ -130,7 +130,8 @@ def test_history_migration_preserves_original_publications_and_challenges(tmp_pa
 
 
 @pytest.fixture
-def issued(tmp_path):
+def issued(tmp_path, monkeypatch):
+    monkeypatch.setenv("BETA_ENVIRONMENT", "local")
     db=Database(tmp_path/'operator',DataProtector.for_testing(b'E'*32))
     identity=device_identity_from_private_key(Ed25519PrivateKey.generate())
     activation=WebsiteActivation(str(uuid.uuid4()),APP,identity.device_id,'windows','x86_64','0.2.0','AUTHORIZED',None,

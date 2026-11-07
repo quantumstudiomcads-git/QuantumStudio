@@ -103,6 +103,9 @@ def _mock_dpapi(module, *, unprotected=None, protected=b"test-dpapi-blob", fail_
 
 class LicenceManagerTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ, {"BETA_ENVIRONMENT": "local"})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)

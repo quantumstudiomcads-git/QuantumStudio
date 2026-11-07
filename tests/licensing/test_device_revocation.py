@@ -99,7 +99,8 @@ def test_configuration_and_controlled_reason_validation_fail_before_network(monk
 
 
 @pytest.fixture
-def window(tmp_path):
+def window(tmp_path, monkeypatch):
+    monkeypatch.setenv("BETA_ENVIRONMENT", "local")
     app = QApplication.instance() or QApplication([])
     db = Database(tmp_path/'operator', DataProtector.for_testing(b'R'*32))
     window = LicenceManagerWindow(test_mode=True, database=db)

@@ -25,6 +25,11 @@ from operator_tools.licence_manager.signing import TestEphemeralAuthority as _Te
 from operator_tools.licence_manager.website_sync import WebsiteActivation
 
 
+@pytest.fixture(autouse=True)
+def local_signing_environment(monkeypatch):
+    monkeypatch.setenv("BETA_ENVIRONMENT", "local")
+
+
 @pytest.fixture
 def app():
     return QApplication.instance() or QApplication([])

@@ -1,4 +1,4 @@
-"""Separate licence signing authority. Production access is DPAPI-only and provisioned out of band."""
+"""Legacy DPAPI authority and local TEST signer; runtime secrets use signing_runtime."""
 from __future__ import annotations
 
 import hashlib
@@ -171,18 +171,40 @@ class AuthorityState(str, Enum):
     LAST_AUTHORIZED_USE_SUCCEEDED = "LAST_AUTHORIZED_USE_SUCCEEDED"
     LAST_AUTHORIZED_USE_FAILED = "LAST_AUTHORIZED_USE_FAILED"
     TEST_ONLY_EPHEMERAL = "TEST_ONLY_EPHEMERAL"
+    RUNTIME_KEY_VERIFIED = "RUNTIME_KEY_VERIFIED"
 
 
 class TestEphemeralAuthority:
     """TEST ONLY ephemeral fixture signer; never selected by production mode."""
     mode = "TEST"
     def __init__(self, kid=None):
+        self._require_local()
         self._key = Ed25519PrivateKey.generate()
         self.kid = kid or "test-lic-" + os.urandom(6).hex()
     @property
     def public_key(self): return public_key_bytes(self._key)
     def status(self): return AuthorityStatus(AuthorityState.TEST_ONLY_EPHEMERAL, self.mode, self.kid, hashlib.sha256(self.public_key).hexdigest(), "TEST ONLY ephemeral key in memory.", self.public_key)
-    def sign_test_fixture_only(self, payload): return issue_lease(payload, self._key, kid=self.kid)
+    @property
+    def environment(self):
+        from backend.licensing.configuration import Environment
+        return Environment.LOCAL
+
+    @staticmethod
+    def _require_local():
+        from backend.licensing.configuration import ConfigurationError, Environment, deployment_environment
+        try:
+            if deployment_environment() is Environment.LOCAL:
+                return
+        except ConfigurationError:
+            pass
+        raise SigningUnavailable("TEST signing is permitted only in explicit local mode.")
+
+    def sign_test_fixture_only(self, payload):
+        self._require_local()
+        return issue_lease(payload, self._key, kid=self.kid)
+
+    def sign_licence(self, payload):
+        return self.sign_test_fixture_only(payload)
 
 
 class ProductionAuthority:

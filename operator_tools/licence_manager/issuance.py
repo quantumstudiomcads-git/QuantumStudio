@@ -268,9 +268,22 @@ def issue_website_activation_for_testing(database, test_authority, activation, *
     from .signing import TestEphemeralAuthority
     if not isinstance(test_authority, TestEphemeralAuthority):
         raise IssuanceRejected("Website issuance requires the TEST ONLY authority.")
+    return issue_website_activation(database, test_authority, activation, operator_id=operator_id, now=now)
+
+
+def issue_website_activation(database, authority, activation, *, operator_id="operator", now=None):
+    """Reusable checked issuance; transport and signing implementation stay separate.
+
+    Callers must supply authoritative website records through the existing review/
+    authorization flow. No public endpoint or new approval semantics are added.
+    """
+    from .signing_runtime import require_signer_environment, sign_verified_licence, verify_licence_envelope
+    require_signer_environment(authority)
     try:
         valid = (
             activation.status == "AUTHORIZED"
+            and not activation.flag_reason and not activation.revoked_at and not activation.licence_revoked_at
+            and bool(activation.authorized_at)
             and str(uuid.UUID(activation.activation_request_id)) == activation.activation_request_id.lower()
             and str(uuid.UUID(activation.application_id)) == activation.application_id.lower()
             and isinstance(activation.device_public_key_hash, str)
@@ -290,7 +303,25 @@ def issue_website_activation_for_testing(database, test_authority, activation, *
             if any(existing[field] != getattr(activation, field) for field in (
                 "application_id", "installation_id", "device_public_key_hash")):
                 raise IssuanceRejected("Website activation identity conflicts with its stored licence.")
-            return json.loads(existing["envelope_json"])
+            try:
+                envelope = json.loads(existing["envelope_json"])
+                if (not isinstance(envelope, dict) or not isinstance(envelope.get("kid"), str)
+                        or envelope.get("licence_id") != existing["licence_id"]
+                        or envelope.get("approved_application_ref") != activation.application_id
+                        or envelope.get("device_id") != activation.installation_id
+                        or envelope.get("device_public_key_hash") != activation.device_public_key_hash):
+                    raise ValueError
+            except (ValueError, TypeError):
+                raise SigningUnavailable("Stored signed licence conflicts with its activation.") from None
+            key = db.execute("SELECT public_key,domain FROM signing_keys WHERE kid=?", (envelope["kid"],)).fetchone()
+            domain = "test-licence" if authority.mode == "TEST" else "licence"
+            prefix = r"test-lic-[A-Za-z0-9._-]{1,80}" if authority.mode == "TEST" else r"lic-[a-z0-9][a-z0-9._-]{0,63}"
+            if key is None or key["domain"] != domain or not re.fullmatch(prefix, envelope["kid"]):
+                raise SigningUnavailable("Original licence public trust is unavailable.")
+            if envelope["kid"] == authority.kid and bytes(key["public_key"]) != authority.public_key:
+                raise SigningUnavailable("Stored issuer conflicts with the configured public key.")
+            payload = {name: value for name, value in envelope.items() if name not in {"kid", "signature"}}
+            return verify_licence_envelope(payload, envelope, kid=envelope["kid"], public_key=bytes(key["public_key"]))
         issued = int(now.timestamp()) if isinstance(now, datetime) else int(
             now if now is not None else datetime.now(timezone.utc).timestamp())
         from .entitlements import require_current_entitlement, remember_entitlement
@@ -318,9 +349,9 @@ def issue_website_activation_for_testing(database, test_authority, activation, *
             "nonce": str(uuid.uuid4()), "policy_profile": Profile.PROFESSOR_BETA.value,
             "issuer_label": "Quantum Studio Licence Manager",
         }
-        _record_signing_metadata_in_transaction(db, test_authority, operator_id)
-        envelope = test_authority.sign_test_fixture_only(payload)
-        event = append_event(db, "successful_test_issuance", operator_id,
+        _record_signing_metadata_in_transaction(db, authority, operator_id)
+        envelope = sign_verified_licence(authority, payload)
+        event = append_event(db, "successful_test_issuance" if authority.mode == "TEST" else "licence_issuance", operator_id,
                              [activation.activation_request_id, licence_id], {"source": "website_activation"})
         db.execute("INSERT INTO website_activation_licences VALUES(?,?,?,?,?,?,?)", (
             activation.activation_request_id, activation.application_id,

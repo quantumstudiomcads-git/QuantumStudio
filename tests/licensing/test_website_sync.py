@@ -119,7 +119,8 @@ def app():
 
 
 @pytest.fixture
-def database(tmp_path):
+def database(tmp_path, monkeypatch):
+    monkeypatch.setenv("BETA_ENVIRONMENT", "local")
     db = Database(tmp_path / "operator-data", DataProtector.for_testing(b"T" * 32))
     try:
         yield db

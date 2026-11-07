@@ -1,3 +1,4 @@
+import {isLocalDeployment} from '../../../../_lib/deployment.js';
 import {constantTimeEquals, getBearerToken} from '../../../../_lib/operator-auth.js';
 
 const MAX_BYTES = 4096;
@@ -32,7 +33,7 @@ async function readJson(request) {
 }
 
 export async function onRequestPost({request, env, params}) {
-  if (env?.BETA_ENVIRONMENT === 'production') return fail(403, 'test_only');
+  if (!isLocalDeployment(env)) return fail(403, 'test_only');
   if (!env?.BETA_DB) return fail(503, 'service_unavailable');
   const configured = typeof env.OPERATOR_LICENCE_SYNC_TOKEN === 'string' ? env.OPERATOR_LICENCE_SYNC_TOKEN.trim() : '';
   if (!configured) return fail(503, 'service_unavailable');

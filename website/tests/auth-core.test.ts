@@ -50,7 +50,7 @@ describe('auth core security and throttling', () => {
 
   it('requires a matching purpose for OTP verification', async () => {
     const env = {
-      BETA_ENVIRONMENT: 'development',
+      BETA_ENVIRONMENT: 'local',
       AUTH_OTP_PEPPER: 'pepper-1',
       AUTH_EMAIL_TEST_MODE: 'true',
       BETA_DB: {
@@ -96,7 +96,7 @@ describe('auth core security and throttling', () => {
   it('enforces cooldown and hourly limits for OTP issuance', async () => {
     const now = Date.now();
     const env = {
-      BETA_ENVIRONMENT: 'development',
+      BETA_ENVIRONMENT: 'local',
       AUTH_OTP_PEPPER: 'pepper-2',
       AUTH_EMAIL_TEST_MODE: 'true',
       BETA_DB: {
@@ -145,7 +145,7 @@ describe('auth core security and throttling', () => {
 
   it('locks a challenge after too many verification attempts', async () => {
     const env = {
-      BETA_ENVIRONMENT: 'development',
+      BETA_ENVIRONMENT: 'local',
       AUTH_OTP_PEPPER: 'pepper-3',
       AUTH_EMAIL_TEST_MODE: 'true',
       BETA_DB: {
@@ -180,7 +180,7 @@ describe('auth core security and throttling', () => {
   it('fails closed in production when the OTP pepper is missing', () => {
     const result = authRuntimeValidation({
       BETA_ENVIRONMENT: 'production',
-      BETA_ALLOWED_ORIGIN: 'https://example.com',
+      BETA_ALLOWED_ORIGIN: 'https://auth.unit-fixture.org',
       TURNSTILE_SECRET_KEY: 'secret',
       AUTH_EMAIL_TEST_MODE: 'false',
       BETA_TURNSTILE_TEST_MODE: 'false',
@@ -194,7 +194,7 @@ describe('auth core security and throttling', () => {
     const challengeStatements: Array<{sql: string; args: unknown[]}> = [];
     const sessionStatements: Array<{sql: string; args: unknown[]}> = [];
     const env = {
-      BETA_ENVIRONMENT: 'development',
+      BETA_ENVIRONMENT: 'local',
       AUTH_OTP_PEPPER: 'pepper-4',
       AUTH_EMAIL_TEST_MODE: 'true',
       BETA_DB: {
@@ -229,7 +229,7 @@ describe('auth core security and throttling', () => {
     turnstile.mockResolvedValue({ok: true});
 
     const unknownEnv = {
-      BETA_ENVIRONMENT: 'development',
+      BETA_ENVIRONMENT: 'local',
       AUTH_OTP_PEPPER: 'pepper-5',
       AUTH_EMAIL_TEST_MODE: 'false',
       BETA_DB: {

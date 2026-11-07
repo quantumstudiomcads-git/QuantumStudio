@@ -1,3 +1,4 @@
+import {validateDeployment, secureCookies} from './deployment.js';
 import {expectedOrigin, normalizeText, jsonResponse, errorResponse} from './beta-registration.js';
 import {sendOtpEmail} from './email-delivery.js';
 
@@ -21,26 +22,7 @@ export function normalizeEmail(value) {
 }
 
 export function authRuntimeValidation(env) {
-  const production = isProductionEnv(env);
-  const origin = expectedOrigin(env);
-
-  if (production && env.AUTH_EMAIL_TEST_MODE === 'true') {
-    return {ok: false, production, reason: 'auth-email-test-mode-disabled-in-production'};
-  }
-
-  if (production && env.BETA_TURNSTILE_TEST_MODE === 'true') {
-    return {ok: false, production, reason: 'turnstile-test-mode-disabled-in-production'};
-  }
-
-  if (production && !normalizeText(env.AUTH_OTP_PEPPER)) {
-    return {ok: false, production, reason: 'missing-auth-otp-pepper'};
-  }
-
-  if (production && (!origin || !normalizeText(env.TURNSTILE_SECRET_KEY))) {
-    return {ok: false, production, reason: 'missing-production-auth-config'};
-  }
-
-  return {ok: true, production, origin};
+  return validateDeployment(env);
 }
 
 export function buildGenericAuthMessage() {
@@ -111,14 +93,14 @@ export function buildAuthChallengePayload(raw) {
 }
 
 export function setSessionCookieHeader({sessionId, rawToken, maxAgeSeconds, env}) {
-  const secure = env.BETA_ENVIRONMENT === 'production';
+  const secure = secureCookies(env);
   const expires = new Date(Date.now() + maxAgeSeconds * 1000).toUTCString();
   const value = `${sessionId}.${rawToken}`;
   return `${AUTH_SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}; Expires=${expires}${secure ? '; Secure' : ''}`;
 }
 
 export function clearSessionCookieHeader(env) {
-  const secure = env.BETA_ENVIRONMENT === 'production';
+  const secure = secureCookies(env);
   return `${AUTH_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secure ? '; Secure' : ''}`;
 }
 

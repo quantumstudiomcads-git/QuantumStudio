@@ -77,6 +77,8 @@ function Start-QSWebsite {
     param([switch]$SkipBuild)
     Set-Location $script:QSWebsite
 
+    $env:BETA_ENVIRONMENT = 'local'
+    $env:BETA_ALLOWED_ORIGIN = $script:QSWebsiteUrl
     $env:CLOUDFLARE_LOCAL = 'true'
     $env:BETA_TURNSTILE_TEST_MODE = 'true'
     $env:TURNSTILE_SITE_KEY = 'local-public-test-value'
@@ -138,6 +140,7 @@ function Start-QSDesktop {
     param([string]$DataRoot = $script:QSDesktopRoot)
     Set-Location $script:QSRepo
 
+    $env:BETA_ENVIRONMENT = 'local'
     $env:QUANTUM_STUDIO_DATA_ROOT = $DataRoot
     # Desktop proof never requires operator credentials, even after an operator helper ran.
     foreach ($name in @('SYNC', 'STATUS_SYNC', 'ACTIVATION_REVOKE', 'LICENCE_SYNC', 'LICENCE_PUBLISH')) {

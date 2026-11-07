@@ -1,6 +1,19 @@
+import {validateDeployment, isLocalDeployment, validOrigin, placeholder} from './deployment.js';
 import {createSessionForUser, getUserByEmail, normalizeEmail, setSessionCookieHeader, sha256Hex} from './auth.js';
 
 export function googleRuntimeValidation(env) {
+  const deployment = validateDeployment(env);
+  if (!deployment.ok) return deployment;
+  if (!isLocalDeployment(env)) {
+    try {
+      const callback = new URL(env.GOOGLE_REDIRECT_URI);
+      if (!validOrigin(callback.origin, deployment.environment) || callback.origin !== deployment.origin
+          || callback.username || callback.password || callback.pathname !== '/api/auth/google/callback' || callback.search || callback.hash
+          || placeholder(env.GOOGLE_CLIENT_ID) || placeholder(env.GOOGLE_CLIENT_SECRET)) {
+        return {ok: false, reason: 'invalid-google-config'};
+      }
+    } catch {return {ok: false, reason: 'invalid-google-config'};}
+  }
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REDIRECT_URI) {
     return {ok: false, reason: 'missing-google-config'};
   }

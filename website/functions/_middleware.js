@@ -1,3 +1,4 @@
+import {validateDeployment} from './_lib/deployment.js';
 import {getValidatedSessionFromRequest, authRuntimeValidation} from './_lib/auth.js';
 
 const PROTECTED_PATHS = ['/beta-access', '/account', '/desktop-auth'];
@@ -20,7 +21,18 @@ function isPublicPath(pathname) {
 
 export async function onRequest(context) {
   const {request, env, next} = context;
+  const deployment = validateDeployment(env);
+  if (!deployment.ok) {
+    return new Response(JSON.stringify({error: {code: 'configuration_unavailable'}}), {
+      status: 503, headers: {'Content-Type': 'application/json', 'Cache-Control': 'no-store'},
+    });
+  }
   const url = new URL(request.url);
+  if (deployment.environment !== 'local' && url.protocol !== 'https:') {
+    return new Response(JSON.stringify({error: {code: 'https_required'}}), {
+      status: 403, headers: {'Content-Type': 'application/json', 'Cache-Control': 'no-store'},
+    });
+  }
   const pathname = url.pathname.replace(/\/+$/, '') || '/';
 
   if (request.method === 'OPTIONS') {

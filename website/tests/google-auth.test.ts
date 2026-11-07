@@ -6,6 +6,7 @@ import {requireGoogleAccountForIdentity, safeGoogleReturnTo} from '../functions/
 describe('google auth flow', () => {
   it('creates a secure Google auth URL with PKCE and a safe returnTo', async () => {
     const env = {
+      BETA_ENVIRONMENT: 'local',
       GOOGLE_CLIENT_ID: 'google-client-id',
       GOOGLE_CLIENT_SECRET: 'super-secret-value',
       GOOGLE_REDIRECT_URI: 'http://127.0.0.1:8788/api/auth/google/callback',
@@ -78,6 +79,7 @@ describe('google auth flow', () => {
     const identity = {identity_id: 'google-identity', user_id: 'existing-user'};
     const sessionStatements: Array<{sql: string; args: unknown[]}> = [];
     const env = {
+      BETA_ENVIRONMENT: 'local',
       GOOGLE_CLIENT_ID: 'google-client-id',
       GOOGLE_CLIENT_SECRET: 'super-secret-value',
       GOOGLE_REDIRECT_URI: 'https://example.com/api/auth/google/callback',

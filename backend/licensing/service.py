@@ -31,7 +31,9 @@ class LicensingService:
         test_mode: bool = False,
         status_connector=None,
         identity_service=None,
+        deployment_config=None,
     ):
+        self.deployment_config = deployment_config
         self.test_mode = bool(test_mode)
         self._install_lock = RLock()
         self._envelope_digest = None
@@ -51,17 +53,34 @@ class LicensingService:
     def production(cls) -> "LicensingService":
         """Create a fail-closed production service with no implicit developer grant.
 
-        Trusted production public keys will be injected by the future release
-        configuration.  An empty key set is intentional until that authority
-        exists; it cannot unlock paid capabilities.
+        Load only explicitly configured, environment-bound public trust.
+        Invalid configuration creates an unavailable service before identity
+        creation or network access; it never selects local TEST trust.
         """
+        from .configuration import ConfigurationError, desktop_configuration
+        try:
+            config = desktop_configuration()
+        except ConfigurationError as error:
+            service = cls()
+            service.error_code = "configuration_invalid"
+            service.configuration_error = error.code
+            return service
         store = LeaseStore()
         try:
             identity = DeviceIdentityService(production_secure_store(store.paths)).load_or_create()
         except SecureStorageUnavailable as error:
             LOGGER.warning("Device identity unavailable; paid capabilities remain unavailable: %s", error)
             identity = None
-        return cls(trusted_public_keys={}, device_identity=identity, lease_store=store)
+        return cls(trusted_public_keys=config.trusted_public_keys, device_identity=identity,
+                   lease_store=store, deployment_config=config)
+
+    def connection_options(self):
+        """One origin/HTTP policy for browser activation, delivery and online status."""
+        if self.deployment_config is not None:
+            return self.deployment_config.api_origin, self.deployment_config.allow_local_http
+        from .configuration import connection_options
+        _, origin, allow_http = connection_options()
+        return origin, allow_http
 
     @classmethod
     def for_testing(cls, *, trusted_public_keys: Mapping[str, bytes], device_identity: DeviceIdentity, lease: Mapping | None = None, now: Callable[[], int] | None = None) -> "LicensingService":
@@ -101,6 +120,9 @@ class LicensingService:
         from .local_test_trust import load_test_trust
         if not self.test_mode or os.environ.get("QS_TEST_LICENSING") != "1":
             raise LeaseValidationError("Explicit local TEST licensing is not enabled.")
+        from .configuration import Environment, deployment_environment
+        if deployment_environment() is not Environment.LOCAL:
+            raise LeaseValidationError("TEST trust is permitted only in local deployment mode.")
         keys = load_test_trust(path)
         with self._install_lock:
             cached = self.lease_store.load_lease() if self.lease_store else None

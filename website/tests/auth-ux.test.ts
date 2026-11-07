@@ -173,7 +173,7 @@ describe('protected authentication routes', () => {
   it.each(['/beta-access', '/account'])('%s redirects unauthenticated requests to login with returnTo', async (path) => {
     const response = await onRequest({
       request: new Request(`https://quantumstudio.test${path}`),
-      env: {BETA_DB: {}},
+      env: {BETA_ENVIRONMENT: 'local', BETA_DB: {}},
       next: async () => new Response('protected'),
     } as never);
 

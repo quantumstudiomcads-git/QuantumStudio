@@ -39,7 +39,8 @@ from frontend.app.account_dialog import AccountLicensingDialog
 
 
 @pytest.fixture
-def bundle(tmp_path):
+def bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("BETA_ENVIRONMENT", "local")
     identity_service = DeviceIdentityService(InMemorySecureKeyStore())
     device = identity_service.load_or_create()
     db = Database(tmp_path / "operator", DataProtector.for_testing(b'T'*32))

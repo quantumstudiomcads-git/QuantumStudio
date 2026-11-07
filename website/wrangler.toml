@@ -19,4 +19,4 @@ BETA_TERMS_VERSION = "draft-0.1"
 BETA_ENVIRONMENT = "production"
 BETA_TURNSTILE_TEST_MODE = "false"
 AUTH_EMAIL_TEST_MODE = "false"
-AUTH_OTP_PEPPER = "replace-with-strong-server-secret"
+# AUTH_OTP_PEPPER and operator/provider credentials are encrypted secret bindings.

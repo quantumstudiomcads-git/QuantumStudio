@@ -1,3 +1,4 @@
+import {validateDeployment} from './deployment.js';
 import {sha256Hex, buildJsonResponse} from './auth.js';
 import {expectedOrigin} from './beta-registration.js';
 import {canonicalJson, readDeviceRequest as read, decodeDeviceProof as decode,
@@ -13,6 +14,7 @@ function gate(request, env) {
   const url = new URL(request.url);
   if (url.protocol !== 'https:' && !( ['local','test'].includes(env.BETA_ENVIRONMENT)
       && ['localhost','127.0.0.1','[::1]'].includes(url.hostname))) return fail(403,'https_required');
+  if (!validateDeployment(env).ok) return fail(503,'configuration_unavailable');
   const origin = request.headers.get('Origin');
   return origin && origin !== expectedOrigin(env) ? fail(403,'origin_denied') : null;
 }

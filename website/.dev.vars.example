@@ -1,4 +1,6 @@
-# Copy to .dev.vars for local Wrangler Pages development. Never commit .dev.vars.
+# LOCAL ONLY. Copy to .dev.vars for Wrangler Pages development; never commit it.
+# This file does not configure staging/production or the Docusaurus build process.
+# See docs/beta/PRODUCTION_CONFIGURATION.md and website/config/*.env.example.
 BETA_ENVIRONMENT=local
 BETA_ALLOWED_ORIGIN=http://127.0.0.1:8788
 BETA_PRIVACY_VERSION=draft-0.1

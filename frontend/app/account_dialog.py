@@ -13,6 +13,7 @@ from backend.licensing.licence_delivery import LicenceDeliveryService
 from backend.licensing.connectors.licence_delivery import WebsiteLicenceDeliveryConnector, LicenceDeliveryError
 from backend.licensing.device_identity import DeviceIdentityService, production_secure_store, SecureStorageUnavailable
 from backend.licensing.verifier import LeaseValidationError
+from backend.licensing.configuration import ConfigurationError
 from backend.licensing.lease_store import LeaseStoreError
 from backend.licensing.connectors.desktop_auth import DesktopAuthError, WebsiteDesktopActivationConnector
 
@@ -197,13 +198,15 @@ class AccountLicensingDialog(QDialog):
         if self._worker is not None:
             return
         try:
-            connector = self._connector or WebsiteDesktopActivationConnector(
-                os.environ.get("QS_WEBSITE_URL", ""),
-                allow_local_http=os.environ.get("QS_DESKTOP_AUTH_ALLOW_LOCAL_HTTP") == "1")
+            if self._connector is not None:
+                connector = self._connector
+            else:
+                origin, allow_http = self._service.connection_options() if self._service else ("", False)
+                connector = WebsiteDesktopActivationConnector(origin, allow_local_http=allow_http)
             device = getattr(self._service, "device_identity", None)
             if device is None:
                 raise DesktopAuthError("The protected device identity is unavailable. Sign-in requires the existing Windows DPAPI identity.")
-        except DesktopAuthError as error:
+        except (DesktopAuthError, ConfigurationError) as error:
             self.status.setText(str(error))
             return
         self._browser_error = False
@@ -280,6 +283,7 @@ class AccountLicensingDialog(QDialog):
         status = {"active": "Active", "auth_required": "Auth Required", "expired": "Expired",
                   "invalid": "Invalid licence", "licence_cache_invalid": "Invalid licence",
                   "test_trust_invalid": "Invalid TEST trust configuration",
+                  "configuration_invalid": "Licensing configuration unavailable",
                   "online_validation_required": "Online validation required", "invalid_licence": "Invalid licence",
                   "invalid_device": "Invalid device / device mismatch", "revoked": "Revoked"}.get(raw_status, str(raw_status).replace("_", " ").title())
         expiry = summary.get("expires_at")
@@ -313,13 +317,13 @@ class AccountLicensingDialog(QDialog):
             else:
                 if self._service is None or self._service.lease_store is None:
                     raise LicenceDeliveryError("Persistent licensing is unavailable.")
-                connector = WebsiteLicenceDeliveryConnector(os.environ.get("QS_WEBSITE_URL", ""),
-                    allow_local_http=os.environ.get("QS_DESKTOP_AUTH_ALLOW_LOCAL_HTTP") == "1")
+                origin, allow_http = self._service.connection_options()
+                connector = WebsiteLicenceDeliveryConnector(origin, allow_local_http=allow_http)
                 identity_service = DeviceIdentityService(production_secure_store(self._service.lease_store.paths))
                 trust_loader = (lambda: self._service.reload_local_test_trust(
                     os.environ.get("QS_TEST_LICENCE_TRUST_FILE", ""))) if self._service.test_mode else None
                 delivery = LicenceDeliveryService(self._service, connector, identity_service, trust_loader=trust_loader)
-        except (DesktopAuthError, LicenceDeliveryError, SecureStorageUnavailable) as error:
+        except (ConfigurationError, DesktopAuthError, LicenceDeliveryError, SecureStorageUnavailable) as error:
             self.status.setText("Licence check unavailable. " + str(error))
             return
         worker = DeliveryWorker(delivery, self._activation_id)

@@ -1,23 +1,19 @@
+import {websiteBuildConfiguration} from './functions/_lib/deployment.js';
 import {themes as prismThemes} from 'prism-react-renderer';
 import rehypeKatex from 'rehype-katex';
 import remarkMath from 'remark-math';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
-const isCloudflareLocal = process.env.CLOUDFLARE_LOCAL === 'true';
+const deployment = websiteBuildConfiguration(process.env);
 
 const config: Config = {
   title: 'Quantum Studio',
   tagline: 'Atomistic and electronic-structure research',
   favicon: 'img/brand/quantum-studio-v0.1.svg',
 
-  url: isCloudflareLocal
-    ? 'http://127.0.0.1:8788'
-    : 'https://kalapatapubhargava.github.io',
-
-  baseUrl: isCloudflareLocal
-    ? '/'
-    : '/QuantumStudio-Website/',
+  url: deployment.url,
+  baseUrl: deployment.baseUrl,
 
   organizationName: 'kalapatapubhargava',
   projectName: 'QuantumStudio-Website',
@@ -27,8 +23,8 @@ const config: Config = {
   customFields: {
     // The site key is public by design. Secrets are available only to Pages
     // Functions through Cloudflare bindings and must never appear here.
-    turnstileSiteKey: process.env.TURNSTILE_SITE_KEY ?? '',
-    turnstileTestMode: process.env.BETA_TURNSTILE_TEST_MODE === 'true',
+    turnstileSiteKey: deployment.turnstileSiteKey,
+    turnstileTestMode: deployment.turnstileTestMode,
   },
 
   markdown: {

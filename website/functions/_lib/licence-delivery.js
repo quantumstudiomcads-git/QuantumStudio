@@ -1,3 +1,4 @@
+import {isLocalDeployment} from './deployment.js';
 import {sha256Hex, buildJsonResponse} from './auth.js';
 import {constantTimeEquals, getBearerToken} from './operator-auth.js';
 import {expectedOrigin} from './beta-registration.js';
@@ -76,7 +77,7 @@ function validEnvelope(e) {
 }
 function gate(request, env) {
   if (env?.BETA_ENVIRONMENT === 'production' && new URL(request.url).protocol !== 'https:') return fail(403,'https_required');
-  if (!['local','test'].includes(env?.BETA_ENVIRONMENT)) return fail(403,'test_only');
+  if (!isLocalDeployment(env)) return fail(403,'test_only');
   if (!env.BETA_DB) return fail(503,'service_unavailable');
   const origin = request.headers.get('Origin');
   if (origin && origin !== expectedOrigin(env)) return fail(403,'origin_denied');

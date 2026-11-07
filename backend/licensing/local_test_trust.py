@@ -40,14 +40,20 @@ def load_test_trust(path):
 
 def configured_licensing_service():
     """Double opt-in at the application composition root, never a fallback."""
-    if os.environ.get("QS_TEST_LICENSING") != "1":
+    from .configuration import ConfigurationError, Environment, deployment_environment, desktop_configuration
+    try:
+        environment = deployment_environment()
+    except ConfigurationError:
+        return LicensingService.production()
+    if environment is not Environment.LOCAL or os.environ.get("QS_TEST_LICENSING") != "1":
         return LicensingService.production()
     try:
+        config = desktop_configuration()
         keys = load_test_trust(os.environ.get("QS_TEST_LICENCE_TRUST_FILE", ""))
         store = LeaseStore()
         identity = DeviceIdentityService(production_secure_store(store.paths)).load_or_create()
-        return LicensingService(trusted_public_keys=keys, device_identity=identity, lease_store=store, test_mode=True)
-    except (LeaseValidationError, RuntimeError, OSError):
+        return LicensingService(trusted_public_keys=keys, device_identity=identity, lease_store=store, test_mode=True, deployment_config=config)
+    except (ConfigurationError, LeaseValidationError, RuntimeError, OSError):
         service = LicensingService.production()
         service.test_mode = True
         service.error_code = "test_trust_invalid"

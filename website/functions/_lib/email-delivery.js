@@ -1,5 +1,7 @@
+import {validateDeployment, isLocalDeployment} from './deployment.js';
 export async function sendOtpEmail({email, otp, purpose, expiryMinutes, env}) {
-  const localDevMode = env.AUTH_EMAIL_TEST_MODE === 'true' && env.BETA_ENVIRONMENT !== 'production';
+  if (!validateDeployment(env).ok) return {ok: false, provider: null, reason: 'Deployment configuration unavailable.'};
+  const localDevMode = env.AUTH_EMAIL_TEST_MODE === 'true' && isLocalDeployment(env);
 
   if (localDevMode) {
     const payload = {to: email, otp, purpose, expiresInMinutes: expiryMinutes, provider: 'local-dev'};
@@ -7,7 +9,7 @@ export async function sendOtpEmail({email, otp, purpose, expiryMinutes, env}) {
     return {ok: true, provider: 'local-dev', devOtp: otp};
   }
 
-  if (env.BETA_ENVIRONMENT === 'production') {
+  if (!isLocalDeployment(env)) {
     return {ok: false, provider: null, reason: 'Production email provider not configured.'};
   }
 

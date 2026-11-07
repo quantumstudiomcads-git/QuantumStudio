@@ -17,6 +17,19 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.test_data_root and not args.test_mode:
         parser.error("--test-data-root requires --test-mode")
+    from backend.licensing.configuration import (
+        ConfigurationError, Environment, deployment_environment, validate_switches, validate_origin,
+    )
+    import os
+    try:
+        environment = deployment_environment()
+        validate_switches(os.environ, environment)
+        if environment is not Environment.LOCAL:
+            if args.test_mode:
+                raise ConfigurationError("test-setting-not-allowed")
+            validate_origin(os.environ.get("QS_OPERATOR_WEBSITE_URL", ""), environment)
+    except ConfigurationError as error:
+        parser.error(str(error))
     app = QApplication.instance() or QApplication(sys.argv[:1])
     try:
         window = LicenceManagerWindow(test_mode=args.test_mode, data_root_override=args.test_data_root)

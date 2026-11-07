@@ -90,12 +90,11 @@ class OnlineAuthorization:
         try:
             connector, identity = self.connector, self.identity_service
             if connector is None:
-                import os
-                if not os.environ.get('QS_WEBSITE_URL'):
+                origin, allow_http = service.connection_options()
+                if not origin:
                     self.status = 'online_validation_required'
                     return self.status
-                connector = WebsiteDeviceStatusConnector(os.environ.get('QS_WEBSITE_URL',''),
-                    allow_local_http=os.environ.get('QS_DESKTOP_AUTH_ALLOW_LOCAL_HTTP') == '1')
+                connector = WebsiteDeviceStatusConnector(origin, allow_local_http=allow_http)
             if identity is None:
                 if service.lease_store is None: raise DeviceStatusError('Persistent device identity is unavailable.')
                 identity = DeviceIdentityService(production_secure_store(service.lease_store.paths))

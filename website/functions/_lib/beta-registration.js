@@ -1,3 +1,4 @@
+import {validateDeployment, isLocalDeployment} from './deployment.js';
 const MAX_BODY_BYTES = 16_384;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const OPERATING_SYSTEMS = new Set(['Windows', 'Linux', 'Both', 'Other']);
@@ -22,11 +23,13 @@ export function expectedOrigin(env) {
 }
 
 export function validateRuntimeConfig(env) {
-  const production = env.BETA_ENVIRONMENT === 'production';
+  const result = validateDeployment(env);
+  if (!result.ok) return result;
   const origin = expectedOrigin(env);
-  if (!origin || !normalizeText(env.BETA_PRIVACY_VERSION) || !normalizeText(env.BETA_TERMS_VERSION) || !normalizeText(env.BETA_IDENTITY_PEPPER)) return {ok: false, production};
-  if (production && (!normalizeText(env.TURNSTILE_SECRET_KEY) || env.BETA_TURNSTILE_TEST_MODE === 'true')) return {ok: false, production};
-  return {ok: true, production, origin};
+  if (!origin || !normalizeText(env.BETA_PRIVACY_VERSION) || !normalizeText(env.BETA_TERMS_VERSION) || !normalizeText(env.BETA_IDENTITY_PEPPER)) {
+    return {ok: false, production: result.production};
+  }
+  return {...result, origin};
 }
 
 export function validateApplication(raw) {
@@ -57,7 +60,8 @@ export async function emailLookupHash(normalizedEmail, pepper) {
 
 export async function verifyTurnstile(token, env, request, fetchImpl = fetch, expectedAction = 'beta_registration') {
   if (!token || token.length > FIELD_LIMITS.turnstileToken) return {ok: false, reason: 'missing-or-invalid-token'};
-  if (env.BETA_TURNSTILE_TEST_MODE === 'true' && env.BETA_ENVIRONMENT !== 'production') {
+  if (!validateDeployment(env).ok) return {ok: false, reason: 'deployment-unavailable'};
+  if (env.BETA_TURNSTILE_TEST_MODE === 'true' && isLocalDeployment(env)) {
     if (token === 'test-pass') return {ok: true};
     if (token === 'test-hostname-mismatch') return {ok: false, reason: 'hostname-mismatch'};
     if (token === 'test-action-mismatch') return {ok: false, reason: 'action-mismatch'};

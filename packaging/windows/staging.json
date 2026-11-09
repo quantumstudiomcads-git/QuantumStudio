@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "environment": "staging",
+  "website_origin": "https://staging.quantumstudio-mcads.com",
+  "licence_trust": {
+    "schema_version": 1,
+    "environment": "staging",
+    "domain": "licence",
+    "algorithm": "Ed25519",
+    "keys": {
+      "lic-staging-80b18fccdeb046798d2d85964316d200": "wbXEh-YYK_5MRmp_BG1wqo3OKW5Cq0LLROByidvsPUI"
+    }
+  }
+}

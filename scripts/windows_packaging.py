@@ -36,7 +36,7 @@ _PRIVATE_KEY_MARKERS = (
     b"-----BEGIN EC PRIVATE KEY-----", b"-----BEGIN OPENSSH PRIVATE KEY-----",
     b"-----BEGIN RSA PRIVATE KEY-----", b"-----BEGIN DSA PRIVATE KEY-----",
 )
-FORBIDDEN_PARTS = {"tests", ".git", ".venv", "venv", "venvs", "build", "__pycache__", "operator_tools", "licence_manager", "applicant_exports", "operator_data", "engine-pack", "engine_pack", "runtime-image", "runtime_image"}
+FORBIDDEN_PARTS = {"tests", ".git", ".venv", "venv", "venvs", "build", "__pycache__", "operator_tools", "website", "cloudflare", "licence_manager", "applicant_exports", "operator_data", "engine-pack", "engine_pack", "runtime-image", "runtime_image"}
 FORBIDDEN_NAMES = {"pw.x", "ph.x", "q2r.x", "matdyn.x", "dynmat.x", "bands.x", "dos.x", "projwfc.x", "pp.x", "epsilon.x", "pw2wannier90.x", "epw.x", "wannier90.x", "bader", "engine-pack.json", "run_licence_manager.py", "licence.json", "receipt.json", "applicants.json", "audit.json", ".env", ".dev.vars", "id_rsa", "id_ed25519", "licence_manager_architecture.md", "licence_manager_operations.md", "licence_formats.md"}
 FORBIDDEN_SUFFIXES = {".vhdx", ".sqlite", ".sqlite3", ".db", ".dpapi", ".p12", ".pfx", ".dev.vars", ".env", ".pem", ".key", ".secret", ".token"}
 # These are the minimum application-level runtime artifacts.  An executable
@@ -66,14 +66,20 @@ class WindowsBuildPlan:
     icon_svg: Path
     icon_ico: Path
     nuitka_argv: tuple[str, ...]
+    desktop_profile: dict | None = None
 
     def manifest(self, *, python_version: str, pyside6_version: str, nuitka_version: str, timestamp: str | None = None) -> dict:
-        return {"schema_version": 1, "product": PRODUCT_NAME, "version": self.version, "channel": self.channel,
+        result = {"schema_version": 1, "product": PRODUCT_NAME, "version": self.version, "channel": self.channel,
                 "platform": "windows", "architecture": self.architecture, "commit": self.commit,
                 "dirty": self.dirty, "build_timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
                 "python": python_version, "pyside6": pyside6_version, "nuitka": nuitka_version,
                 "packaging_format": "nuitka-standalone", "entry_executable": EXECUTABLE_NAME,
                 "resource_manifest": "assets/quantum-studio-v0.1.svg"}
+        if self.desktop_profile is not None:
+            from backend.runtime.desktop_profile import profile_bytes, PROFILE_FILE
+            result['desktop_profile']={'environment':self.desktop_profile['environment'],'path':PROFILE_FILE,
+                'sha256':hashlib.sha256(profile_bytes(self.desktop_profile)).hexdigest(),'updates':'disabled'}
+        return result
 
 
 def normalize_architecture(machine: str | None = None) -> str:
@@ -83,7 +89,7 @@ def normalize_architecture(machine: str | None = None) -> str:
 
 
 def build_plan(*, repo: str | Path, output: str | Path, channel: str, version: str, commit: str, dirty: bool,
-               python_executable: str, architecture: str = "x86_64") -> WindowsBuildPlan:
+               python_executable: str, architecture: str = "x86_64", desktop_profile: dict | None = None) -> WindowsBuildPlan:
     repo, output = Path(repo).resolve(), Path(output).resolve()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", channel): raise WindowsBuildError("Build channel is invalid.")
     if architecture != "x86_64": raise WindowsBuildError("Windows build architecture must be x86_64.")
@@ -99,7 +105,12 @@ def build_plan(*, repo: str | Path, output: str | Path, channel: str, version: s
             "--include-package=runtime_agent",
             "--include-module=scipy._external.array_api_compat.numpy.fft",
             "--nofollow-import-to=tests", "--nofollow-import-to=pytest", str(entry))
-    return WindowsBuildPlan(repo, output, channel, version, commit, dirty, architecture, entry, icon, ico, argv)
+    if desktop_profile is not None:
+        from backend.runtime.desktop_profile import validate_public_profile, PROFILE_FILE, PIN_MODULE
+        validate_public_profile(desktop_profile)
+        argv=argv[:-1]+(f"--include-data-files={output / 'build-assets' / PROFILE_FILE}={PROFILE_FILE}",
+            f"--include-module={PIN_MODULE}","--nofollow-import-to=operator_tools","--nofollow-import-to=cloudflare",argv[-1])
+    return WindowsBuildPlan(repo, output, channel, version, commit, dirty, architecture, entry, icon, ico, argv, desktop_profile)
 
 
 def safe_clean_output(plan: WindowsBuildPlan) -> None:
@@ -357,6 +368,16 @@ def audit_sensitive_payload_content(path: str | Path) -> tuple[str, ...]:
     with path.open("rb") as stream:
         probe = stream.read(512)
     findings = [label for signature, label in _SQLITE_SIGNATURES if probe.startswith(signature)]
+    # Server bindings must never appear in desktop resources or compiled payloads.
+    from scripts.windows_profiles import SECRET_BINDINGS
+    markers=tuple(name.encode('ascii') for name in SECRET_BINDINGS)
+    with path.open('rb') as stream:
+        tail=b''
+        while block:=stream.read(1024*1024):
+            data=tail+block
+            if any(marker in data for marker in markers):findings.append('server-credential-binding');break
+            tail=data[-256:]
+
     # These exact schema/purpose markers remain detectable even if a structured
     # file is malformed or contains duplicate keys and therefore cannot parse.
     if _stream_contains_marker(path, (b"quantum-studio-protected-key", b"quantum-studio-key-material",

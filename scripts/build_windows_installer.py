@@ -16,17 +16,26 @@ from scripts.windows_packaging import (EXECUTABLE_NAME, PACKAGE_MARKER,
 TECHNOLOGY="Inno Setup 6"
 def installer_script(*, app_bundle:Path, output:Path, version:str)->str:
     _audit, verified = _validate_installer_bundle(app_bundle, expected_version=version)
-    return _installer_script_from_inventory(app_bundle, output, version, verified["inventory"]["files"])
+    return _installer_script_from_inventory(app_bundle, output, version, verified["inventory"]["files"],
+        profile=verified.get("desktop_environment"))
 
 def _inno_literal(value: str) -> str:
     if any(char in value for char in ('"', "{", "}", "\r", "\n")) or any(ord(char) < 32 for char in value):
         raise ValueError("INSTALLER_PATH_INVALID: path contains a character that cannot be represented safely in Inno Setup.")
     return value
 
-def _installer_script_from_inventory(app_bundle:Path, output:Path, version:str, records:list[dict])->str:
+def _installer_script_from_inventory(app_bundle:Path, output:Path, version:str, records:list[dict], profile=None)->str:
     app_path, output_path = _inno_path(app_bundle), _inno_path(output)
     if not re.fullmatch(r"\d+\.\d+\.\d+", version): raise ValueError("INSTALLER_VERSION_INVALID: version syntax is invalid.")
     rows=["[Setup]","AppId={{C90FC580-47D1-4A00-9C12-8A4502DEB601}","AppName=Quantum Studio",f"AppVersion={version}",f"AppVerName=Quantum Studio {version}","VersionInfoVersion=0.2.0","VersionInfoProductVersion=0.2.0","VersionInfoProductName=Quantum Studio","VersionInfoDescription=Quantum Studio Installer","AppPublisher=Quantum Studio","DefaultDirName={autopf}\\QuantumStudio","DefaultGroupName=Quantum Studio",f"OutputDir={output_path}",f"OutputBaseFilename=QuantumStudio-{version}-Setup","PrivilegesRequired=admin","ArchitecturesInstallIn64BitMode=x64compatible","DisableProgramGroupPage=yes","CloseApplications=yes","RestartApplications=yes","UninstallDisplayName=Quantum Studio","","[Files]"]
+    if profile in {'staging','local'}:
+        label='Staging' if profile=='staging' else 'Local'
+        guid='C90FC580-47D1-4A00-9C12-8A4502DEB602' if profile=='staging' else 'C90FC580-47D1-4A00-9C12-8A4502DEB603'
+        rows=[row.replace('C90FC580-47D1-4A00-9C12-8A4502DEB601',guid)
+            .replace('DefaultDirName={autopf}\\QuantumStudio','DefaultDirName={autopf}\\QuantumStudio-'+label)
+            .replace('AppName=Quantum Studio','AppName=Quantum Studio '+label)
+            .replace('DefaultGroupName=Quantum Studio','DefaultGroupName=Quantum Studio '+label)
+            .replace('OutputBaseFilename=QuantumStudio-'+version+'-Setup','OutputBaseFilename=QuantumStudio-'+version+'-'+profile+'-Setup') for row in rows]
     seen=set()
     for record in records:
         relative=record["path"]
@@ -40,7 +49,13 @@ def _installer_script_from_inventory(app_bundle:Path, output:Path, version:str, 
         destination="{app}"+("\\"+"\\".join(_inno_literal(part) for part in parts[:-1]) if len(parts)>1 else "")
         rows.append(f'Source: "{source}"; DestDir: "{destination}"; Flags: ignoreversion')
     rows += ["","[Icons]","Name: \"{group}\\Quantum Studio\"; Filename: \"{app}\\QuantumStudio.exe\"","Name: \"{autodesktop}\\Quantum Studio\"; Filename: \"{app}\\QuantumStudio.exe\"; Tasks: desktopicon","","[Tasks]","Name: \"desktopicon\"; Description: \"Create a desktop shortcut\"; GroupDescription: \"Additional shortcuts:\"; Flags: unchecked","","[Run]","; Runtime provisioning remains the explicit first-party installer-helper flow."]
-    return "\n".join(rows)+"\n"
+    text="\n".join(rows)+"\n"
+    if profile in {'staging','local'}:
+        label='Staging' if profile=='staging' else 'Local'
+        text=text.replace('{group}\\Quantum Studio"','{group}\\Quantum Studio '+label+'"')
+        text=text.replace('{autodesktop}\\Quantum Studio"','{autodesktop}\\Quantum Studio '+label+'"')
+        text=text.replace('UninstallDisplayName=Quantum Studio','UninstallDisplayName=Quantum Studio '+label)
+    return text
 
 def _inno_path(path: Path) -> str:
     value = Path(path).absolute().as_posix()
@@ -64,7 +79,7 @@ def _validate_installer_bundle(app_bundle: Path, *, expected_version: str | None
         raise ValueError("INSTALLER_METADATA_INVALID: metadata cannot be parsed.") from error
     marker_keys = {"schema_version", "product", "version", "channel", "platform", "architecture", "commit", "dirty", "build_timestamp", "python", "pyside6", "nuitka", "packaging_format", "entry_executable", "resource_manifest"}
     input_keys = {"schema_version", "product", "version", "channel", "platform", "architecture", "gui_bundle", "runtime_image", "runtime_agent", "engine_pack", "licenses_notices", "build_manifest"}
-    if (not isinstance(marker, dict) or set(marker) != marker_keys or type(marker.get("schema_version")) is not int or marker.get("schema_version") != 1 or marker.get("product") != "Quantum Studio"
+    if (not isinstance(marker, dict) or set(marker) != marker_keys | ({"desktop_profile"} if "desktop_profile" in marker else set()) or type(marker.get("schema_version")) is not int or marker.get("schema_version") != 1 or marker.get("product") != "Quantum Studio"
         or marker.get("platform") != "windows" or marker.get("architecture") != "x86_64"
         or marker.get("entry_executable") != EXECUTABLE_NAME or marker.get("resource_manifest") != "assets/quantum-studio-v0.1.svg"
         or not re.fullmatch(r"[0-9a-f]{7,40}(?:-DIRTY_BUILD)?", str(marker.get("commit", "")))
@@ -83,7 +98,7 @@ def _validate_installer_bundle(app_bundle: Path, *, expected_version: str | None
     if (set(inputs) != input_keys or type(inputs.get("schema_version")) is not int or inputs.get("schema_version") != 1 or inputs.get("product") != "Quantum Studio"
         or inputs.get("platform") != "windows" or inputs.get("architecture") != "x86_64"
         or inputs.get("version") != marker.get("version") or inputs.get("channel") != marker.get("channel")
-        or inputs.get("channel") not in {"beta", "release", "development", "dev"}
+        or inputs.get("channel") not in {"beta", "stable", "release", "development", "dev"}
         or inputs.get("version") != marker.get("version") or (expected_version is not None and marker.get("version") != expected_version)
         or not isinstance(gui, dict) or gui.get("entry") != EXECUTABLE_NAME or gui.get("path") != "QuantumStudio.dist"
         or set(gui) != {"path", "entry"} or not isinstance(gui.get("path"), str)
@@ -100,6 +115,15 @@ def _validate_installer_bundle(app_bundle: Path, *, expected_version: str | None
         or not isinstance(agent, dict) or agent != {"protocol_schema": 1, "status": "included-in-runtime-image"}
         or not isinstance(notices, dict) or notices != {"status": "PENDING_W7", "inputs": []}):
         raise ValueError("INSTALLER_METADATA_INVALID: this installer accepts only the GUI_ONLY application bundle.")
+    if 'desktop_profile' in marker:
+        try:
+            from backend.runtime.desktop_profile import read_profile,PROFILE_FILE
+            profile=marker['desktop_profile']
+            value,raw=read_profile(root/PROFILE_FILE)
+            if (not isinstance(profile,dict) or set(profile)!={'environment','path','sha256','updates'}
+                    or profile['path']!=PROFILE_FILE or profile['environment']!=value['environment']
+                    or profile['sha256']!=hashlib.sha256(raw).hexdigest() or profile['updates']!='disabled'):raise ValueError()
+        except Exception:raise ValueError('INSTALLER_DESKTOP_PROFILE_INVALID') from None
     try:
         verified = verify_payload_inventory(root, marker, inputs)
     except (OSError, WindowsBuildError, KeyError, TypeError, ValueError) as error:
@@ -115,6 +139,7 @@ def _validate_installer_bundle(app_bundle: Path, *, expected_version: str | None
                 raise ValueError("PAYLOAD_CHANGED_DURING_VERIFICATION: " + relative)
     except (OSError, WindowsBuildError) as error:
         raise ValueError("PAYLOAD_CHANGED_DURING_VERIFICATION") from error
+    verified["desktop_environment"]=marker.get("desktop_profile",{}).get("environment")
     return audit, verified
 
 def validate_installer_bundle(app_bundle: Path, *, expected_version: str | None = None) -> dict:
@@ -364,15 +389,17 @@ def main(argv=None)->int:
             raise ValueError("INSTALLER_OUTPUT_INVALID: staging output cannot be the input bundle or a child of it.")
         output.mkdir(parents=True,exist_ok=True); output=_output_is_safe(output)
         source=output/"QuantumStudio.iss"; artifact=output/f"QuantumStudio-{VERSION}-Setup.exe"
-        if _entry_exists(source) or _entry_exists(artifact): raise ValueError("INSTALLER_OUTPUT_CONFLICT: refusing to overwrite an existing installer artifact.")
         _original_audit, original_verified=_validate_installer_bundle(original,expected_version=VERSION)
+        deployment=original_verified.get('desktop_environment')
+        if deployment in {'staging','local'}:artifact=output/f"QuantumStudio-{VERSION}-{deployment}-Setup.exe"
+        if _entry_exists(source) or _entry_exists(artifact): raise ValueError("INSTALLER_OUTPUT_CONFLICT: refusing to overwrite an existing installer artifact.")
         stage,stage_token,stage_identity=_make_stage(output)
         snapshot=stage/"payload"; snapshot.mkdir()
         _copy_payload_snapshot(original,snapshot,original_verified)
         snapshot_audit,snapshot_verified=_validate_installer_bundle(snapshot,expected_version=VERSION)
         if not snapshot_audit.get("valid"): raise ValueError("INSTALLER_PACKAGE_AUDIT_FAILED: snapshot is invalid.")
         compile_output=stage/"compiled"; compile_output.mkdir()
-        script_text=_installer_script_from_inventory(snapshot,compile_output,VERSION,snapshot_verified["inventory"]["files"])
+        script_text=_installer_script_from_inventory(snapshot,compile_output,VERSION,snapshot_verified["inventory"]["files"],profile=snapshot_verified.get("desktop_environment"))
         iss=stage/"QuantumStudio.iss"
         script_bytes=script_text.encode("utf-8-sig")
         fd=os.open(iss,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_BINARY",0),0o600)

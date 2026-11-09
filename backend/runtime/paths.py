@@ -46,6 +46,16 @@ class RuntimePaths:
             path.mkdir(parents=True, exist_ok=True)
 
 
+def _application_namespace():
+    if getattr(sys,'frozen',False) or '__compiled__' in globals():
+        try:
+            import _quantumstudio_packaged_profile as pin
+            if pin.ENVIRONMENT=='staging':return 'QuantumStudio-Staging'
+            if pin.ENVIRONMENT=='local':return 'QuantumStudio-Local'
+        except ImportError:pass
+    return 'QuantumStudio'
+
+
 def runtime_paths(*, environ=None, home=None, platform_name=None) -> RuntimePaths:
     environ = dict(os.environ if environ is None else environ)
     home = Path(home or Path.home()).expanduser()
@@ -62,9 +72,10 @@ def runtime_paths(*, environ=None, home=None, platform_name=None) -> RuntimePath
         config_base = Path(environ.get("XDG_CONFIG_HOME", home / ".config"))
         data_base = Path(environ.get("XDG_DATA_HOME", home / ".local" / "share"))
         cache_base = Path(environ.get("XDG_CACHE_HOME", home / ".cache"))
-    app_config = _root("QUANTUM_STUDIO_CONFIG_ROOT", "", config_base / "QuantumStudio", environ)
-    app_data = _root("QUANTUM_STUDIO_DATA_ROOT", "", data_base / "QuantumStudio", environ)
-    default_cache = (data_base / "QuantumStudio" / "cache") if platform_name.startswith("win") else (cache_base / "QuantumStudio")
+    namespace = _application_namespace()
+    app_config = _root("QUANTUM_STUDIO_CONFIG_ROOT", "", config_base / namespace, environ)
+    app_data = _root("QUANTUM_STUDIO_DATA_ROOT", "", data_base / namespace, environ)
+    default_cache = (data_base / namespace / "cache") if platform_name.startswith("win") else (cache_base / namespace)
     app_cache = _root("QUANTUM_STUDIO_CACHE_ROOT", "", default_cache, environ)
     workflow = Path(environ.get("QUANTUM_STUDIO_WORKFLOW_ROOT", app_data / "workflows")).expanduser()
     pseudo = Path(environ.get("QUANTUM_STUDIO_PSEUDO_CACHE", app_data / "pseudopotentials")).expanduser()

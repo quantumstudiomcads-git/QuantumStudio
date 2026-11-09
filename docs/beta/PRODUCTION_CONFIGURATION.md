@@ -378,3 +378,20 @@ See [Desktop cloud licensing](DESKTOP_CLOUD_LICENSING.md) and the public
 [staging runtime checklist](desktop-staging.env.example) for the exact approved
 staging issuer/public pin, configuration, verification sequence and manual rollout.
 The signing Worker is unchanged and no deployment was performed.
+
+
+## Windows packaged public profiles
+
+Windows builds now require an explicit `--profile staging|production` (or explicit
+`local` for development packages). The selected strict public JSON is bundled once
+as `quantumstudio-desktop.json`, pinned by a SHA-256/environment constant compiled
+into the executable. Packaged staging/production configuration is authoritative;
+conflicting process overrides, missing/modified files, TEST flags and invalid trust
+fail closed. Source/local environment configuration remains unchanged.
+
+See [Windows build profiles](WINDOWS_BUILD_PROFILES.md) for the public input schema,
+commands, installer/data-root isolation, secret scans and limitations. Staging's
+public source is `packaging/windows/staging.json`. Production's template is intentionally
+incomplete until independent public values are approved. Automatic updates are disabled
+in new profiled packages pending a reviewed environment-bound update contract; source
+updater behavior and signed anti-downgrade checks remain unchanged.

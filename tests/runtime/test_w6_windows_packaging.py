@@ -44,11 +44,11 @@ class WindowsPackagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(build_windows.sys, "platform", "linux"), patch.object(build_windows, "git_value", return_value=""):
             planned_stdout, planned_stderr = io.StringIO(), io.StringIO()
             with redirect_stdout(planned_stdout), redirect_stderr(planned_stderr):
-                planned = build_windows.main(["--dry-run", "--output", str(Path(tmp) / "dist")])
+                planned = build_windows.main(["--profile", "local", "--dry-run", "--output", str(Path(tmp) / "dist")])
             self.assertEqual(planned, 0); self.assertIn('"status": "PLAN_ONLY"', planned_stdout.getvalue()); self.assertEqual(planned_stderr.getvalue(), "")
             actual_stdout, actual_stderr = io.StringIO(), io.StringIO()
             with redirect_stdout(actual_stdout), redirect_stderr(actual_stderr):
-                actual = build_windows.main(["--output", str(Path(tmp) / "dist")])
+                actual = build_windows.main(["--profile", "local", "--output", str(Path(tmp) / "dist")])
             self.assertEqual(actual, 2); self.assertIn("WINDOWS_BUILD_HOST_REQUIRED", actual_stderr.getvalue())
             self.assertEqual(list(Path(tmp).rglob("QuantumStudio.exe")), [])
 
@@ -59,7 +59,7 @@ class WindowsPackagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(build_windows.sys, "platform", "win32"), patch.object(build_windows, "git_value", side_effect=fake_git_value):
             output, errors = io.StringIO(), io.StringIO()
             with redirect_stdout(output), redirect_stderr(errors):
-                result = build_windows.main(["--output", str(Path(tmp) / "dist")])
+                result = build_windows.main(["--profile", "local", "--output", str(Path(tmp) / "dist")])
             self.assertEqual(result, 2)
             self.assertIn("Refusing a dirty beta/release Windows build", errors.getvalue())
             self.assertEqual(output.getvalue(), "")
@@ -69,7 +69,7 @@ class WindowsPackagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(build_windows.sys, "platform", "win32"), patch.object(build_windows, "git_value", return_value=""):
             output, errors = io.StringIO(), io.StringIO()
             with redirect_stdout(output), redirect_stderr(errors):
-                result = build_windows.main(["--output", str(Path(tmp) / "dist")])
+                result = build_windows.main(["--profile", "local", "--output", str(Path(tmp) / "dist")])
             self.assertEqual(result, 2)
             self.assertIn("GIT_COMMIT_UNAVAILABLE", errors.getvalue())
             self.assertEqual(list(Path(tmp).rglob("QuantumStudio.exe")), [])
@@ -94,7 +94,7 @@ class WindowsPackagingTests(unittest.TestCase):
                  patch.object(build_windows.subprocess, "run", side_effect=fake_nuitka):
                 stdout, stderr = io.StringIO(), io.StringIO()
                 with redirect_stdout(stdout), redirect_stderr(stderr):
-                    result = build_windows.main(["--output", str(output)])
+                    result = build_windows.main(["--profile", "local", "--output", str(output)])
             self.assertEqual(result, 2)
             self.assertIn("PACKAGE_AUDIT_FAILED: PACKAGE_INCOMPLETE", stderr.getvalue())
             self.assertFalse((output / "main.dist" / PACKAGE_MARKER).exists())

@@ -9,7 +9,7 @@ The initial target is Windows 11 x64. Build with the repository-supported Python
 From a clean checkout on Windows:
 
 ```text
-python scripts/build_windows.py --output dist/windows/QuantumStudio-0.2.0-beta --channel beta
+python scripts/build_windows.py --profile staging --output dist/windows/QuantumStudio-0.2.0-staging-beta --channel beta
 ```
 
 `--dry-run` produces a structured plan and is the only supported mode on a non-Windows host. A real build refuses non-Windows hosts, unsupported architectures, dirty beta/release trees, unsafe existing output, missing Nuitka/PySide6, failed icon generation, failed Nuitka, or a failed package audit. Commands are structured argv with `shell=False`.
@@ -25,3 +25,15 @@ The package audit rejects tests, Git metadata, virtual environments, rootfs/VHDX
 ## Real Windows validation — pending
 
 On a Windows 11 x64 machine: build at a committed W6 revision; inspect the manifest; launch `QuantumStudio.exe` without Python/PYTHONPATH and offline; test Project Hub, Builder, Calculate with no runtime, Analyze, `.qs` save/reopen; relocate the bundle to a Unicode/space path; then test a read-only bundle root and read-only runtime health probe. Code signing is **PENDING**. Real QE validation is W8, and public Engine Pack distribution/legal review is **PENDING**.
+
+
+## Explicit deployment profiles
+
+The native builder now requires `--profile local|staging|production`. The example
+above is staging; production needs independently approved public origin/trust
+configuration and its default template is intentionally incomplete. See
+[Windows build profiles](../beta/WINDOWS_BUILD_PROFILES.md) for exact commands,
+executable-pinned public configuration, process precedence, separate staging/local
+data/install roots and currently disabled packaged updates. Source/local tools
+remain environment-driven. Native compilation/installation and publisher signing
+still require separate release verification.

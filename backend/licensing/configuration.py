@@ -23,8 +23,15 @@ class Environment(str, Enum):
     PRODUCTION = "production"
 
 
+def _runtime_values(environ=None):
+    if environ is not None: return environ
+    from backend.runtime.desktop_profile import runtime_environment, DesktopProfileError
+    try: return runtime_environment(os.environ)
+    except DesktopProfileError: raise ConfigurationError("invalid-packaged-profile") from None
+
+
 def deployment_environment(environ=None):
-    values = os.environ if environ is None else environ
+    values = _runtime_values(environ)
     raw = values.get("BETA_ENVIRONMENT", "production")
     # Retain the pre-existing explicit test alias; it never selects a deployed profile.
     if raw == "test": raw = "local"
@@ -77,7 +84,7 @@ def validate_origin(value, environment):
 
 
 def connection_options(environ=None):
-    values = os.environ if environ is None else environ
+    values = _runtime_values(environ)
     environment = deployment_environment(values)
     validate_switches(values, environment)
     value = values.get("QS_WEBSITE_URL", "")
@@ -126,7 +133,7 @@ class DesktopConfiguration:
 
 
 def desktop_configuration(environ=None):
-    values = os.environ if environ is None else environ
+    values = _runtime_values(environ)
     environment, origin, allow_http = connection_options(values)
     keys = {}
     if environment is not Environment.LOCAL:

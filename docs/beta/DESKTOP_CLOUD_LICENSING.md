@@ -116,8 +116,10 @@ an untrusted caller-supplied field or newly downloaded key.
 ## Exact staging runtime configuration
 
 These are PUBLIC desktop values, safe to ship with an approved staging desktop
-configuration. They must be set in the environment of the installed executable,
-not in Pages `.dev.vars`. There is no automatic dotenv loader for desktop.
+configuration. Source runs use the process environment, not Pages `.dev.vars`.
+New Windows packages instead load an executable-pinned public profile; see
+`WINDOWS_BUILD_PROFILES.md`. Matching process values are allowed, conflicting
+overrides are rejected. There is no general-purpose desktop dotenv/secret loader.
 
 The manifest below pins the already committed staging Worker public metadata;
 confirm it remains the approved active identity at release. This is a public pin,
@@ -137,7 +139,7 @@ Remove-Item Env:\QS_TEST_LICENCE_TRUST_FILE -ErrorAction SilentlyContinue
 
 The final staging hostname may not resolve yet. Do not treat a failed DNS lookup as
 permission to bypass HTTPS or enable local HTTP/TEST trust. While DNS is pending,
-operators may explicitly configure the already working HTTPS Pages origin instead,
+source operators may explicitly configure the already working HTTPS Pages origin instead,
 provided it matches the actual deployed website/browser-auth/allowed-origin settings.
 There is no hostname fallback or live-DNS dependency in automated tests.
 
@@ -168,3 +170,12 @@ DNS/HTTPS readiness (or an explicitly configured working Pages origin), and a re
 installed-desktop sign-in/issue/retrieve/revoke/replacement acceptance pilot remain
 manual rollout steps. Linux still has no production secure device-key store; it
 continues to fail closed rather than falling back to a plaintext key.
+
+
+## Windows packaging follow-up
+
+The exact selected public settings can now be carried by the Windows standalone and
+installer without a launch shell. See `WINDOWS_BUILD_PROFILES.md`; changing a packaged
+origin requires a reviewed public profile and rebuild. Do not override a staging
+package to another hostname with environment variables. Packaged staging has its own
+default mutable data root; production retains the existing default root.

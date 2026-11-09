@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "environment": "production",
+  "website_origin": "",
+  "licence_trust": {
+    "schema_version": 1,
+    "environment": "production",
+    "domain": "licence",
+    "algorithm": "Ed25519",
+    "keys": {}
+  }
+}

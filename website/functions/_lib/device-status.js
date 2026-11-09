@@ -1,4 +1,5 @@
-import {validateDeployment} from './deployment.js';
+import {readPublicLicenceState, currentPublicLicenceState} from './public-licence-state.js';
+import {validateDeployment, isLocalDeployment} from './deployment.js';
 import {sha256Hex, buildJsonResponse} from './auth.js';
 import {expectedOrigin} from './beta-registration.js';
 import {canonicalJson, readDeviceRequest as read, decodeDeviceProof as decode,
@@ -85,8 +86,10 @@ export async function deviceStatus(request, env) {
     const consumed=await env.BETA_DB.prepare(`UPDATE device_status_challenges SET consumed_at=?
       WHERE challenge_id=? AND consumed_at IS NULL AND expires_at>?`).bind(now,body.challenge_id,now).run();
     if(consumed.meta?.changes !== 1) return fail(409,'challenge_unavailable');
-    const row=await lookup(env.BETA_DB,saved.activation_request_id);
+    const row=isLocalDeployment(env) ? await lookup(env.BETA_DB,saved.activation_request_id)
+      : await readPublicLicenceState(env.BETA_DB,saved.activation_request_id);
     if(!binding(row,message)) return fail(409,'binding_conflict');
+    if(!isLocalDeployment(env) && !await currentPublicLicenceState(row,{allowExpired:true})) return fail(409,'licence_unavailable');
     const starts=Date.parse(row.starts_at)/1000, expires=Date.parse(row.entitlement_expires_at)/1000;
     if(!row.entitlement_id || !Number.isSafeInteger(row.entitlement_revision) || row.entitlement_revision<1
         || !Number.isSafeInteger(row.authorization_revision) || row.authorization_revision<1

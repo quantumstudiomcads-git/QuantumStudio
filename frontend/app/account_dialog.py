@@ -94,9 +94,12 @@ class DeliveryWorker(QThread):
             state = self.delivery.retrieve_and_install(self.activation_id, cancelled=self.cancelled)
             self.result.emit(state, "")
         except LeaseValidationError as error:
-            self.result.emit("delivery_error", "Invalid licence: " + str(error))
-        except (LicenceDeliveryError, SecureStorageUnavailable) as error:
-            self.result.emit("delivery_error", str(error))
+            self.result.emit("delivery_error", "The signed licence is invalid, belongs to another device, or is not currently valid.")
+        except LicenceDeliveryError as error:
+            self.result.emit("delivery_error", "Online validation required. The licence service could not be reached."
+                if error.code == "network_error" or error.http_status in (429, 500, 502, 503, 504) else "The licence is unavailable. Refresh and try again, or contact Quantum Studio support.")
+        except SecureStorageUnavailable:
+            self.result.emit("delivery_error", "The protected device identity is unavailable.")
         except (OSError, LeaseStoreError):
             self.result.emit("delivery_error", "The licence could not be stored. No new entitlement was granted.")
         except Exception:

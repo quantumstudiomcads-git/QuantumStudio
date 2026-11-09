@@ -9,7 +9,7 @@ from .connectors.desktop_auth import DesktopAuthError
 from .connectors.device_status import DeviceStatusError, DeviceStatusNetworkError, WebsiteDeviceStatusConnector
 from .device_identity import DeviceIdentityService, production_secure_store, SecureStorageUnavailable
 from .lease_store import LeaseStoreError
-from .verifier import LeaseVerifier, LeaseValidationError
+from .verifier import LeaseValidationError
 
 FIELDS = {"schema_version", "challenge_id", "activation_id", "installation_id", "device_public_key_hash",
     "authorization_state", "authorization_revision", "licence_id", "envelope_sha256", "entitlement_id",
@@ -82,7 +82,7 @@ class OnlineAuthorization:
             return self.status
         try:
             # Reverify before every new-work check; remote claims cannot repair a bad signature/device.
-            LeaseVerifier(service._trusted_public_keys).verify(service._verified_envelope, service.device_identity)
+            service.verify_envelope(service._verified_envelope)
         except LeaseValidationError:
             self.status = ('invalid_device' if service._verified_envelope.get('device_id') != service.device_identity.device_id
                 or service._verified_envelope.get('device_public_key_hash') != service.device_identity.public_key_hash else 'invalid_licence')

@@ -148,5 +148,5 @@ credentials. Keep admin disabled until those checks and any required stronger
 identity controls are complete. Use the currently working HTTPS staging Pages
 origin consistently while custom DNS is pending. After an authorized deployment,
 perform real sign-in, review, issuance/retry and device-revocation acceptance with
-controlled staging records. Deployed desktop TEST-only gates remain separate work.
+controlled staging records. Deployed desktop public delivery/status support is documented in `DESKTOP_CLOUD_LICENSING.md`; live installed-desktop acceptance remains separate work.
 This change performs no deployment, provisioning, real signing request or email send.

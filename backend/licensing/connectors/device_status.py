@@ -15,7 +15,7 @@ class WebsiteDeviceStatusConnector(WebsiteLicenceDeliveryConnector):
         try:
             return self._post(action, body)
         except LicenceDeliveryError as error:
-            if error.code == "network_error":
+            if error.code == "network_error" or error.http_status in (429, 500, 502, 503, 504):
                 raise DeviceStatusNetworkError("Online validation required; status service is unreachable.") from None
             raise DeviceStatusError("Device status service rejected the request or returned invalid data.") from None
 

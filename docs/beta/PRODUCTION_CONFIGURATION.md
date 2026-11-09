@@ -281,7 +281,7 @@ This is syntactic configuration validation, not DNS or secret-authenticity proof
 - Staging and production cookies use `Secure`. Neither can return/log local OTPs
   or succeed through the stub email adapter. Resend delivery is available only with
   explicit valid email configuration; missing settings fail the email operation closed.
-- Existing TEST metadata/publication/retrieval adapters stay closed outside local;
+- Direct TEST metadata/publication adapters stay closed outside local;
   selecting a valid production profile does not bypass their TEST-only guards.
 - Operator startup rejects incompatible configuration before constructing the
   window or signing authority. Existing worker guards continue to reject nonlocal
@@ -342,8 +342,8 @@ No automatic activation side effect or desktop direct binding access was added.
 
 While DNS is pending, the working HTTPS Pages origin can be used consistently for
 Pages `BETA_ALLOWED_ORIGIN` and Worker `QS_OPERATOR_WEBSITE_URL`. Final custom DNS is
-not required for Service Binding calls. Existing desktop deployed TEST-only gates
-remain a separate acceptance blocker. No deployment or secret provisioning occurred.
+not required for Service Binding calls. Public desktop device-proof retrieval/status
+now support deployed environments; see `DESKTOP_CLOUD_LICENSING.md` for rollout gates. No deployment or secret provisioning occurred.
 
 See [the full Pages runtime contract and flow](PRODUCTION_SIGNING_SERVICE.md#pages-functions-service-binding-integration)
 for exact JSON formats, authentication, failure behavior and manual rollout steps.
@@ -366,3 +366,15 @@ server-only. Existing authentication hardening requirements still apply; keep
 admin disabled if stronger operator authentication is required by deployment policy.
 See [Web Admin Licence Manager](WEB_ADMIN_LICENCE_MANAGER.md) for the audit, exact
 routes, workflow, configuration and staging acceptance requirements.
+
+
+## Deployed desktop delivery follow-up
+
+Public device-proof retrieval and current online status are enabled for valid
+staging/production runtime configuration. Desktop reuses `QS_LICENCE_TRUST`, the
+existing persistent device identity, immutable cache and mandatory fresh online
+authorization. No private service/operator credentials are desktop settings.
+See [Desktop cloud licensing](DESKTOP_CLOUD_LICENSING.md) and the public
+[staging runtime checklist](desktop-staging.env.example) for the exact approved
+staging issuer/public pin, configuration, verification sequence and manual rollout.
+The signing Worker is unchanged and no deployment was performed.

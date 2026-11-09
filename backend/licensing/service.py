@@ -94,11 +94,36 @@ class LicensingService:
         return EntitlementPolicy(self.lease, now=(lambda: self._online.server_time) if self._online.server_time is not None else self._now,
             clock_validation_required=self.clock_validation_required, authorization_state=self._online.status)
 
+    def verify_envelope(self, envelope):
+        """One signature/device boundary for delivered, cached and rechecked grants."""
+        verification = LeaseVerifier(self._trusted_public_keys).verify(envelope, self.device_identity)
+        from .configuration import Environment
+        if self.deployment_config is not None and self.deployment_config.environment is not Environment.LOCAL:
+            import re
+            import uuid
+            lease = verification.lease
+            try:
+                application = envelope["approved_application_ref"]
+                if (self.test_mode or not isinstance(application, str) or str(uuid.UUID(application)) != application
+                        or not re.fullmatch(r"lic-[a-z0-9][a-z0-9._-]{0,63}", lease.kid)
+                        or lease.kid not in self.deployment_config.trusted_public_keys
+                        or self._trusted_public_keys.get(lease.kid) != self.deployment_config.trusted_public_keys[lease.kid]
+                        or lease.account_id != "sub_" + application or envelope.get("subject_id") != lease.account_id
+                        or lease.subject_type != "beta_applicant" or envelope.get("product") != "Quantum Studio"
+                        or envelope.get("channel") != "beta" or lease.plan_id != "pro"
+                        or lease.device_id != "dev_" + lease.device_public_key_hash[:32]
+                        or lease.entitlement_version != 1 or lease.concurrent_session_limit != 1
+                        or lease.offline_device_limit != 1 or lease.offline_until != lease.expires_at):
+                    raise ValueError
+            except (ValueError, TypeError, KeyError, AttributeError):
+                raise LeaseValidationError("The deployed licence binding is invalid.") from None
+        return verification
+
     def accept_lease(self, envelope: Mapping, *, persist: bool = True, reset_clock_validation: bool = True) -> DeviceLease:
         if self.device_identity is None:
             self.error_code = "device_identity_unavailable"
             raise LeaseValidationError("A protected device identity is required before accepting a licence.")
-        verification = LeaseVerifier(self._trusted_public_keys).verify(envelope, self.device_identity)
+        verification = self.verify_envelope(envelope)
         self.lease = verification.lease
         self._verified_envelope = deepcopy(dict(verification.envelope))
         self._envelope_digest = hashlib.sha256(canonical_json(verification.envelope)).hexdigest()
@@ -145,7 +170,7 @@ class LicensingService:
             if self.device_identity is None or self.lease_store is None:
                 raise LeaseValidationError("A protected identity and persistent LeaseStore are required.")
             snapshot = deepcopy(dict(envelope))
-            verification = LeaseVerifier(self._trusted_public_keys).verify(snapshot, self.device_identity)
+            verification = self.verify_envelope(snapshot)
             decision = EntitlementPolicy(verification.lease, now=self._now,
                                          clock_validation_required=self.clock_validation_required).validity_decision()
             if not decision.allowed:

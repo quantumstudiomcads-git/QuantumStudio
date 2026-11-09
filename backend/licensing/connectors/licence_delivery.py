@@ -8,9 +8,10 @@ from .desktop_auth import WebsiteDesktopActivationConnector
 
 
 class LicenceDeliveryError(ConnectorError):
-    def __init__(self, message, *, code="delivery_error"):
+    def __init__(self, message, *, code="delivery_error", http_status=None):
         super().__init__(message)
         self.code = code
+        self.http_status = http_status
 
 
 class _NoRedirect(request.HTTPRedirectHandler):
@@ -44,7 +45,7 @@ class WebsiteLicenceDeliveryConnector:
                     code = candidate
             except (ValueError, UnicodeError, OSError):
                 pass  # Never echo arbitrary server data.
-            raise LicenceDeliveryError(f"Licence delivery rejected (HTTP {exc.code}, {code}).", code=code) from None
+            raise LicenceDeliveryError(f"Licence delivery rejected (HTTP {exc.code}, {code}).", code=code, http_status=exc.code) from None
         except (error.URLError, OSError, TimeoutError):
             raise LicenceDeliveryError("Network failure while checking the licence. Cached licence policy is unchanged.", code="network_error") from None
         try:

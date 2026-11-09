@@ -1,4 +1,5 @@
-import {isLocalDeployment} from './deployment.js';
+import {readPublicLicenceState, currentPublicLicenceState} from './public-licence-state.js';
+import {validateDeployment, isLocalDeployment} from './deployment.js';
 import {sha256Hex, buildJsonResponse} from './auth.js';
 import {constantTimeEquals, getBearerToken} from './operator-auth.js';
 import {expectedOrigin} from './beta-registration.js';
@@ -75,9 +76,13 @@ export function validEnvelope(e, {deployed = false} = {}) {
     && ['PROFESSOR_BETA','INTERNAL_VALIDATION'].includes(e.policy_profile)
     && e.issuer_label === 'Quantum Studio Licence Manager';
 }
-function gate(request, env) {
+function gate(request, env, {publication = false} = {}) {
   if (env?.BETA_ENVIRONMENT === 'production' && new URL(request.url).protocol !== 'https:') return fail(403,'https_required');
-  if (!isLocalDeployment(env)) return fail(403,'test_only');
+  if (publication && !isLocalDeployment(env)) return fail(403,'test_only');
+  if (!isLocalDeployment(env)) {
+    if (!validateDeployment(env).ok) return fail(503,'configuration_unavailable');
+    if (new URL(request.url).protocol !== 'https:') return fail(403,'https_required');
+  }
   if (!env.BETA_DB) return fail(503,'service_unavailable');
   const origin = request.headers.get('Origin');
   if (origin && origin !== expectedOrigin(env)) return fail(403,'origin_denied');
@@ -95,7 +100,7 @@ async function quota(request, env, name, interval, limit) {
 }
 
 export async function publishLicence(request, env, activationId) {
-  const rejected = gate(request,env);
+  const rejected = gate(request,env,{publication:true});
   if (rejected) return rejected;
   const token = typeof env.OPERATOR_LICENCE_PUBLISH_TOKEN === 'string' ? env.OPERATOR_LICENCE_PUBLISH_TOKEN.trim() : '';
   if (!token) return fail(503,'publication_not_configured');
@@ -150,6 +155,10 @@ export async function deviceChallenge(request,env) {
       body.installation_id,body.activation_request_id ?? null,body.activation_request_id ?? null).all();
     if (rows.results?.length !== 1) return fail(403,'activation_unavailable');
     const row = rows.results[0];
+    if (!isLocalDeployment(env)) {
+      const current=await readPublicLicenceState(env.BETA_DB,row.activation_request_id);
+      if(current?.status!=='AUTHORIZED'||!await currentPublicLicenceState(current)) return fail(409,'licence_unavailable');
+    }
     if (typeof row.device_public_key_hash !== 'string' || !hex.test(row.device_public_key_hash)
         || row.installation_id !== `dev_${row.device_public_key_hash.slice(0,32)}`) return fail(403,'activation_unavailable');
     const now = Math.floor(Date.now()/1000);
@@ -190,11 +199,16 @@ export async function deviceRetrieve(request,env) {
     const activation = await env.BETA_DB.prepare('SELECT * FROM beta_activations WHERE activation_request_id = ?').bind(row.activation_request_id).first();
     if (!activation || activation.status !== 'AUTHORIZED' || activation.installation_id !== row.installation_id
         || activation.device_public_key_hash !== digest) return fail(403,'activation_unavailable');
+    if (!isLocalDeployment(env)) {
+      const current=await readPublicLicenceState(env.BETA_DB,row.activation_request_id);
+      if(current?.status!=='AUTHORIZED'||!await currentPublicLicenceState(current)) return fail(409,'licence_unavailable');
+    }
     const saved = await env.BETA_DB.prepare('SELECT * FROM published_licences WHERE activation_request_id = ?').bind(row.activation_request_id).first();
     if (!saved) return buildJsonResponse(200,{state:'pending'});
     if (saved.status !== 'PUBLISHED' || saved.licence_id !== activation.licence_id
         || activation.licence_status !== 'ISSUED' || await sha256Hex(saved.envelope_json) !== saved.envelope_sha256) return fail(409,'publication_conflict');
     const envelope = JSON.parse(saved.envelope_json);
+    if (!isLocalDeployment(env) && !validEnvelope(envelope,{deployed:true})) return fail(409,'publication_conflict');
     if (envelope.licence_id !== saved.licence_id || envelope.device_id !== row.installation_id
         || envelope.device_public_key_hash !== digest) return fail(409,'publication_conflict');
     return buildJsonResponse(200,{state:'available',envelope,envelope_sha256:saved.envelope_sha256});

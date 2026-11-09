@@ -283,8 +283,8 @@ No automatic activation side effect or desktop direct binding access was added.
 
 While DNS is pending, the working HTTPS Pages origin can be used consistently for
 Pages `BETA_ALLOWED_ORIGIN` and Worker `QS_OPERATOR_WEBSITE_URL`. Final custom DNS is
-not required for Service Binding calls. Existing desktop deployed TEST-only gates
-remain a separate acceptance blocker. No deployment or secret provisioning occurred.
+not required for Service Binding calls. Public desktop device-proof retrieval/status
+now support deployed environments; see `DESKTOP_CLOUD_LICENSING.md` for rollout gates. No deployment or secret provisioning occurred.
 
 See [the full Pages runtime contract and flow](PRODUCTION_SIGNING_SERVICE.md#pages-functions-service-binding-integration)
 for exact JSON formats, authentication, failure behavior and manual rollout steps.

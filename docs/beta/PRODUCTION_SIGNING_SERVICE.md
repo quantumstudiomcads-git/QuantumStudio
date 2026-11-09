@@ -386,10 +386,9 @@ No HMAC credential, raw diagnostics, email, private key or envelope is returned 
 the operator success response; only publication result and digest are returned.
 
 The desktop cannot invoke the binding or the operator route with its normal
-session/device proof. Existing desktop retrieval and online-authorization deployed
-TEST-only gates are not opened here; their production readiness is a separate
-rollout gate. This implementation proves issuance/publication, not full deployed
-desktop acceptance.
+session/device proof. Public desktop device-proof retrieval and online status are
+now enabled separately; see `DESKTOP_CLOUD_LICENSING.md`. Issuance remains isolated
+from retrieval. Real deployed desktop acceptance is still a manual rollout gate.
 
 ### Current staging/manual configuration
 

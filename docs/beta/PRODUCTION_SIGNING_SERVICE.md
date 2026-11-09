@@ -271,3 +271,137 @@ The separate Python Worker and SQLite Durable Object adapter is now implemented 
 `cloudflare/signing_worker/`. See `CLOUDFLARE_SIGNING_WORKER.md` for its bindings,
 secret contract, local dry runs and remaining manual deployment gates. This is the
 selected closed-beta hosting path; no VPS or public website change is required.
+
+
+## Pages Functions Service Binding integration
+
+Pages now calls the private Python Worker through the runtime Service Binding
+`SIGNING_SERVICE`. There is no global `fetch` fallback, public Worker URL, browser
+binding, licence private key in Pages, or dependency on the final custom DNS name.
+The public website remains the authority for activation/entitlement facts; the
+Worker independently reloads them through the existing authenticated operator export.
+
+### Trigger and trust boundary
+
+Trusted operator infrastructure explicitly sends:
+
+```http
+POST /api/operator/activations/<activation-id>/issue
+Authorization: Bearer <OPERATOR_LICENCE_PUBLISH_TOKEN>
+Content-Type: application/json
+
+{"schema_version":1}
+```
+
+Use the existing purpose-specific publication credential, not a browser session or
+operator read token. The endpoint rejects additional fields, including envelopes,
+grants, caller identity and activation IDs supplied in the body. The UUID comes
+only from the route. HTTPS is required; a supplied Origin must match the configured
+website origin. This step does not automatically invoke signing when an activation
+is registered, change activation responses, add an issuance UI or alter the local
+TEST polling worker. Local calls report `local_worker_required` without needing a
+Service Binding. Existing operator metadata/publication routes remain local-only;
+the deployed issuance route uses their extracted server-side persistence functions.
+
+### Exact Pages runtime contract
+
+| Binding | Type | Value/responsibility |
+| --- | --- | --- |
+| `SIGNING_SERVICE` | Service Binding | Matching private signing Worker, e.g. the independently deployed staging Worker; never a public URL |
+| `QS_SIGNING_SERVICE_CALLER` | Encrypted Pages secret | One JSON caller record below; NOT a raw key and NOT the Worker allowlist |
+| `QS_LICENCE_TRUST` | Public runtime variable | Approved environment-bound licence public trust manifest below; contains no private key |
+| `OPERATOR_LICENCE_PUBLISH_TOKEN` | Existing encrypted Pages secret | Authenticates the trusted operator issuance trigger |
+| `BETA_ENVIRONMENT` | Existing runtime variable | Explicit staging or production |
+| `BETA_ALLOWED_ORIGIN` | Existing runtime variable | Actual current HTTPS website origin |
+| `BETA_DB` | Existing D1 binding | Matching environment's authoritative database |
+
+The new encrypted caller record has exactly these members (placeholders below are
+format references, not usable credentials):
+
+```json
+{"schema_version":1,"environment":"staging","caller":"pages-staging","secret":"CANONICAL_UNPADDED_BASE64URL_32_BYTE_CALLER_SECRET"}
+```
+
+The Worker-side `QS_SIGNING_SERVICE_AUTH` remains authoritative:
+
+```json
+{"schema_version":1,"environment":"staging","callers":{"pages-staging":"SAME_CANONICAL_UNPADDED_BASE64URL_32_BYTE_CALLER_SECRET"}}
+```
+
+`pages-staging` is an example approved caller ID, not hardcoded. Caller IDs must
+match `[a-z][a-z0-9_-]{0,63}`. Pages receives only its own credential, never the
+complete allowlist or another infrastructure caller's key. If the deployed
+allowlist has no dedicated Pages caller, provisioning that caller is manual;
+this change does not generate, read, rotate or install credentials. Production
+must have a separate caller/secret, environment tag, Worker binding, D1 and trust.
+
+The public trust schema is the existing desktop trust schema, independently
+pinned in Pages rather than accepted from the Worker response:
+
+```json
+{"schema_version":1,"environment":"staging","domain":"licence","algorithm":"Ed25519","keys":{"lic-APPROVED-LOWERCASE-ISSUER":"APPROVED_BASE64URL_RAW_32_BYTE_PUBLIC_KEY"}}
+```
+
+The issuer placeholder is intentionally invalid; use the exact approved `lic-...`
+lowercase issuer configured on the matching Worker. Retain historical public
+pins during rotation. Never put `QS_LICENCE_SIGNING_KEY` in Pages.
+
+### Request, validation and immutable completion
+
+1. Authenticate the trusted operator trigger; validate the minimal request.
+2. Read D1 activation, linked application and matching account entitlement. Require
+   AUTHORIZED, no revocation/flag, matching full device hash/installation, an
+   approved/licence-issued application and a current beta entitlement. Reject
+   inconsistent existing metadata before contacting the Worker.
+3. Send only `{"schema_version":1,"activation_request_id":"<uuid>"}` to
+   `https://private-signing.internal/v1/licences/issue` THROUGH the binding. The
+   hostname is an internal Request target, never resolved by public fetch.
+4. HMAC-SHA256 signs the exact Python contract: purpose, environment, caller, POST,
+   path, integer timestamp, fresh random 32-byte hex nonce and SHA-256 of the actual
+   body bytes, with canonical sorted JSON. The Worker applies its existing
+   120-second freshness window, durable replay rejection and serialized issuance.
+5. Bound the request and response-body wait to 30 seconds and parse at most 64 KiB
+   of JSON. Reject unexpected result schemas, envelope fields, hashes, device/account
+   identity, entitlement expiry/limit, issuer or signature. Verify Ed25519 against
+   independently configured public trust using the existing canonical envelope.
+6. Re-read eligibility after the Worker returns, reject changed entitlement/device
+   facts, then reuse shared metadata and immutable publication persistence.
+   Publication uses a conditional INSERT that additionally checks current deployed
+   authorization, entitlement expiry and device limit. Existing bytes cannot be
+   overwritten. Metadata can remain after an interrupted publication; retrying with
+   a fresh HMAC nonce recovers the Worker's original envelope and completes storage.
+
+No automatic retries are made across an ambiguous service failure. Operators may
+retry with a fresh request; the Worker's durable activation record and website
+immutable storage preserve idempotency. Concurrent changes/replay/conflicts fail
+closed; no new audit events or licence format are introduced by this adapter.
+
+### Safe failures and rollout limits
+
+Missing binding, caller credential or public trust returns safe configuration
+failure. Worker 401/403 returns a safe authentication failure, 409 a safe conflict,
+transport/deadline/other status a temporary failure, and malformed/mismatched
+responses are rejected. Error bodies from the Worker are never read or forwarded.
+No HMAC credential, raw diagnostics, email, private key or envelope is returned in
+the operator success response; only publication result and digest are returned.
+
+The desktop cannot invoke the binding or the operator route with its normal
+session/device proof. Existing desktop retrieval and online-authorization deployed
+TEST-only gates are not opened here; their production readiness is a separate
+rollout gate. This implementation proves issuance/publication, not full deployed
+desktop acceptance.
+
+### Current staging/manual configuration
+
+Until custom DNS is available, use the already working HTTPS Pages origin
+`https://quantumstudio.pages.dev` consistently for `BETA_ALLOWED_ORIGIN` and the
+private Worker's `QS_OPERATOR_WEBSITE_URL` (plus matching OAuth/Turnstile settings
+as appropriate). Do not use the final staging origin before it resolves and is
+configured. No domain is hardcoded in the adapter. When moving domains, coordinate
+both origins and existing authentication provider settings manually.
+
+Configure the Pages caller JSON secret and approved `QS_LICENCE_TRUST` public
+manifest, confirm the allowlist contains the matching dedicated caller, and review
+all changes before deploying this code. A pre-existing Service Binding alone does
+not install this integration into an already deployed Pages artifact. No deployment,
+remote request, key generation or secret provisioning was performed by this change.

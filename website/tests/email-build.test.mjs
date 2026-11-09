@@ -6,9 +6,10 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {it, expect} from 'vitest';
 
-it('keeps server email credentials and provider code out of an actual static build', async () => {
+it('keeps server email/signing credentials and service code out of an actual static build', async () => {
   const root = fileURLToPath(new URL('..', import.meta.url));
   const canary = 're_SYNTHETIC_BUILD_SECRET_CANARY_NOT_A_REAL_KEY_829174';
+  const signingCanary = Buffer.alloc(32, 0x53).toString('base64url');
   const temporary = mkdtempSync(join(tmpdir(), 'qs-email-build-'));
   const guard = join(temporary, 'deny-network.cjs');
   // Even an accidental server import cannot make a real Resend request during this build.
@@ -19,6 +20,7 @@ it('keeps server email credentials and provider code out of an actual static bui
       env: {...process.env, BETA_ENVIRONMENT:'staging', BETA_ALLOWED_ORIGIN:'https://staging.unit-fixture.org',
         TURNSTILE_SITE_KEY:'synthetic-public-widget', BETA_TURNSTILE_TEST_MODE:'false', AUTH_EMAIL_TEST_MODE:'false',
         CLOUDFLARE_LOCAL:'false', QS_TEST_LICENSING:'0', QS_DESKTOP_AUTH_ALLOW_LOCAL_HTTP:'0', QS_TEST_LICENCE_TRUST_FILE:'',
+        QS_SIGNING_SERVICE_CALLER:JSON.stringify({schema_version:1,environment:'staging',caller:'pages-staging',secret:signingCanary}),
         RESEND_API_KEY:canary, AUTH_EMAIL_PROVIDER:'resend', AUTH_EMAIL_FROM:'auth@mailer.unit-fixture.org'},
     });
     let inspected = 0;
@@ -28,7 +30,7 @@ it('keeps server email credentials and provider code out of an actual static bui
         if (item.isDirectory()) inspect(path);
         else {
           const content = readFileSync(path);
-          for (const forbidden of [canary, 'RESEND_API_KEY', 'api.resend.com/emails']) {
+          for (const forbidden of [canary, signingCanary, 'RESEND_API_KEY', 'QS_SIGNING_SERVICE_CALLER', 'api.resend.com/emails', 'private-signing.internal', 'quantum-studio:private-licence-issuance:v1']) {
             expect(content.includes(Buffer.from(forbidden)), 'Server email material must not enter static output').toBe(false);
           }
           inspected++;

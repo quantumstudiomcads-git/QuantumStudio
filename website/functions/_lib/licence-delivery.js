@@ -55,10 +55,10 @@ async function read(request) {
     return JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(bytes));
   } catch { return null; }
 }
-function validEnvelope(e) {
+export function validEnvelope(e, {deployed = false} = {}) {
   if (!exact(e, envelopeFields) || e.schema_version !== 1 || e.product !== 'Quantum Studio'
       || e.channel !== 'beta' || e.subject_type !== 'beta_applicant' || e.plan_id !== 'pro'
-      || typeof e.kid !== 'string' || !/^test-lic-[a-zA-Z0-9._-]{1,80}$/.test(e.kid)
+      || typeof e.kid !== 'string' || !(deployed ? /^lic-[a-z0-9][a-z0-9._-]{0,63}$/ : /^test-lic-[a-zA-Z0-9._-]{1,80}$/).test(e.kid)
       || typeof e.licence_id !== 'string' || !e.licence_id.startsWith('lic_') || !uuid.test(e.licence_id.slice(4))
       || !uuid.test(e.approved_application_ref) || e.account_id !== `sub_${e.approved_application_ref}`
       || e.subject_id !== e.account_id || !installation.test(e.device_id) || !hex.test(e.device_public_key_hash)
@@ -105,7 +105,11 @@ export async function publishLicence(request, env, activationId) {
   if (typeof activationId !== 'string' || !uuid.test(activationId)) return fail(400,'invalid_activation_id');
   const body = await read(request);
   if (!exact(body,['schema_version','envelope']) || body.schema_version !== 1 || !validEnvelope(body.envelope)) return fail(400,'invalid_envelope');
-  const e = body.envelope;
+  return persistPublishedLicence(env, activationId, body.envelope);
+}
+
+// Server-only shared immutable storage; callers must authenticate/validate first.
+export async function persistPublishedLicence(env, activationId, e, {deployed = false} = {}) {
   try {
     const row = await env.BETA_DB.prepare('SELECT * FROM beta_activations WHERE activation_request_id = ?').bind(activationId).first();
     if (!row || row.status !== 'AUTHORIZED' || row.installation_id !== e.device_id
@@ -117,7 +121,14 @@ export async function publishLicence(request, env, activationId) {
       (activation_request_id,licence_id,envelope_json,envelope_sha256,published_at,status)
       SELECT ?,?,?,?,?, 'PUBLISHED' FROM beta_activations WHERE activation_request_id = ?
         AND status = 'AUTHORIZED' AND licence_id = ? AND device_public_key_hash = ?
-      ON CONFLICT DO NOTHING`).bind(activationId,e.licence_id,json,digest,Math.floor(Date.now()/1000),activationId,e.licence_id,e.device_public_key_hash).run();
+        ${deployed ? `AND revoked_at IS NULL AND flag_reason IS NULL
+        AND EXISTS (SELECT 1 FROM account_entitlements ent JOIN beta_applications app
+          ON app.application_id=ent.application_id AND app.user_id=ent.user_id
+          WHERE ent.application_id=beta_activations.application_id AND ent.user_id=beta_activations.user_id
+          AND app.status IN ('APPROVED','LICENSE_ISSUED') AND ent.plan_id='beta'
+          AND unixepoch(ent.starts_at)<=unixepoch('now') AND unixepoch(ent.expires_at)>unixepoch('now')
+          AND unixepoch(ent.expires_at)=? AND ent.device_limit=?)` : ''}
+      ON CONFLICT DO NOTHING`).bind(activationId,e.licence_id,json,digest,Math.floor(Date.now()/1000),activationId,e.licence_id,e.device_public_key_hash,...(deployed ? [e.expires_at,e.registered_device_limit] : [])).run();
     const saved = await env.BETA_DB.prepare('SELECT * FROM published_licences WHERE activation_request_id = ? OR licence_id = ?').bind(activationId,e.licence_id).first();
     if (!saved || saved.activation_request_id !== activationId || saved.licence_id !== e.licence_id
         || saved.envelope_sha256 !== digest || saved.envelope_json !== json) return fail(409,'publication_conflict');

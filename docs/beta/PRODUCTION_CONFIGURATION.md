@@ -309,3 +309,41 @@ The separately implemented signing contract is documented in
 to the private signing runtime. They are not website bindings or desktop build
 settings. The implementation does not provision keys or enable production website
 publication; key custody, private orchestration and deployment remain blocked.
+
+
+## Pages issuance integration follow-up
+
+Pages Functions now have a server-only `SIGNING_SERVICE` client and authenticated
+`POST /api/operator/activations/<activation-id>/issue` trigger. The body is exactly
+`{"schema_version":1}` and the trigger requires the existing
+`OPERATOR_LICENCE_PUBLISH_TOKEN`. Local TEST issuance remains unchanged.
+
+Required additional Pages runtime configuration:
+
+- `SIGNING_SERVICE`: Service Binding to the matching private Worker.
+- `QS_SIGNING_SERVICE_CALLER`: encrypted JSON secret with exactly `schema_version:1`,
+  matching `environment`, approved `caller` and `secret` (canonical unpadded base64url
+  of 32 bytes). This is NOT a raw key. Worker `QS_SIGNING_SERVICE_AUTH.callers[caller]`
+  must contain the same secret; the Worker allowlist remains authoritative.
+- `QS_LICENCE_TRUST`: public JSON manifest with `schema_version:1`, matching
+  `environment`, `domain:"licence"`, `algorithm:"Ed25519"` and `keys` mapping approved
+  `lic-...` issuer IDs to canonical base64url raw 32-byte public keys. Never supply
+  private signing keys to Pages.
+
+Use independent staging/production callers, secrets, trust, D1 and bindings. These
+settings are runtime-only, not public build configuration. Missing/invalid settings
+fail the issuance operation closed without changing unrelated page/auth behavior.
+
+Pages verifies the HMAC-compatible response envelope's Ed25519 signature against
+pinned trust and matches authoritative entitlement/device facts before reusing shared
+metadata and immutable publication persistence. Worker replay/freshness/serialization
+remain authoritative; retries use fresh nonces and recover the original envelope.
+No automatic activation side effect or desktop direct binding access was added.
+
+While DNS is pending, the working HTTPS Pages origin can be used consistently for
+Pages `BETA_ALLOWED_ORIGIN` and Worker `QS_OPERATOR_WEBSITE_URL`. Final custom DNS is
+not required for Service Binding calls. Existing desktop deployed TEST-only gates
+remain a separate acceptance blocker. No deployment or secret provisioning occurred.
+
+See [the full Pages runtime contract and flow](PRODUCTION_SIGNING_SERVICE.md#pages-functions-service-binding-integration)
+for exact JSON formats, authentication, failure behavior and manual rollout steps.

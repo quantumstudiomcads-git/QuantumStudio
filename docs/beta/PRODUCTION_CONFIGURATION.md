@@ -3,7 +3,8 @@
 This step adds configuration gates only. The M1-M10 grant, device, revocation,
 immutable envelope and mandatory online authorization contracts are unchanged.
 It does not enable a production signing authority, production licence metadata/
-publication/delivery adapters, or email transport. A valid profile is necessary,
+publication/delivery adapters, or provision a verified email sender. Resend email
+transport is implemented separately; its operational contract is documented below. A valid profile is necessary,
 but is not approval or readiness to deploy.
 
 ## Environment model
@@ -90,7 +91,10 @@ Never solve that task by embedding an operator token or any private key.
 | `BETA_ALLOWED_ORIGIN` | Existing local origin; build defaults to `http://127.0.0.1:8788` only in local mode | Required approved HTTPS root origin at build and runtime | Public |
 | `TURNSTILE_SITE_KEY` | Optional for the explicit local test widget | Required at build; hostname-specific real widget key | Public browser configuration |
 | `BETA_TURNSTILE_TEST_MODE` | `true` for existing test tokens | Unset/false/0 only | Public switch; never enable for deployed profiles |
-| `AUTH_EMAIL_TEST_MODE` | `true` for local OTP diagnostics | Unset/false/0 only | Runtime switch; never enable for deployed profiles |
+| `AUTH_EMAIL_TEST_MODE` | `true` for existing local UI test codes; no OTP logging | Unset/false/0 only | Runtime switch; never enable for deployed profiles |
+| `AUTH_EMAIL_PROVIDER` | Not needed; local test/stub provider is retained | Required `resend` for email delivery | Non-secret runtime setting; not public build data |
+| `AUTH_EMAIL_FROM` | Not needed | Required approved mailbox at a Resend-verified domain | Non-secret runtime sender; not a build default |
+| `RESEND_API_KEY` | Not needed or used | Required separate environment-specific Resend sending credential | SECRET; encrypted Pages runtime binding only |
 | `CLOUDFLARE_LOCAL` | Optional existing local indicator | Unset/false/0 only | Local switch |
 | `BETA_DB` | Wrangler local D1 binding | Required isolated environment-specific D1 binding | Runtime resource binding; never public build data |
 | `BETA_PRIVACY_VERSION`, `BETA_TERMS_VERSION` | Existing draft values | Required actual reviewed document versions | Non-secret runtime configuration |
@@ -196,8 +200,42 @@ the same variable names with independently approved production values and secret
 Local development still uses `.dev.vars`, local D1 and `scripts/qs-local.ps1`.
 Nothing automatically loads `website/config/*.env.example`. Missing deployed mode,
 origin, public widget key or runtime bindings remain failures rather than local
-fallbacks. This configuration fix does not enable the deferred email/licence
-production adapters or perform a deployment.
+fallbacks. The Pages configuration fix does not provision Resend credentials,
+verify sender DNS, enable the deferred licence adapters or perform a deployment.
+
+## Transactional email through Resend
+
+Email delivery requires `AUTH_EMAIL_PROVIDER=resend`, `AUTH_EMAIL_FROM` and encrypted
+`RESEND_API_KEY` in the matching Pages runtime environment. These are NOT static build
+inputs and are not Docusaurus custom fields. Staging/production require their own
+credentials and approved senders; `AUTH_EMAIL_TEST_MODE=true` remains prohibited.
+Local mode keeps its existing `devOtp` UI workflow without network requests or OTP
+console logging, including the existing explicit-local stub behavior.
+
+Configuration is checked when email is requested. Public builds and unrelated
+routes, including configured Google OAuth, do not require or receive the API key.
+Invalid/missing email settings return the existing safe 503 verification-delivery
+failure; they never downgrade staging/production to local test email. No OTP
+lifetime, generation, throttling or consumption semantics change.
+
+As of this step, `quantumstudio-mcads.com` still awaits DNS access/verification.
+Do not add a usable API key or attempt real sending before the exact sender domain
+is verified in Resend. Leave `RESEND_API_KEY` unconfigured while blocked: email
+requests then fail locally at configuration validation without a provider call.
+After verification, a manual example (NOT an application default) is:
+
+```dotenv
+AUTH_EMAIL_PROVIDER=resend
+AUTH_EMAIL_FROM="Quantum Studio <no-reply@quantumstudio-mcads.com>"
+AUTH_EMAIL_TEST_MODE=false
+```
+
+Add `RESEND_API_KEY` as an encrypted Pages secret with an independently provisioned
+sending-scoped key for that environment. The example mailbox still needs approval;
+a verified staging subdomain can be used instead, after separate domain verification.
+The website origin and the email sender's verified domain are different settings.
+See `PRODUCTION_EMAIL_DELIVERY.md` for the adapter, failure behavior and manual DNS
+steps. No real API key, DNS change, deployment or email send was performed here.
 
 ## Operator processes and local helpers
 
@@ -241,7 +279,8 @@ This is syntactic configuration validation, not DNS or secret-authenticity proof
 - Google sign-in separately rejects missing credentials, placeholder credentials,
   or a callback that does not match the chosen deployed origin and callback path.
 - Staging and production cookies use `Secure`. Neither can return/log local OTPs
-  or succeed through the stub email adapter. Real email transport is still absent.
+  or succeed through the stub email adapter. Resend delivery is available only with
+  explicit valid email configuration; missing settings fail the email operation closed.
 - Existing TEST metadata/publication/retrieval adapters stay closed outside local;
   selecting a valid production profile does not bypass their TEST-only guards.
 - Operator startup rejects incompatible configuration before constructing the
@@ -256,7 +295,7 @@ updater, installer-signing and operator credentials are different responsibiliti
 
 The production-readiness audit remains authoritative for work beyond this step:
 persistent production signing/custody, explicit production metadata/publication/
-delivery adapters, real email transport, OTP/OAuth security hardening, approved
+delivery adapters, verified Resend sender/DNS and scoped credentials, OTP/OAuth security hardening, approved
 public copy/consent, actual external resource configuration, desktop public-profile
 provisioning, installer/release validation and a real HTTPS acceptance pilot.
 No keys, domains, credentials, resources or deployments were provisioned here.

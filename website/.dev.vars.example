@@ -9,6 +9,8 @@ BETA_IDENTITY_PEPPER=replace-with-a-long-local-development-only-value
 TURNSTILE_SECRET_KEY=local-test-only-placeholder
 BETA_TURNSTILE_TEST_MODE=true
 AUTH_EMAIL_TEST_MODE=true
+# Local codes remain available in the local auth UI/devOtp response, never console logs.
+# No Resend key/provider/from configuration is needed or used in local mode.
 AUTH_OTP_PEPPER=replace-with-a-local-development-only-otp-pepper
 GOOGLE_CLIENT_ID=replace-with-google-client-id
 GOOGLE_CLIENT_SECRET=replace-with-google-client-secret

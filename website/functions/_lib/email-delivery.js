@@ -1,17 +1,33 @@
 import {validateDeployment, isLocalDeployment} from './deployment.js';
-export async function sendOtpEmail({email, otp, purpose, expiryMinutes, env}) {
-  if (!validateDeployment(env).ok) return {ok: false, provider: null, reason: 'Deployment configuration unavailable.'};
-  const localDevMode = env.AUTH_EMAIL_TEST_MODE === 'true' && isLocalDeployment(env);
+import {EmailConfigurationError, ResendEmailProvider, validateResendConfiguration} from './email/resend.js';
 
-  if (localDevMode) {
-    const payload = {to: email, otp, purpose, expiresInMinutes: expiryMinutes, provider: 'local-dev'};
-    console.log('[auth local otp]', JSON.stringify(payload));
-    return {ok: true, provider: 'local-dev', devOtp: otp};
+/** @typedef {{ok: boolean, provider: string|null, kind?: string, reason?: string, devOtp?: string}} EmailDeliveryResult */
+
+// Providers implement send({email, otp, purpose, expiryMinutes}) -> EmailDeliveryResult.
+// Local modes intentionally never make an external email request.
+export function createEmailProvider(env, fetchImpl = fetch) {
+  if (!validateDeployment(env).ok) throw new EmailConfigurationError();
+  if (isLocalDeployment(env)) {
+    const name = env.AUTH_EMAIL_TEST_MODE === 'true' ? 'local-dev' : 'stub';
+    return {send: async ({otp}) => ({ok: true, provider: name, devOtp: otp})};
   }
+  return new ResendEmailProvider(env, fetchImpl);
+}
 
+/** @returns {Promise<EmailDeliveryResult>} */
+export async function sendOtpEmail({email, otp, purpose, expiryMinutes, env}, fetchImpl = fetch) {
+  if (!validateDeployment(env).ok) {
+    return {ok: false, provider: null, kind: 'configuration', reason: 'deployment-configuration-unavailable'};
+  }
   if (!isLocalDeployment(env)) {
-    return {ok: false, provider: null, reason: 'Production email provider not configured.'};
+    const config = validateResendConfiguration(env);
+    if (!config.ok) return {ok: false, provider: null, kind: 'configuration', reason: config.reason};
   }
-
-  return {ok: true, provider: 'stub', devOtp: otp};
+  try {
+    const provider = createEmailProvider(env, fetchImpl);
+    return await provider.send({email, otp, purpose, expiryMinutes});
+  } catch {
+    // No raw provider exceptions, email addresses, OTPs, or credentials leave this boundary.
+    return {ok: false, provider: null, kind: 'delivery', reason: 'email-delivery-unavailable'};
+  }
 }

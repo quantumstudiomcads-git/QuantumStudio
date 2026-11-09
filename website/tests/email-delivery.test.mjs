@@ -1,0 +1,202 @@
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import {sendOtpEmail, createEmailProvider} from '../functions/_lib/email-delivery.js';
+import {EMAIL_REQUEST_TIMEOUT_MS, ResendEmailProvider, validateResendConfiguration} from '../functions/_lib/email/resend.js';
+import {websiteBuildConfiguration} from '../functions/_lib/deployment.js';
+
+vi.mock('../functions/_lib/beta-registration.js', async () => {
+  const actual = await vi.importActual('../functions/_lib/beta-registration.js');
+  return {...actual, verifyTurnstile: vi.fn(async () => ({ok: true}))};
+});
+import {onRequestPost as login} from '../functions/api/auth/login.js';
+
+const KEY = 're_SYNTHETIC_UNIT_EMAIL_SECRET_NEVER_REAL_948201';
+const OTP = '619283';
+const ID = '49a3999c-0ce1-4ea6-ab68-afcd6dc2e794';
+const message = {email: 'recipient@example.test', otp: OTP, purpose: 'LOGIN', expiryMinutes: 10};
+function environment(mode = 'staging') {
+  return {BETA_ENVIRONMENT: mode, BETA_ALLOWED_ORIGIN: `https://${mode}.unit-fixture.org`, BETA_DB: {},
+    AUTH_OTP_PEPPER: 'unit-otp-pepper', BETA_IDENTITY_PEPPER: 'unit-identity-pepper', TURNSTILE_SECRET_KEY: 'unit-captcha-secret',
+    TURNSTILE_SITE_KEY: 'unit-public-widget', BETA_PRIVACY_VERSION: 'unit-1', BETA_TERMS_VERSION: 'unit-1',
+    OPERATOR_SYNC_TOKEN: 'unit-read', OPERATOR_STATUS_SYNC_TOKEN: 'unit-status', OPERATOR_LICENCE_SYNC_TOKEN: 'unit-metadata',
+    OPERATOR_LICENCE_PUBLISH_TOKEN: 'unit-publish', OPERATOR_ACTIVATION_REVOKE_TOKEN: 'unit-revoke',
+    AUTH_EMAIL_TEST_MODE: 'false', BETA_TURNSTILE_TEST_MODE: 'false', AUTH_EMAIL_PROVIDER: 'resend',
+    RESEND_API_KEY: KEY, AUTH_EMAIL_FROM: 'Quantum Studio <auth@mailer.unit-fixture.org>'};
+}
+const accepted = () => new Response(JSON.stringify({id: ID}), {status: 200, headers: {'Content-Type': 'application/json'}});
+const send = (env, fetchImpl) => sendOtpEmail({...message, env}, fetchImpl);
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(async () => {throw new Error('Unexpected network: tests must mock delivery');}));
+});
+afterEach(() => {vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();});
+
+describe('local and deployed email provider selection', () => {
+  it.each(['local', 'test'])('preserves %s test-email UI delivery with no network or OTP logging', async (mode) => {
+    const logs = ['log', 'info', 'warn', 'error', 'debug'].map((name) => vi.spyOn(console, name).mockImplementation(() => {}));
+    const result = await send({...environment(mode), AUTH_EMAIL_TEST_MODE: 'true'});
+    expect(result).toEqual({ok: true, provider: 'local-dev', devOtp: OTP});
+    expect(fetch).not.toHaveBeenCalled();
+    for (const log of logs) expect(log).not.toHaveBeenCalled();
+  });
+  it('preserves the existing explicit-local stub and never sends externally', async () => {
+    expect(await send(environment('local'))).toEqual({ok: true, provider: 'stub', devOtp: OTP});
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  for (const mode of ['staging', 'production']) {
+    it.each(['', undefined, 'stub', 'local-dev', 'RESEND', 'unknown'])(`${mode} rejects provider %s`, async (provider) => {
+      expect(await send({...environment(mode), AUTH_EMAIL_PROVIDER: provider})).toMatchObject({ok: false, kind: 'configuration'});
+      expect(fetch).not.toHaveBeenCalled();
+    });
+    it(`${mode} rejects local test mode even with valid Resend settings`, async () => {
+      const env = {...environment(mode), AUTH_EMAIL_TEST_MODE: 'true'};
+      expect(await send(env)).toMatchObject({ok: false, kind: 'configuration'});
+      expect(() => createEmailProvider(env)).toThrow('configuration');
+      expect(fetch).not.toHaveBeenCalled();
+    });
+    it(`${mode} accepts only the configured real provider and never returns devOtp`, async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(accepted());
+      const result = await send(environment(mode));
+      expect(result).toEqual({ok: true, provider: 'resend'});
+      expect(result).not.toHaveProperty('devOtp');
+    });
+  }
+  it.each([undefined, '', 'development'])('missing/invalid deployment mode %s never selects local email', async (mode) => {
+    const result = await send({...environment(), BETA_ENVIRONMENT: mode, AUTH_EMAIL_TEST_MODE: 'true'});
+    expect(result.ok).toBe(false); expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('Resend configuration validation', () => {
+  it.each(['auth@mailer.unit-fixture.org', 'Quantum Studio <auth@mailer.unit-fixture.org>'])(
+    'accepts configured sender %s without returning credentials', (from) => {
+      const result = validateResendConfiguration({...environment(), AUTH_EMAIL_FROM: from});
+      expect(result).toEqual({ok: true}); expect(JSON.stringify(result)).not.toContain(KEY);
+    });
+  it.each(['', undefined, 'not-a-key', 're_short', 're_xxxxxxxxxxxxxxxxxxxxx', KEY+' ', KEY+'\r\nInjected: secret'])(
+    'rejects missing/malformed API credentials #%#', async (key) => {
+      const result = await send({...environment(), RESEND_API_KEY: key});
+      expect(result).toMatchObject({ok: false, kind: 'configuration', reason: 'invalid-email-api-key'});
+      expect(result).not.toHaveProperty('devOtp'); expect(fetch).not.toHaveBeenCalled();
+    });
+  it.each(['', undefined, 'bad', 'auth@localhost', 'auth@127.0.0.1', 'auth@example.com',
+    'auth@replace-before-deployment.example', ' auth@mailer.unit-fixture.org',
+    'auth@mailer.unit-fixture.org,other@mailer.unit-fixture.org', 'auth..code@mailer.unit-fixture.org',
+    'auth@-bad.unit-fixture.org', 'Quantum Studio <auth@mailer.unit-fixture.org>\r\nBcc: recipient@example.test',
+    'Quantum Studio <auth@mailer.unit-fixture.org> trailing', 'Quantum Studio <auth@mailer.unit-fixture.org> <other@site.org>'])(
+    'rejects malformed/placeholder sender #%#', async (from) => {
+      const result = await send({...environment(), AUTH_EMAIL_FROM: from});
+      expect(result).toMatchObject({ok: false, kind: 'configuration', reason: 'invalid-email-sender'});
+      expect(fetch).not.toHaveBeenCalled();
+    });
+  it('also enforces deployment gates when the Resend adapter is constructed directly', () => {
+    expect(() => new ResendEmailProvider({...environment(), AUTH_EMAIL_TEST_MODE:'true'})).toThrow('configuration');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it('does not expose a credential in a configuration exception', () => {
+    expect(() => new ResendEmailProvider({...environment(), AUTH_EMAIL_FROM: 'invalid'})).toThrow('Email provider configuration is unavailable.');
+  });
+});
+
+describe('bounded Resend HTTPS adapter', () => {
+  it.each(['LOGIN', 'SIGNUP'])('sends the unchanged %s OTP with configurable sender and expiry', async (purpose) => {
+    vi.mocked(fetch).mockResolvedValueOnce(accepted());
+    const env = environment();
+    expect((await sendOtpEmail({...message, purpose, env})).ok).toBe(true);
+    expect(fetch).toHaveBeenCalledOnce();
+    const [url, options] = vi.mocked(fetch).mock.calls[0];
+    expect(url).toBe('https://api.resend.com/emails');
+    expect(options).toMatchObject({method: 'POST', redirect: 'error', headers: {
+      Authorization: 'Bearer '+KEY, 'Content-Type': 'application/json', 'User-Agent': 'QuantumStudio-Auth/0.2'}});
+    expect(JSON.parse(options.body)).toEqual({from: env.AUTH_EMAIL_FROM, to: [message.email],
+      subject: 'Quantum Studio verification code',
+      text: `Your Quantum Studio verification code is: ${OTP}\n\nThis code expires in 10 minutes.\nIf you did not request this code, you can ignore this email.`});
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+  it.each([400, 401, 403, 422, 429, 500, 503])('handles HTTP %s without reading or leaking sensitive failure bodies', async (status) => {
+    const response = new Response(JSON.stringify({message: `${KEY} ${OTP} ${message.email}`}), {status});
+    const read = vi.spyOn(response, 'json'); const text = vi.spyOn(response, 'text');
+    vi.mocked(fetch).mockResolvedValueOnce(response);
+    const result = await send(environment());
+    expect(result).toMatchObject({ok: false, kind: [401, 403].includes(status) ? 'configuration' : 'delivery'});
+    expect(result).not.toHaveProperty('devOtp'); expect(read).not.toHaveBeenCalled(); expect(text).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain(KEY); expect(JSON.stringify(result)).not.toContain(OTP);
+    expect(fetch).toHaveBeenCalledOnce(); // No automatic retries or duplicate OTP messages.
+  });
+  it.each(['{}', 'null', '[]', 'not-json', JSON.stringify({id: 'not-a-provider-id'}),
+    JSON.stringify({error: {message: KEY+' '+OTP}}), JSON.stringify({id: ID, error: {message: KEY}})])(
+    'rejects malformed/API-error success acknowledgement #%#', async (body) => {
+      vi.mocked(fetch).mockResolvedValueOnce(new Response(body, {headers: {'Content-Type':'application/json'}}));
+      expect(await send(environment())).toMatchObject({ok:false, kind:'delivery', reason:'invalid-email-provider-response'});
+    });
+  it('rejects oversized or non-JSON acknowledgements', async () => {
+    for (const response of [new Response('x'.repeat(5000), {headers:{'Content-Type':'application/json'}}),
+      new Response(JSON.stringify({id:ID}), {headers:{'Content-Type':'text/html'}})]) {
+      vi.mocked(fetch).mockResolvedValueOnce(response);
+      expect(await send(environment())).toMatchObject({ok:false,reason:'invalid-email-provider-response'});
+    }
+  });
+  it('contains network exception details and logs no OTP, recipient, response or credential', async () => {
+    const logs = ['log', 'info', 'warn', 'error', 'debug'].map((name) => vi.spyOn(console, name).mockImplementation(() => {}));
+    vi.mocked(fetch).mockRejectedValueOnce(new Error(`${KEY} ${OTP} ${message.email}`));
+    const result = await send(environment());
+    expect(result).toEqual({ok:false,provider:'resend',kind:'delivery',reason:'email-transport-failed'});
+    for (const log of logs) expect(log).not.toHaveBeenCalled();
+  });
+  it('bounds a hung request even when the fetch mock ignores AbortSignal', async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}));
+    const pending = send(environment());
+    await vi.advanceTimersByTimeAsync(EMAIL_REQUEST_TIMEOUT_MS);
+    expect(await pending).toEqual({ok:false,provider:'resend',kind:'delivery',reason:'email-request-timeout'});
+    expect(vi.mocked(fetch).mock.calls[0][1].signal.aborted).toBe(true);
+  });
+  it('also bounds response-body reading', async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetch).mockResolvedValue(new Response(new ReadableStream({start() {}}), {headers:{'Content-Type':'application/json'}}));
+    const pending = send(environment());
+    await vi.advanceTimersByTimeAsync(EMAIL_REQUEST_TIMEOUT_MS);
+    expect(await pending).toMatchObject({ok:false,reason:'email-request-timeout'});
+  });
+});
+
+function loginEnvironment() {
+  const env = environment();
+  env.BETA_DB = {prepare(sql) {return {bind() {return {
+    first: async () => sql.includes('FROM users') ? {user_id:'unit-user',email_verified_at:'2026-11-09T00:00:00Z'} : null,
+    all: async () => ({results:[]}), run: async () => ({success:true}),
+  };}};}};
+  return env;
+}
+function loginRequest(env) {
+  return new Request(env.BETA_ALLOWED_ORIGIN+'/api/auth/login', {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({email:message.email,turnstileToken:'unit-captcha'})});
+}
+
+describe('existing auth route delivery boundary', () => {
+  it('returns generic success with no OTP or API credential after provider acceptance', async () => {
+    const env = loginEnvironment();
+    vi.mocked(fetch).mockResolvedValueOnce(accepted());
+    const response = await login({request:loginRequest(env),env});
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.devOtp).toBeNull(); expect(body.ok).toBe(true);
+    const outbound = JSON.parse(vi.mocked(fetch).mock.calls[0][1].body);
+    const sentOtp = outbound.text.match(/\b\d{6}\b/)[0];
+    expect(JSON.stringify(body)).not.toContain(sentOtp); expect(JSON.stringify(body)).not.toContain(KEY);
+  });
+  it('maps configuration and provider failures to the same existing safe external message', async () => {
+    for (const configured of [false, true]) {
+      const env = loginEnvironment();
+      if (!configured) delete env.RESEND_API_KEY;
+      else vi.mocked(fetch).mockResolvedValueOnce(new Response(KEY+' '+OTP, {status:403}));
+      const response = await login({request:loginRequest(env),env});
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ok:false,message:'Verification delivery is temporarily unavailable.'});
+    }
+  });
+  it('never exports provider credentials in the public build configuration', () => {
+    const result = websiteBuildConfiguration(environment());
+    expect(JSON.stringify(result)).not.toContain(KEY);
+    expect(result).not.toHaveProperty('RESEND_API_KEY'); expect(result).not.toHaveProperty('AUTH_EMAIL_FROM');
+  });
+});

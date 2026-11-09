@@ -1,3 +1,4 @@
+import {requireAdmin, adminHeaders} from './_lib/admin-auth.js';
 import {validateDeployment} from './_lib/deployment.js';
 import {getValidatedSessionFromRequest, authRuntimeValidation} from './_lib/auth.js';
 
@@ -34,6 +35,20 @@ export async function onRequest(context) {
     });
   }
   const pathname = url.pathname.replace(/\/+$/, '') || '/';
+
+  // Protect every admin page alias, including direct /admin/index.html requests.
+  // API handlers independently authorize every operation; static assets contain no data.
+  let adminPath = pathname;
+  try { adminPath = decodeURIComponent(pathname).toLowerCase(); } catch { /* Invalid asset paths do not contain admin data. */ }
+  if (adminPath === '/admin' || adminPath === '/admin.html' || adminPath.startsWith('/admin/')) {
+    const guard = await requireAdmin(request, env);
+    if (guard.response) return guard.response;
+    const response = await next();
+    const headers = new Headers(response.headers);
+    for (const name of ['Cache-Control','Vary','X-Robots-Tag','Referrer-Policy','X-Frame-Options']) headers.set(name,adminHeaders[name]);
+    headers.set('Content-Security-Policy', "frame-ancestors 'none'");
+    return new Response(response.body,{status:response.status,headers});
+  }
 
   if (request.method === 'OPTIONS') {
     return next();

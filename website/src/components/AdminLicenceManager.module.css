@@ -1,0 +1,11 @@
+.console {max-width:1440px;margin:0 auto;padding:2rem 1rem;}
+.columns {display:grid;grid-template-columns:minmax(320px,1fr) minmax(400px,1.5fr);gap:1.5rem;align-items:start;}
+.panel {border:1px solid var(--ifm-color-emphasis-300);border-radius:8px;padding:1rem;min-width:0;overflow-wrap:anywhere;}
+.table {display:table;width:100%;font-size:.85rem;}
+.scroll {overflow-x:auto;}
+.fields {display:grid;grid-template-columns:minmax(110px,auto) 1fr;gap:.35rem 1rem;}
+.fields dt {font-weight:600;}.fields dd {margin:0;}
+.actions {display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;margin:.8rem 0;}
+.device {border-top:1px solid var(--ifm-color-emphasis-300);margin-top:1rem;padding-top:1rem;}
+.notice {padding:.8rem;border:1px solid var(--ifm-color-emphasis-400);border-radius:6px;margin:1rem 0;}
+@media(max-width:1000px){.columns{grid-template-columns:1fr;}}

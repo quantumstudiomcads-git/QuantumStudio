@@ -347,3 +347,22 @@ remain a separate acceptance blocker. No deployment or secret provisioning occur
 
 See [the full Pages runtime contract and flow](PRODUCTION_SIGNING_SERVICE.md#pages-functions-service-binding-integration)
 for exact JSON formats, authentication, failure behavior and manual rollout steps.
+
+
+## Web admin console
+
+`/admin` now provides server-guarded website licence management. Set runtime-only
+`QS_ADMIN_ENABLED=true` and `QS_ADMIN_USER_IDS` to a JSON array of independently
+approved existing verified user UUIDs to enable it. Default examples leave admin
+OFF. No email/domain or first-user promotion is supported. The allowlist must not
+be passed to Docusaurus public configuration. Unconfigured/invalid admin access
+fails closed without blocking public pages or the existing local TEST workflow.
+
+Every admin operation uses the existing HttpOnly session plus the server-managed
+allowlist. Mutations require same-origin JSON/custom-header checks. Review and
+revocation reuse existing operator handlers; issuance calls the existing private
+Service Binding implementation. Operator tokens and signing credentials remain
+server-only. Existing authentication hardening requirements still apply; keep
+admin disabled if stronger operator authentication is required by deployment policy.
+See [Web Admin Licence Manager](WEB_ADMIN_LICENCE_MANAGER.md) for the audit, exact
+routes, workflow, configuration and staging acceptance requirements.

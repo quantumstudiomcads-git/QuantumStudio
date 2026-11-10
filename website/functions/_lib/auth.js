@@ -204,6 +204,14 @@ export async function issueChallengeForUser(env, userId, normalizedEmail, purpos
 
   const delivery = await sendOtpEmail({email: normalizedEmail, otp, purpose, expiryMinutes: 10, env});
   if (!delivery.ok) {
+    // Adapter fields are fixed safe codes; never log the message, recipient or credentials.
+    console.error('qs-email-delivery-failure', {
+      provider: delivery.provider,
+      kind: delivery.kind,
+      reason: delivery.reason,
+      environment: env.BETA_ENVIRONMENT,
+      purpose,
+    });
     return {ok: false, status: 503, code: 'email_delivery_unavailable', message: 'Verification delivery is temporarily unavailable.'};
   }
 

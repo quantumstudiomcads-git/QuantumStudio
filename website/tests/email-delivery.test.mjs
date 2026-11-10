@@ -2,6 +2,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {sendOtpEmail, createEmailProvider} from '../functions/_lib/email-delivery.js';
 import {EMAIL_REQUEST_TIMEOUT_MS, ResendEmailProvider, validateResendConfiguration} from '../functions/_lib/email/resend.js';
 import {websiteBuildConfiguration} from '../functions/_lib/deployment.js';
+import {issueChallengeForUser} from '../functions/_lib/auth.js';
 
 vi.mock('../functions/_lib/beta-registration.js', async () => {
   const actual = await vi.importActual('../functions/_lib/beta-registration.js');
@@ -185,6 +186,7 @@ describe('existing auth route delivery boundary', () => {
     expect(JSON.stringify(body)).not.toContain(sentOtp); expect(JSON.stringify(body)).not.toContain(KEY);
   });
   it('maps configuration and provider failures to the same existing safe external message', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     for (const configured of [false, true]) {
       const env = loginEnvironment();
       if (!configured) delete env.RESEND_API_KEY;
@@ -192,11 +194,58 @@ describe('existing auth route delivery boundary', () => {
       const response = await login({request:loginRequest(env),env});
       expect(response.status).toBe(503);
       expect(await response.json()).toEqual({ok:false,message:'Verification delivery is temporarily unavailable.'});
+      expect(log).toHaveBeenLastCalledWith('qs-email-delivery-failure', {
+        provider: configured ? 'resend' : null, kind: 'configuration',
+        reason: configured ? 'email-provider-configuration-rejected' : 'invalid-email-api-key',
+        environment: 'staging', purpose: 'LOGIN',
+      });
     }
   });
   it('never exports provider credentials in the public build configuration', () => {
     const result = websiteBuildConfiguration(environment());
     expect(JSON.stringify(result)).not.toContain(KEY);
     expect(result).not.toHaveProperty('RESEND_API_KEY'); expect(result).not.toHaveProperty('AUTH_EMAIL_FROM');
+  });
+});
+
+describe('safe auth email failure observability', () => {
+  for (const mode of ['staging', 'production']) {
+    it.each(['SIGNUP','LOGIN'])(`${mode} logs only safe failure fields for %s`, async (purpose) => {
+      const logs = ['log','info','warn','error','debug'].map(name => vi.spyOn(console,name).mockImplementation(() => {}));
+      vi.spyOn(Math,'random').mockReturnValue(0.5);
+      const env=loginEnvironment();env.BETA_ENVIRONMENT=mode;
+      const privateBody=`${KEY} ${message.email} 550000 Authorization: Bearer private-header`;
+      vi.mocked(fetch).mockResolvedValueOnce(new Response(privateBody,{status:403}));
+      const result=await issueChallengeForUser(env,'unit-user',message.email,purpose);
+      expect(result).toEqual({ok:false,status:503,code:'email_delivery_unavailable',message:'Verification delivery is temporarily unavailable.'});
+      const outbound=JSON.parse(vi.mocked(fetch).mock.calls[0][1].body);
+      const actualOtp=outbound.text.match(/\b\d{6}\b/)[0];
+      expect(actualOtp).toBe('550000');
+      expect(console.error).toHaveBeenCalledExactlyOnceWith('qs-email-delivery-failure',{
+        provider:'resend',kind:'configuration',reason:'email-provider-configuration-rejected',environment:mode,purpose,
+      });
+      const serialized=JSON.stringify(logs.flatMap(log=>log.mock.calls));
+      for(const forbidden of [KEY,message.email,actualOtp,env.AUTH_EMAIL_FROM,privateBody,'Authorization','private-header',env.AUTH_OTP_PEPPER]) {
+        expect(serialized).not.toContain(forbidden);
+      }
+      for(const log of logs.filter(log=>log!==console.error))expect(log).not.toHaveBeenCalled();
+    });
+  }
+  it.each(['configuration','http','malformed','network'])('logs the adapter safe reason for %s failure', async (kind) => {
+    const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+    const env=loginEnvironment();let expected;
+    if(kind==='configuration') {delete env.RESEND_API_KEY;expected={provider:null,kind:'configuration',reason:'invalid-email-api-key'};}
+    if(kind==='http') {vi.mocked(fetch).mockResolvedValueOnce(new Response(KEY+' '+message.email,{status:500}));expected={provider:'resend',kind:'delivery',reason:'email-provider-rejected'};}
+    if(kind==='malformed') {vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({error:KEY+' '+message.email}),{headers:{'Content-Type':'application/json'}}));expected={provider:'resend',kind:'delivery',reason:'invalid-email-provider-response'};}
+    if(kind==='network') {vi.mocked(fetch).mockRejectedValueOnce(new Error(KEY+' '+message.email));expected={provider:'resend',kind:'delivery',reason:'email-transport-failed'};}
+    await issueChallengeForUser(env,'unit-user',message.email,'SIGNUP');
+    expect(log).toHaveBeenCalledExactlyOnceWith('qs-email-delivery-failure',{...expected,environment:'staging',purpose:'SIGNUP'});
+    expect(JSON.stringify(log.mock.calls)).not.toContain(KEY);expect(JSON.stringify(log.mock.calls)).not.toContain(message.email);
+  });
+  it('does not log provider acceptance',async()=>{
+    const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+    vi.mocked(fetch).mockResolvedValueOnce(accepted());
+    expect((await issueChallengeForUser(loginEnvironment(),'unit-user',message.email,'SIGNUP')).ok).toBe(true);
+    expect(log).not.toHaveBeenCalled();
   });
 });

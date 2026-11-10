@@ -106,12 +106,28 @@ describe('bounded Resend HTTPS adapter', () => {
     expect(fetch).toHaveBeenCalledOnce();
     const [url, options] = vi.mocked(fetch).mock.calls[0];
     expect(url).toBe('https://api.resend.com/emails');
-    expect(options).toMatchObject({method: 'POST', redirect: 'error', headers: {
+    expect(options).toMatchObject({method: 'POST', redirect: 'manual', headers: {
       Authorization: 'Bearer '+KEY, 'Content-Type': 'application/json', 'User-Agent': 'QuantumStudio-Auth/0.2'}});
     expect(JSON.parse(options.body)).toEqual({from: env.AUTH_EMAIL_FROM, to: [message.email],
       subject: 'Quantum Studio verification code',
       text: `Your Quantum Studio verification code is: ${OTP}\n\nThis code expires in 10 minutes.\nIf you did not request this code, you can ignore this email.`});
     expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+  it.each([300, 301, 302, 303, 304, 305, 306, 307, 308, 399])('rejects HTTP %s without following redirects or reading sensitive headers/bodies', async (status) => {
+    const logs = ['log', 'info', 'warn', 'error', 'debug'].map(name => vi.spyOn(console, name).mockImplementation(() => {}));
+    const location = `https://redirect.unit-fixture.org/${KEY}/${OTP}/${message.email}`;
+    const response = new Response(status === 304 ? null : `${KEY} ${OTP} ${message.email}`, {status, headers:{Location:location}});
+    const headers = vi.spyOn(response.headers, 'get');
+    const readText = vi.spyOn(response, 'text');
+    const readJson = vi.spyOn(response, 'json');
+    vi.mocked(fetch).mockResolvedValueOnce(response);
+    expect(await send(environment())).toEqual({ok:false, provider:'resend', kind:'delivery', reason:'email-provider-redirect-rejected'});
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('https://api.resend.com/emails', expect.objectContaining({redirect:'manual'}));
+    expect(headers).not.toHaveBeenCalled();
+    expect(readText).not.toHaveBeenCalled();
+    expect(readJson).not.toHaveBeenCalled();
+    expect(response.bodyUsed).toBe(false);
+    for (const log of logs) expect(log).not.toHaveBeenCalled();
   });
   it.each([400, 401, 403, 422, 429, 500, 503])('handles HTTP %s without reading or leaking sensitive failure bodies', async (status) => {
     const response = new Response(JSON.stringify({message: `${KEY} ${OTP} ${message.email}`}), {status});
@@ -247,6 +263,24 @@ describe('existing auth route delivery boundary', () => {
     });
     expect(log).toHaveBeenCalledTimes(2);
     for (const forbidden of [KEY, message.email, '550000', env.AUTH_EMAIL_FROM]) expect(JSON.stringify(log.mock.calls)).not.toContain(forbidden);
+  });
+  it.each([301, 302, 307, 308])('keeps HTTP %s redirect details out of browser responses and logs', async (status) => {
+    const logs = ['log', 'info', 'warn', 'error', 'debug'].map(name => vi.spyOn(console, name).mockImplementation(() => {}));
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const env = loginEnvironment();
+    const location = `https://redirect.unit-fixture.org/${KEY}/${message.email}/550000`;
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(`${KEY} ${message.email} 550000`, {status, headers:{Location:location}}));
+    const response = await login({request:loginRequest(env),env});
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body).toEqual({ok:false,message:'Verification delivery is temporarily unavailable.'});
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(console.error).toHaveBeenCalledExactlyOnceWith('qs-email-delivery-failure', {
+      provider:'resend', kind:'delivery', reason:'email-provider-redirect-rejected', environment:'staging', purpose:'LOGIN',
+    });
+    const serialized = JSON.stringify([body, ...logs.flatMap(log => log.mock.calls)]);
+    for (const forbidden of [KEY, message.email, '550000', location, 'Location', env.AUTH_EMAIL_FROM]) expect(serialized).not.toContain(forbidden);
+    for (const log of logs.filter(log => log !== console.error)) expect(log).not.toHaveBeenCalled();
   });
   it('never exports provider credentials in the public build configuration', () => {
     const result = websiteBuildConfiguration(environment());

@@ -98,12 +98,13 @@ export class ResendEmailProvider {
     });
     const attempt = async () => {
       try {
-        const response = await this.#fetch(ENDPOINT, {method: 'POST', redirect: 'error', signal: controller.signal,
+        const response = await this.#fetch(ENDPOINT, {method: 'POST', redirect: 'manual', signal: controller.signal,
           headers: {'Authorization': 'Bearer ' + this.#apiKey, 'Content-Type': 'application/json',
             'Accept': 'application/json', 'User-Agent': 'QuantumStudio-Auth/0.2'},
           body: JSON.stringify({from: this.#from, to: [email], subject: 'Quantum Studio verification code',
             text: `Your Quantum Studio verification code is: ${otp}\n\nThis code expires in ${expiryMinutes} minutes.\nIf you did not request this code, you can ignore this email.`}),
         });
+        if (response.status >= 300 && response.status < 400) return failed('delivery', 'email-provider-redirect-rejected');
         if (response.status === 401 || response.status === 403) return failed('configuration', 'email-provider-configuration-rejected');
         if (!response.ok) return failed('delivery', 'email-provider-rejected');
         try {

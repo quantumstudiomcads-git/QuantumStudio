@@ -104,11 +104,12 @@ describe('bounded Resend HTTPS adapter', () => {
     const env = environment();
     expect((await sendOtpEmail({...message, purpose, env})).ok).toBe(true);
     expect(fetch).toHaveBeenCalledOnce();
-    const [url, options] = vi.mocked(fetch).mock.calls[0];
-    expect(url).toBe('https://api.resend.com/emails');
-    expect(options).toMatchObject({method: 'POST', redirect: 'manual', headers: {
-      Authorization: 'Bearer '+KEY, 'Content-Type': 'application/json', 'User-Agent': 'QuantumStudio-Auth/0.2'}});
-    expect(JSON.parse(options.body)).toEqual({from: env.AUTH_EMAIL_FROM, to: [message.email],
+    const [options] = vi.mocked(fetch).mock.calls[0];
+    expect(options).toBeInstanceOf(Request);
+    expect(options.url).toBe('https://api.resend.com/emails');
+    expect(options).toMatchObject({method: 'POST', redirect: 'manual'});
+    expect(Object.fromEntries(options.headers)).toMatchObject({authorization: 'Bearer '+KEY, 'content-type': 'application/json', 'user-agent': 'QuantumStudio-Auth/0.2'});
+    expect(await options.clone().json()).toEqual({from: env.AUTH_EMAIL_FROM, to: [message.email],
       subject: 'Quantum Studio verification code',
       text: `Your Quantum Studio verification code is: ${OTP}\n\nThis code expires in 10 minutes.\nIf you did not request this code, you can ignore this email.`});
     expect(options.signal).toBeInstanceOf(AbortSignal);
@@ -122,7 +123,7 @@ describe('bounded Resend HTTPS adapter', () => {
     const readJson = vi.spyOn(response, 'json');
     vi.mocked(fetch).mockResolvedValueOnce(response);
     expect(await send(environment())).toEqual({ok:false, provider:'resend', kind:'delivery', reason:'email-provider-redirect-rejected'});
-    expect(fetch).toHaveBeenCalledExactlyOnceWith('https://api.resend.com/emails', expect.objectContaining({redirect:'manual'}));
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({redirect:'manual'}));
     expect(headers).not.toHaveBeenCalled();
     expect(readText).not.toHaveBeenCalled();
     expect(readJson).not.toHaveBeenCalled();
@@ -161,7 +162,7 @@ describe('bounded Resend HTTPS adapter', () => {
     const result = await send(environment(mode));
     expect(result).toEqual({ok:false,provider:'resend',kind:'delivery',reason:'email-transport-failed'});
     expect(console.error).toHaveBeenCalledExactlyOnceWith('qs-resend-transport-exception', {
-      name: 'TypeError', aborted: false, environment: mode,
+      name: 'TypeError', stage: 'fetch', aborted: false, environment: mode,
     });
     const serialized = JSON.stringify(logs.flatMap(log => log.mock.calls));
     for (const forbidden of [KEY, OTP, message.email, 'Authorization', 'stack', 'code']) expect(serialized).not.toContain(forbidden);
@@ -175,21 +176,34 @@ describe('bounded Resend HTTPS adapter', () => {
     vi.mocked(fetch).mockRejectedValueOnce(kind === 'primitive' ? secret : error);
     expect(await send(environment())).toMatchObject({ok:false, reason:'email-transport-failed'});
     expect(log).toHaveBeenCalledExactlyOnceWith('qs-resend-transport-exception', {
-      name: kind === 'primitive' ? 'string' : 'Error', aborted: false, environment: 'staging',
+      name: kind === 'primitive' ? 'string' : 'Error', stage: 'fetch', aborted: false, environment: 'staging',
     });
     for (const forbidden of [KEY, OTP, message.email]) expect(JSON.stringify(log.mock.calls)).not.toContain(forbidden);
+  });
+  it('distinguishes request construction failure without fetching or leaking exception details', async () => {
+    const logs = ['log', 'info', 'warn', 'error', 'debug'].map(name => vi.spyOn(console, name).mockImplementation(() => {}));
+    const secret = `${KEY} ${OTP} ${message.email} Authorization Location`;
+    vi.stubGlobal('Request', class {constructor() {throw new TypeError(secret);}});
+    expect(await send(environment())).toEqual({ok:false, provider:'resend', kind:'delivery', reason:'email-transport-failed'});
+    expect(fetch).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledExactlyOnceWith('qs-resend-request-construction-failure', {
+      name:'TypeError', stage:'request-construction', environment:'staging',
+    });
+    const serialized = JSON.stringify(logs.flatMap(log => log.mock.calls));
+    for (const forbidden of [KEY, OTP, message.email, 'Authorization', 'Location', 'stack']) expect(serialized).not.toContain(forbidden);
+    for (const log of logs.filter(log => log !== console.error)) expect(log).not.toHaveBeenCalled();
   });
   it('logs aborted transport metadata while preserving the timeout result', async () => {
     vi.useFakeTimers();
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.mocked(fetch).mockImplementation((url, {signal}) => new Promise((resolve, reject) => {
+    vi.mocked(fetch).mockImplementation(({signal}) => new Promise((resolve, reject) => {
       signal.addEventListener('abort', () => reject(Object.assign(new Error(KEY+' '+OTP), {name:'AbortError'})));
     }));
     const pending = send(environment());
     await vi.advanceTimersByTimeAsync(EMAIL_REQUEST_TIMEOUT_MS);
     expect(await pending).toMatchObject({ok:false, reason:'email-request-timeout'});
     expect(log).toHaveBeenCalledExactlyOnceWith('qs-resend-transport-exception', {
-      name:'AbortError', aborted:true, environment:'staging',
+      name:'AbortError', stage:'fetch', aborted:true, environment:'staging',
     });
   });
   it('bounds a hung request even when the fetch mock ignores AbortSignal', async () => {
@@ -198,7 +212,7 @@ describe('bounded Resend HTTPS adapter', () => {
     const pending = send(environment());
     await vi.advanceTimersByTimeAsync(EMAIL_REQUEST_TIMEOUT_MS);
     expect(await pending).toEqual({ok:false,provider:'resend',kind:'delivery',reason:'email-request-timeout'});
-    expect(vi.mocked(fetch).mock.calls[0][1].signal.aborted).toBe(true);
+    expect(vi.mocked(fetch).mock.calls[0][0].signal.aborted).toBe(true);
   });
   it('also bounds response-body reading', async () => {
     vi.useFakeTimers();
@@ -230,7 +244,7 @@ describe('existing auth route delivery boundary', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.devOtp).toBeNull(); expect(body.ok).toBe(true);
-    const outbound = JSON.parse(vi.mocked(fetch).mock.calls[0][1].body);
+    const outbound = await vi.mocked(fetch).mock.calls[0][0].clone().json();
     const sentOtp = outbound.text.match(/\b\d{6}\b/)[0];
     expect(JSON.stringify(body)).not.toContain(sentOtp); expect(JSON.stringify(body)).not.toContain(KEY);
   });
@@ -259,7 +273,7 @@ describe('existing auth route delivery boundary', () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ok:false,message:'Verification delivery is temporarily unavailable.'});
     expect(log).toHaveBeenNthCalledWith(1, 'qs-resend-transport-exception', {
-      name:'TypeError', aborted:false, environment:'staging',
+      name:'TypeError', stage:'fetch', aborted:false, environment:'staging',
     });
     expect(log).toHaveBeenCalledTimes(2);
     for (const forbidden of [KEY, message.email, '550000', env.AUTH_EMAIL_FROM]) expect(JSON.stringify(log.mock.calls)).not.toContain(forbidden);
@@ -299,7 +313,7 @@ describe('safe auth email failure observability', () => {
       vi.mocked(fetch).mockResolvedValueOnce(new Response(privateBody,{status:403}));
       const result=await issueChallengeForUser(env,'unit-user',message.email,purpose);
       expect(result).toEqual({ok:false,status:503,code:'email_delivery_unavailable',message:'Verification delivery is temporarily unavailable.'});
-      const outbound=JSON.parse(vi.mocked(fetch).mock.calls[0][1].body);
+      const outbound=await vi.mocked(fetch).mock.calls[0][0].clone().json();
       const actualOtp=outbound.text.match(/\b\d{6}\b/)[0];
       expect(actualOtp).toBe('550000');
       expect(console.error).toHaveBeenCalledExactlyOnceWith('qs-email-delivery-failure',{

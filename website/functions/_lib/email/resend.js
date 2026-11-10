@@ -68,6 +68,14 @@ async function acknowledgement(response) {
     && Object.keys(data).length === 1 && typeof data.id === 'string' && uuid.test(data.id);
 }
 
+// Temporary diagnostics use fixed names only, never exception messages or other properties.
+function safeErrorName(error) {
+  return error instanceof Error
+    ? (['Error', 'TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'URIError',
+        'EvalError', 'AggregateError', 'AbortError', 'TimeoutError'].includes(error.name) ? error.name : 'Error')
+    : typeof error;
+}
+
 export class ResendEmailProvider {
   #apiKey;
   #from;
@@ -97,13 +105,22 @@ export class ResendEmailProvider {
       }, EMAIL_REQUEST_TIMEOUT_MS);
     });
     const attempt = async () => {
+      let outboundRequest;
       try {
-        const response = await this.#fetch(ENDPOINT, {method: 'POST', redirect: 'manual', signal: controller.signal,
+        outboundRequest = new Request(ENDPOINT, {method: 'POST', redirect: 'manual', signal: controller.signal,
           headers: {'Authorization': 'Bearer ' + this.#apiKey, 'Content-Type': 'application/json',
             'Accept': 'application/json', 'User-Agent': 'QuantumStudio-Auth/0.2'},
           body: JSON.stringify({from: this.#from, to: [email], subject: 'Quantum Studio verification code',
             text: `Your Quantum Studio verification code is: ${otp}\n\nThis code expires in ${expiryMinutes} minutes.\nIf you did not request this code, you can ignore this email.`}),
         });
+      } catch (error) {
+        console.error('qs-resend-request-construction-failure', {
+          name: safeErrorName(error), stage: 'request-construction', environment: this.#environment,
+        });
+        return failed('delivery', 'email-transport-failed');
+      }
+      try {
+        const response = await this.#fetch(outboundRequest);
         if (response.status >= 300 && response.status < 400) return failed('delivery', 'email-provider-redirect-rejected');
         if (response.status === 401 || response.status === 403) return failed('configuration', 'email-provider-configuration-rejected');
         if (!response.ok) return failed('delivery', 'email-provider-rejected');
@@ -112,13 +129,8 @@ export class ResendEmailProvider {
         } catch { return failed('delivery', 'invalid-email-provider-response'); }
         return {ok: true, provider: 'resend'};
       } catch (error) {
-        // Temporary transport diagnostic: allowlist names; never serialize exception details.
-        const name = error instanceof Error
-          ? (['Error', 'TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'URIError',
-              'EvalError', 'AggregateError', 'AbortError', 'TimeoutError'].includes(error.name) ? error.name : 'Error')
-          : typeof error;
         console.error('qs-resend-transport-exception', {
-          name, aborted: controller.signal.aborted, environment: this.#environment,
+          name: safeErrorName(error), stage: 'fetch', aborted: controller.signal.aborted, environment: this.#environment,
         });
         return failed('delivery', controller.signal.aborted ? 'email-request-timeout' : 'email-transport-failed');
       }

@@ -1,4 +1,4 @@
-// Server-side adapter only. No SDK dependency, configurable endpoint, logging or retries.
+// Server-side adapter only. No SDK dependency, configurable endpoint or retries.
 import {placeholder, validOrigin, validateDeployment} from '../deployment.js';
 
 const ENDPOINT = 'https://api.resend.com/emails';
@@ -72,11 +72,13 @@ export class ResendEmailProvider {
   #apiKey;
   #from;
   #fetch;
+  #environment;
   constructor(env, fetchImpl = fetch) {
     if (!validateDeployment(env).ok || !validateResendConfiguration(env).ok) throw new EmailConfigurationError();
     this.#apiKey = env.RESEND_API_KEY;
     this.#from = env.AUTH_EMAIL_FROM;
     this.#fetch = fetchImpl;
+    this.#environment = env.BETA_ENVIRONMENT;
   }
 
   /** @returns {Promise<EmailDeliveryResult>} */
@@ -108,7 +110,15 @@ export class ResendEmailProvider {
           if (!await acknowledgement(response)) return failed('delivery', 'invalid-email-provider-response');
         } catch { return failed('delivery', 'invalid-email-provider-response'); }
         return {ok: true, provider: 'resend'};
-      } catch {
+      } catch (error) {
+        // Temporary transport diagnostic: allowlist names; never serialize exception details.
+        const name = error instanceof Error
+          ? (['Error', 'TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'URIError',
+              'EvalError', 'AggregateError', 'AbortError', 'TimeoutError'].includes(error.name) ? error.name : 'Error')
+          : typeof error;
+        console.error('qs-resend-transport-exception', {
+          name, aborted: controller.signal.aborted, environment: this.#environment,
+        });
         return failed('delivery', controller.signal.aborted ? 'email-request-timeout' : 'email-transport-failed');
       }
     };

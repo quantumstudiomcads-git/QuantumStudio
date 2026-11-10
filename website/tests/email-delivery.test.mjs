@@ -136,12 +136,45 @@ describe('bounded Resend HTTPS adapter', () => {
       expect(await send(environment())).toMatchObject({ok:false,reason:'invalid-email-provider-response'});
     }
   });
-  it('contains network exception details and logs no OTP, recipient, response or credential', async () => {
+  it.each(['staging', 'production'])('%s logs only safe transport metadata, excluding exception details', async (mode) => {
     const logs = ['log', 'info', 'warn', 'error', 'debug'].map((name) => vi.spyOn(console, name).mockImplementation(() => {}));
-    vi.mocked(fetch).mockRejectedValueOnce(new Error(`${KEY} ${OTP} ${message.email}`));
-    const result = await send(environment());
+    const error = new TypeError(`${KEY} ${OTP} ${message.email}`);
+    error.stack = `Authorization: Bearer ${KEY}`;
+    error.code = message.email;
+    vi.mocked(fetch).mockRejectedValueOnce(error);
+    const result = await send(environment(mode));
     expect(result).toEqual({ok:false,provider:'resend',kind:'delivery',reason:'email-transport-failed'});
-    for (const log of logs) expect(log).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledExactlyOnceWith('qs-resend-transport-exception', {
+      name: 'TypeError', aborted: false, environment: mode,
+    });
+    const serialized = JSON.stringify(logs.flatMap(log => log.mock.calls));
+    for (const forbidden of [KEY, OTP, message.email, 'Authorization', 'stack', 'code']) expect(serialized).not.toContain(forbidden);
+    for (const log of logs.filter(log => log !== console.error)) expect(log).not.toHaveBeenCalled();
+  });
+  it.each(['custom-name', 'primitive'])('does not log sensitive %s exception values', async (kind) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const secret = `${KEY} ${OTP} ${message.email}`;
+    const error = new Error(secret);
+    error.name = secret;
+    vi.mocked(fetch).mockRejectedValueOnce(kind === 'primitive' ? secret : error);
+    expect(await send(environment())).toMatchObject({ok:false, reason:'email-transport-failed'});
+    expect(log).toHaveBeenCalledExactlyOnceWith('qs-resend-transport-exception', {
+      name: kind === 'primitive' ? 'string' : 'Error', aborted: false, environment: 'staging',
+    });
+    for (const forbidden of [KEY, OTP, message.email]) expect(JSON.stringify(log.mock.calls)).not.toContain(forbidden);
+  });
+  it('logs aborted transport metadata while preserving the timeout result', async () => {
+    vi.useFakeTimers();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(fetch).mockImplementation((url, {signal}) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(Object.assign(new Error(KEY+' '+OTP), {name:'AbortError'})));
+    }));
+    const pending = send(environment());
+    await vi.advanceTimersByTimeAsync(EMAIL_REQUEST_TIMEOUT_MS);
+    expect(await pending).toMatchObject({ok:false, reason:'email-request-timeout'});
+    expect(log).toHaveBeenCalledExactlyOnceWith('qs-resend-transport-exception', {
+      name:'AbortError', aborted:true, environment:'staging',
+    });
   });
   it('bounds a hung request even when the fetch mock ignores AbortSignal', async () => {
     vi.useFakeTimers();
@@ -201,6 +234,20 @@ describe('existing auth route delivery boundary', () => {
       });
     }
   });
+  it('keeps the browser response generic for transport exceptions without logging sensitive details', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const env = loginEnvironment();
+    vi.mocked(fetch).mockRejectedValueOnce(new TypeError(`${KEY} ${message.email} 550000`));
+    const response = await login({request:loginRequest(env),env});
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ok:false,message:'Verification delivery is temporarily unavailable.'});
+    expect(log).toHaveBeenNthCalledWith(1, 'qs-resend-transport-exception', {
+      name:'TypeError', aborted:false, environment:'staging',
+    });
+    expect(log).toHaveBeenCalledTimes(2);
+    for (const forbidden of [KEY, message.email, '550000', env.AUTH_EMAIL_FROM]) expect(JSON.stringify(log.mock.calls)).not.toContain(forbidden);
+  });
   it('never exports provider credentials in the public build configuration', () => {
     const result = websiteBuildConfiguration(environment());
     expect(JSON.stringify(result)).not.toContain(KEY);
@@ -239,7 +286,8 @@ describe('safe auth email failure observability', () => {
     if(kind==='malformed') {vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({error:KEY+' '+message.email}),{headers:{'Content-Type':'application/json'}}));expected={provider:'resend',kind:'delivery',reason:'invalid-email-provider-response'};}
     if(kind==='network') {vi.mocked(fetch).mockRejectedValueOnce(new Error(KEY+' '+message.email));expected={provider:'resend',kind:'delivery',reason:'email-transport-failed'};}
     await issueChallengeForUser(env,'unit-user',message.email,'SIGNUP');
-    expect(log).toHaveBeenCalledExactlyOnceWith('qs-email-delivery-failure',{...expected,environment:'staging',purpose:'SIGNUP'});
+    expect(log).toHaveBeenCalledTimes(kind==='network'?2:1);
+    expect(log).toHaveBeenLastCalledWith('qs-email-delivery-failure',{...expected,environment:'staging',purpose:'SIGNUP'});
     expect(JSON.stringify(log.mock.calls)).not.toContain(KEY);expect(JSON.stringify(log.mock.calls)).not.toContain(message.email);
   });
   it('does not log provider acceptance',async()=>{

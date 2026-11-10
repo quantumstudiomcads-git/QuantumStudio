@@ -81,7 +81,7 @@ export class ResendEmailProvider {
   #from;
   #fetch;
   #environment;
-  constructor(env, fetchImpl = fetch) {
+  constructor(env, fetchImpl = globalThis.fetch.bind(globalThis)) {
     if (!validateDeployment(env).ok || !validateResendConfiguration(env).ok) throw new EmailConfigurationError();
     this.#apiKey = env.RESEND_API_KEY;
     this.#from = env.AUTH_EMAIL_FROM;

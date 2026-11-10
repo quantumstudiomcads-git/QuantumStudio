@@ -99,6 +99,30 @@ describe('Resend configuration validation', () => {
 });
 
 describe('bounded Resend HTTPS adapter', () => {
+  it.each(['direct', 'factory', 'auth-boundary'])('%s default fetch preserves the global receiver', async (path) => {
+    const receiverSensitiveFetch = vi.fn(function(request) {
+      if (this !== globalThis) throw new TypeError('Illegal invocation');
+      expect(request).toBeInstanceOf(Request);
+      return Promise.resolve(accepted());
+    });
+    vi.stubGlobal('fetch', receiverSensitiveFetch);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const env = environment();
+    const result = path === 'direct' ? await new ResendEmailProvider(env).send(message)
+      : path === 'factory' ? await createEmailProvider(env).send(message)
+      : await send(env);
+    expect(result).toEqual({ok:true, provider:'resend'});
+    expect(receiverSensitiveFetch).toHaveBeenCalledOnce();
+    expect(receiverSensitiveFetch.mock.contexts[0]).toBe(globalThis);
+    expect(log).not.toHaveBeenCalled();
+  });
+  it('preserves an explicitly injected fetch implementation', async () => {
+    const injected = vi.fn(async () => accepted());
+    expect(await send(environment(), injected)).toEqual({ok:true, provider:'resend'});
+    expect(injected).toHaveBeenCalledExactlyOnceWith(expect.any(Request));
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it.each(['LOGIN', 'SIGNUP'])('sends the unchanged %s OTP with configurable sender and expiry', async (purpose) => {
     vi.mocked(fetch).mockResolvedValueOnce(accepted());
     const env = environment();

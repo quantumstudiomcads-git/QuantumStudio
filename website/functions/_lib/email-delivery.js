@@ -5,7 +5,7 @@ import {EmailConfigurationError, ResendEmailProvider, validateResendConfiguratio
 
 // Providers implement send({email, otp, purpose, expiryMinutes}) -> EmailDeliveryResult.
 // Local modes intentionally never make an external email request.
-export function createEmailProvider(env, fetchImpl = fetch) {
+export function createEmailProvider(env, fetchImpl) {
   if (!validateDeployment(env).ok) throw new EmailConfigurationError();
   if (isLocalDeployment(env)) {
     const name = env.AUTH_EMAIL_TEST_MODE === 'true' ? 'local-dev' : 'stub';
@@ -15,7 +15,7 @@ export function createEmailProvider(env, fetchImpl = fetch) {
 }
 
 /** @returns {Promise<EmailDeliveryResult>} */
-export async function sendOtpEmail({email, otp, purpose, expiryMinutes, env}, fetchImpl = fetch) {
+export async function sendOtpEmail({email, otp, purpose, expiryMinutes, env}, fetchImpl) {
   if (!validateDeployment(env).ok) {
     return {ok: false, provider: null, kind: 'configuration', reason: 'deployment-configuration-unavailable'};
   }

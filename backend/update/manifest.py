@@ -54,16 +54,19 @@ class ReleaseManifest:
         return value
 
 
-def parse_manifest(value: Mapping[str, Any], verifier: UpdateVerifier) -> ReleaseManifest:
+def parse_manifest(value: Mapping[str, Any], verifier: UpdateVerifier, *, update_profile=None, now=None) -> ReleaseManifest:
     if not isinstance(value, Mapping):
         raise UpdateError(UpdateErrorCode.MANIFEST_INVALID, "Release manifest must be a JSON object.")
+    if update_profile is not None:verifier=UpdateVerifier(update_profile.trusted_keys)
     verifier.verify(value)
     try:
         schema_version, channel, version = int(value["schema_version"]), str(value["channel"]), str(value["version"])
         platforms = value["platforms"]
     except (KeyError, TypeError, ValueError) as error:
         raise UpdateError(UpdateErrorCode.MANIFEST_INVALID, "Release manifest is incomplete.") from error
-    if schema_version != MANIFEST_SCHEMA_VERSION:
+    if update_profile is not None:
+        update_profile.validate_envelope(value,now=now)
+    if schema_version != (2 if update_profile is not None else MANIFEST_SCHEMA_VERSION):
         raise UpdateError(UpdateErrorCode.UNSUPPORTED_SCHEMA, "Unsupported release manifest schema.")
     try:
         ReleaseVersion.validate_channel(version, channel)
@@ -78,6 +81,9 @@ def parse_manifest(value: Mapping[str, Any], verifier: UpdateVerifier) -> Releas
         # Verify exactly the received signed JSON.  Reconstructing optional
         # defaults before verification would change the bytes under signature.
         verifier.verify(record)
+        if update_profile is not None:
+            update_profile.validate_envelope(record,artifact=True)
+            if record.get('release_version')!=version or record.get('release_revision')!=value['revision']:raise UpdateError(UpdateErrorCode.MANIFEST_INVALID,'Artifact release binding is invalid.')
         parsed[str(name)] = _artifact(record, expected_platform=str(name))
     if len(parsed) != len(platforms):
         raise UpdateError(UpdateErrorCode.MANIFEST_INVALID, "Release platform record is malformed.")
@@ -86,6 +92,9 @@ def parse_manifest(value: Mapping[str, Any], verifier: UpdateVerifier) -> Releas
         if not isinstance(value["engine_pack"], Mapping):
             raise UpdateError(UpdateErrorCode.MANIFEST_INVALID, "Engine Pack record is malformed.")
         verifier.verify(value["engine_pack"])
+        if update_profile is not None:
+            update_profile.validate_envelope(value['engine_pack'],artifact=True)
+            if value['engine_pack'].get('release_version')!=version or value['engine_pack'].get('release_revision')!=value['revision']:raise UpdateError(UpdateErrorCode.MANIFEST_INVALID,'Engine release binding is invalid.')
         engine = _artifact(value["engine_pack"], expected_platform="linux-x86_64", engine=True)
     return ReleaseManifest(schema_version, channel, version, str(value.get("published_at", "")), str(value.get("minimum_supported_version", "")),
                            bool(value.get("mandatory", False)), str(value.get("release_notes_url", "")), str(value.get("release_notes_summary", "")), parsed, engine, dict(value))

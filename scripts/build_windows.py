@@ -82,7 +82,7 @@ def main(argv=None) -> int:
         if args.dry_run:
             print(json.dumps({"status": "PLAN_ONLY", "host_windows": is_windows, "argv": list(plan.nuitka_argv),
                               "output": str(plan.output), "entry": str(plan.entry), "profile":public_profile,
-                              "profile_sha256":__import__("hashlib").sha256(profile_bytes(public_profile)).hexdigest(),"updates":"disabled"}, indent=2)); return 0
+                              "profile_sha256":__import__("hashlib").sha256(profile_bytes(public_profile)).hexdigest(),"updates":"enabled" if public_profile.get("updates",{}).get("enabled") else "disabled"}, indent=2)); return 0
         if not is_windows: raise WindowsBuildError("WINDOWS_BUILD_HOST_REQUIRED: use --dry-run on non-Windows hosts.")
         if not commit: raise WindowsBuildError("GIT_COMMIT_UNAVAILABLE: a real Windows build requires an exact source revision.")
         if dirty and args.channel not in {"development", "dev"}: raise WindowsBuildError("Refusing a dirty beta/release Windows build.")

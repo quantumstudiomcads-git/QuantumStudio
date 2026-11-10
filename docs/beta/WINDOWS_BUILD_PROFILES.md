@@ -40,7 +40,7 @@ implicit deployment profile. Release `--channel` remains separate metadata (use
   development configuration. `Start-QSWebsite`, `Start-QSLicenceManager`, source
   execution and `scripts/qs-local.ps1` are untouched.
 
-The strict public JSON schema has exactly four fields:
+The public JSON schema has four required fields below and an optional public `updates` record described in `DEPLOYED_UPDATE_CONTRACT.md`:
 
 ```json
 {
@@ -110,18 +110,19 @@ can replace its code. No publisher key was generated or provisioned here.
 
 ## Updater boundary
 
-New profiled packages currently have automatic updates DISABLED. No independently
-approved environment-bound update feed/artifact contract exists yet. Both missing/
-invalid profiles and valid profiled packages ignore external update endpoint/key
-variables and shared user channel preferences. Staging cannot silently select
-production artifacts, and production cannot select staging/dev artifacts. No bypass
-switch was added. Manual updates must use the corresponding reviewed installer.
+Tracked profiles still have automatic updates DISABLED with empty update key rings.
+The deployed v2 environment-bound contract is now implemented in
+`DEPLOYED_UPDATE_CONTRACT.md`. Complete approved public update settings can be
+executable-pinned by a reviewed rebuild; source endpoint/key variables and shared
+per-user channel preferences cannot override them. Staging cannot select production
+metadata and production cannot select staging/dev metadata.
 
-Source/development updater configuration remains unchanged. Existing signed manifest
-channel checks, signature/digest checks, version ordering and anti-downgrade behavior
-are untouched and covered by updater regressions. Enabling cloud updates in packaged
-profiles requires a separate reviewed environment-bound feed/public-key/artifact
-contract; this step deliberately does not redesign or provision that service.
+Missing/invalid update configuration stays safely disabled. Source/development
+schema-1 updater behavior remains unchanged and rejects deployed schema 2. Existing
+signature/digest, semantic version and component compatibility checks remain intact;
+v2 additionally binds signed environments/channels/releases and persistent revision
+floors. Native update serving and approval are still manual rollout gates. No feed,
+update key or enabled tracked profile was provisioned by this work.
 
 ## Exact commands (future real builds require a clean reviewed checkout)
 
@@ -189,3 +190,15 @@ production public template is approved/populated. It never falls back to staging
 Existing release-assembly signing remains a separate job; no signing secret is
 introduced into Windows compilation. No workflow was executed or release published
 by these source changes.
+
+
+## Environment-bound updater follow-up
+
+The deployed v2 update contract is now implemented; see
+[Deployed update contract](DEPLOYED_UPDATE_CONTRACT.md). The selected public profile
+may carry explicit environment/channel/endpoint/update trust. Windows resource hashes
+and compiled pins cover those fields; enabled channels must match build metadata.
+Both tracked profiles remain DISABLED with empty update key rings. Missing settings
+never use source update defaults. Enabling requires approved separate update keys,
+operational HTTPS hosting, complete public configuration and a rebuilt executable.
+Existing source schema-1 updater behavior remains separate; it rejects v2 metadata.

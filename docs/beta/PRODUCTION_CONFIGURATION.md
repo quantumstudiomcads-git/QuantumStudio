@@ -218,7 +218,7 @@ Invalid/missing email settings return the existing safe 503 verification-deliver
 failure; they never downgrade staging/production to local test email. No OTP
 lifetime, generation, throttling or consumption semantics change.
 
-As of this step, `quantumstudio-mcads.com` still awaits DNS access/verification.
+As of this step, `quantumstudiomcads.com` still awaits DNS access/verification.
 Do not add a usable API key or attempt real sending before the exact sender domain
 is verified in Resend. Leave `RESEND_API_KEY` unconfigured while blocked: email
 requests then fail locally at configuration validation without a provider call.
@@ -226,7 +226,7 @@ After verification, a manual example (NOT an application default) is:
 
 ```dotenv
 AUTH_EMAIL_PROVIDER=resend
-AUTH_EMAIL_FROM="Quantum Studio <no-reply@quantumstudio-mcads.com>"
+AUTH_EMAIL_FROM="Quantum Studio <no-reply@quantumstudiomcads.com>"
 AUTH_EMAIL_TEST_MODE=false
 ```
 
@@ -392,6 +392,18 @@ fail closed. Source/local environment configuration remains unchanged.
 See [Windows build profiles](WINDOWS_BUILD_PROFILES.md) for the public input schema,
 commands, installer/data-root isolation, secret scans and limitations. Staging's
 public source is `packaging/windows/staging.json`. Production's template is intentionally
-incomplete until independent public values are approved. Automatic updates are disabled
-in new profiled packages pending a reviewed environment-bound update contract; source
-updater behavior and signed anti-downgrade checks remain unchanged.
+incomplete until independent public values are approved. Tracked profiles keep updates disabled pending approved update public pins and
+operational hosting; the v2 environment-bound contract is now implemented below.
+Source updater behavior and signed anti-downgrade checks remain unchanged.
+
+
+## Environment-bound updater follow-up
+
+The deployed v2 update contract is now implemented; see
+[Deployed update contract](DEPLOYED_UPDATE_CONTRACT.md). The selected public profile
+may carry explicit environment/channel/endpoint/update trust. Windows resource hashes
+and compiled pins cover those fields; enabled channels must match build metadata.
+Both tracked profiles remain DISABLED with empty update key rings. Missing settings
+never use source update defaults. Enabling requires approved separate update keys,
+operational HTTPS hosting, complete public configuration and a rebuilt executable.
+Existing source schema-1 updater behavior remains separate; it rejects v2 metadata.

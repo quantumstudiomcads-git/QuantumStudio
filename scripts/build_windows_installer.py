@@ -122,7 +122,7 @@ def _validate_installer_bundle(app_bundle: Path, *, expected_version: str | None
             value,raw=read_profile(root/PROFILE_FILE)
             if (not isinstance(profile,dict) or set(profile)!={'environment','path','sha256','updates'}
                     or profile['path']!=PROFILE_FILE or profile['environment']!=value['environment']
-                    or profile['sha256']!=hashlib.sha256(raw).hexdigest() or profile['updates']!='disabled'):raise ValueError()
+                    or profile['sha256']!=hashlib.sha256(raw).hexdigest() or profile['updates']!=('enabled' if value.get('updates',{}).get('enabled') else 'disabled')):raise ValueError()
         except Exception:raise ValueError('INSTALLER_DESKTOP_PROFILE_INVALID') from None
     try:
         verified = verify_payload_inventory(root, marker, inputs)

@@ -22,7 +22,7 @@ routes = []
 
 [env.staging.vars]
 BETA_ENVIRONMENT = "staging"
-QS_OPERATOR_WEBSITE_URL = "https://staging.quantumstudio-mcads.com"
+QS_OPERATOR_WEBSITE_URL = "https://staging.quantumstudiomcads.com"
 QS_LICENCE_SIGNING_ISSUER_ID = "lic-staging-80b18fccdeb046798d2d85964316d200"
 QS_LICENCE_SIGNING_PUBLIC_KEY = "wbXEh-YYK_5MRmp_BG1wqo3OKW5Cq0LLROByidvsPUI"
 QS_SIGNING_OBJECT_NAME = "quantum-studio-signing-staging-v1"

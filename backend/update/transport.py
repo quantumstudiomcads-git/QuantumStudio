@@ -58,8 +58,16 @@ class HttpsUpdateSource(UpdateSource):
         separator = "&" if "?" in self.manifest_endpoint else "?"
         with self._open(f"{self.manifest_endpoint}{separator}channel={channel}") as response:
             try:
-                return json.loads(response.read().decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raw=response.read(1048577)
+                if len(raw)>1048576:raise ValueError()
+                def unique(pairs):
+                    values={}
+                    for key,value in pairs:
+                        if key in values:raise ValueError()
+                        values[key]=value
+                    return values
+                return json.loads(raw.decode("utf-8"),object_pairs_hook=unique,parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+            except (UnicodeDecodeError, ValueError) as error:
                 raise UpdateError(UpdateErrorCode.MANIFEST_INVALID, "Update server returned invalid JSON.") from error
 
     def download(self, url: str, destination: Path) -> None:

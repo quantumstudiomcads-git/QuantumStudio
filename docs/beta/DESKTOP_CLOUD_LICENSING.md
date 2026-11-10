@@ -127,7 +127,7 @@ not a private secret and not a key fetched from an endpoint.
 
 ```powershell
 $env:BETA_ENVIRONMENT = 'staging'
-$env:QS_WEBSITE_URL = 'https://staging.quantumstudio-mcads.com'
+$env:QS_WEBSITE_URL = 'https://staging.quantumstudiomcads.com'
 $env:QS_LICENCE_TRUST = '{"schema_version":1,"environment":"staging","domain":"licence","algorithm":"Ed25519","keys":{"lic-staging-80b18fccdeb046798d2d85964316d200":"wbXEh-YYK_5MRmp_BG1wqo3OKW5Cq0LLROByidvsPUI"}}'
 $env:QS_TEST_LICENSING = '0'
 $env:QS_DESKTOP_AUTH_ALLOW_LOCAL_HTTP = '0'

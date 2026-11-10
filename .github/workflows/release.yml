@@ -59,12 +59,14 @@ jobs:
         env:
           QUANTUM_STUDIO_UPDATE_SIGNING_KEY: ${{ secrets.QUANTUM_STUDIO_UPDATE_SIGNING_KEY }}
           QUANTUM_STUDIO_UPDATE_SIGNING_KID: ${{ secrets.QUANTUM_STUDIO_UPDATE_SIGNING_KID }}
+          QUANTUM_STUDIO_UPDATE_REVISION: ${{ vars.PRODUCTION_UPDATE_REVISION }}
+          QUANTUM_STUDIO_UPDATE_EXPIRES_AT: ${{ vars.PRODUCTION_UPDATE_EXPIRES_AT }}
         run: |
           test -n "$QUANTUM_STUDIO_UPDATE_SIGNING_KEY"
           test -n "$QUANTUM_STUDIO_UPDATE_SIGNING_KID"
           WINDOWS_ARTIFACT=$(find incoming/windows-release -name '*.exe' -print -quit)
           LINUX_ARTIFACT=$(find incoming/linux-release -name '*.AppImage' -print -quit)
-          python scripts/build_release.py --version "${GITHUB_REF_NAME#v}" --channel beta --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}" --windows-artifact "$WINDOWS_ARTIFACT" --linux-artifact "$LINUX_ARTIFACT" --output "dist/releases/${GITHUB_REF_NAME#v}"
+          python scripts/build_release.py --version "${GITHUB_REF_NAME#v}" --channel beta --update-profile packaging/windows/production.json --revision "$QUANTUM_STUDIO_UPDATE_REVISION" --expires-at "$QUANTUM_STUDIO_UPDATE_EXPIRES_AT" --windows-artifact "$WINDOWS_ARTIFACT" --linux-artifact "$LINUX_ARTIFACT" --output "dist/releases/${GITHUB_REF_NAME#v}"
       - name: Publish artifacts first, signed manifest last
         uses: softprops/action-gh-release@v2
         with:

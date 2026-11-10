@@ -47,11 +47,21 @@ def configured_update_client(*, paths=None, environ=None) -> UpdateClient | None
     configuration is a safe offline/no-update state, suitable before the first
     public release endpoint is approved.
     """
-    # Packaged profiles have no approved environment-bound update feed yet.
-    # Ignore user channel preferences and process feed/key overrides there.
+    # Executable-pinned profiles are authoritative; never inherit source feed/channel settings.
     from backend.runtime.desktop_profile import load_packaged_profile, DesktopProfileError
     try:
-        if load_packaged_profile() is not None: return None
+        packaged=load_packaged_profile()
+        if packaged is not None:
+            from .profile import parse_update_profile
+            try:
+                profile=parse_update_profile(packaged.get('updates'),packaged['environment'],packaged['website_origin'])
+                if not profile.enabled:return None
+                platform=platform_record()
+                if platform=='unsupported':return None
+                return UpdateClient(HttpsUpdateSource(profile.manifest_endpoint),UpdateVerifier(profile.trusted_keys),
+                    current_version=APP_VERSION,platform=platform,channel=profile.channel,update_profile=profile,
+                    runtime_schema_version=RUNTIME_SCHEMA_VERSION,paths=paths or runtime_paths())
+            except (ValueError,TypeError,KeyError):return None
     except DesktopProfileError: return None
     environ = os.environ if environ is None else environ
     endpoint = environ.get("QUANTUM_STUDIO_UPDATE_ENDPOINT", "")

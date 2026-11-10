@@ -73,7 +73,7 @@ sender authorization remain Resend's responsibility.
 
 ## DNS dependency and exact post-verification configuration
 
-`quantumstudio-mcads.com` is awaiting DNS access/verification. Do not perform real
+`quantumstudiomcads.com` is awaiting DNS access/verification. Do not perform real
 send tests or add a usable API key to the running website until verification is
 complete. Keeping `RESEND_API_KEY` unset makes the email path fail closed BEFORE
 any provider request, while the existing configured non-email paths remain usable.
@@ -103,7 +103,7 @@ example requiring approval, not a hardcoded application sender:
 BETA_ENVIRONMENT=staging
 AUTH_EMAIL_TEST_MODE=false
 AUTH_EMAIL_PROVIDER=resend
-AUTH_EMAIL_FROM="Quantum Studio <no-reply@quantumstudio-mcads.com>"
+AUTH_EMAIL_FROM="Quantum Studio <no-reply@quantumstudiomcads.com>"
 ```
 
 Set the encrypted `RESEND_API_KEY` to the separately approved STAGING sending key.

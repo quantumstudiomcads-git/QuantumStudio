@@ -24,9 +24,16 @@ def _unique(pairs):
 def validate_public_profile(value):
     from backend.licensing.configuration import desktop_configuration
     try:
-        if (not isinstance(value,dict) or set(value)!={"schema_version","environment","website_origin","licence_trust"}
+        if (not isinstance(value,dict) or set(value) not in ({"schema_version","environment","website_origin","licence_trust"}, {"schema_version","environment","website_origin","licence_trust","updates"})
                 or type(value['schema_version']) is not int or value['schema_version']!=1
                 or value['environment'] not in {'local','staging','production'}):raise ValueError
+        if 'updates' in value:
+            from backend.update.profile import parse_update_profile
+            if value['environment']=='local':raise ValueError
+            update=parse_update_profile(value['updates'],value['environment'],value['website_origin'])
+            licence_keys=set(value['licence_trust']['keys'].values())
+            from backend.update.signing import b64url_encode
+            if licence_keys & {b64url_encode(key) for key in update.trusted_keys.values()}:raise ValueError
         if value['environment']=='local':
             if value['website_origin']!='' or value['licence_trust']!={}:raise ValueError
         else:

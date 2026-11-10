@@ -8,5 +8,19 @@
     "domain": "licence",
     "algorithm": "Ed25519",
     "keys": {}
+  },
+  "updates": {
+    "schema_version": 1,
+    "enabled": false,
+    "environment": "production",
+    "channel": "beta",
+    "manifest_endpoint": "https://quantumstudiomcads.com/updates/production/release-manifest.json",
+    "trust": {
+      "schema_version": 1,
+      "environment": "production",
+      "domain": "update",
+      "algorithm": "Ed25519",
+      "keys": {}
+    }
   }
 }

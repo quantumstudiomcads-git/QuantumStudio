@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "environment": "staging",
-  "website_origin": "https://staging.quantumstudio-mcads.com",
+  "website_origin": "https://staging.quantumstudiomcads.com",
   "licence_trust": {
     "schema_version": 1,
     "environment": "staging",
@@ -9,6 +9,20 @@
     "algorithm": "Ed25519",
     "keys": {
       "lic-staging-80b18fccdeb046798d2d85964316d200": "wbXEh-YYK_5MRmp_BG1wqo3OKW5Cq0LLROByidvsPUI"
+    }
+  },
+  "updates": {
+    "schema_version": 1,
+    "enabled": false,
+    "environment": "staging",
+    "channel": "beta",
+    "manifest_endpoint": "https://staging.quantumstudiomcads.com/updates/staging/release-manifest.json",
+    "trust": {
+      "schema_version": 1,
+      "environment": "staging",
+      "domain": "update",
+      "algorithm": "Ed25519",
+      "keys": {}
     }
   }
 }

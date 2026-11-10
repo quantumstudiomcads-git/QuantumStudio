@@ -78,7 +78,7 @@ class WindowsBuildPlan:
         if self.desktop_profile is not None:
             from backend.runtime.desktop_profile import profile_bytes, PROFILE_FILE
             result['desktop_profile']={'environment':self.desktop_profile['environment'],'path':PROFILE_FILE,
-                'sha256':hashlib.sha256(profile_bytes(self.desktop_profile)).hexdigest(),'updates':'disabled'}
+                'sha256':hashlib.sha256(profile_bytes(self.desktop_profile)).hexdigest(),'updates':'enabled' if self.desktop_profile.get('updates',{}).get('enabled') else 'disabled'}
         return result
 
 
@@ -108,6 +108,7 @@ def build_plan(*, repo: str | Path, output: str | Path, channel: str, version: s
     if desktop_profile is not None:
         from backend.runtime.desktop_profile import validate_public_profile, PROFILE_FILE, PIN_MODULE
         validate_public_profile(desktop_profile)
+        if desktop_profile.get('updates',{}).get('enabled') and desktop_profile['updates']['channel']!=channel:raise WindowsBuildError('Build channel does not match the pinned update channel.')
         argv=argv[:-1]+(f"--include-data-files={output / 'build-assets' / PROFILE_FILE}={PROFILE_FILE}",
             f"--include-module={PIN_MODULE}","--nofollow-import-to=operator_tools","--nofollow-import-to=cloudflare",argv[-1])
     return WindowsBuildPlan(repo, output, channel, version, commit, dirty, architecture, entry, icon, ico, argv, desktop_profile)

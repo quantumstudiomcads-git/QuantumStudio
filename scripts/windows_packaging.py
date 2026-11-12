@@ -2,6 +2,11 @@
 from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import base64
+import binascii
+import io
+import zipfile
+import zlib
 import hashlib
 import json
 import os
@@ -335,6 +340,132 @@ def _stream_contains_marker(path: Path, markers: tuple[bytes, ...]) -> bool:
     return False
 
 
+# Bounded windows keep scanning linear without reading whole DLLs into memory.
+MAX_PEM_BYTES = 64 * 1024
+_PEM_BODY = re.compile(rb"(?:[A-Za-z0-9+/=]+[\r\n]+)+")
+
+def _contains_private_key(data: bytes) -> bool:
+    for marker in _PRIVATE_KEY_MARKERS:
+        position = 0
+        while (position := data.find(marker, position)) >= 0:
+            start = position + len(marker)
+            position = start
+            candidate = data[start:start + MAX_PEM_BYTES]
+            if not candidate.startswith((b"\n", b"\r\n")):
+                continue  # Compiled parser literals are not PEM envelopes.
+            body = candidate.lstrip(b"\r\n")
+            # Traditional encrypted PEM may have these two metadata lines.
+            if body.startswith(b"Proc-Type: 4,ENCRYPTED"):
+                header = re.match(rb"Proc-Type: 4,ENCRYPTED\r?\nDEK-Info: [A-Z0-9-]+,[0-9A-Fa-f]+\r?\n\r?\n", body)
+                if not header:
+                    continue
+                body = body[header.end():]
+            end_marker = marker.replace(b"BEGIN", b"END", 1)
+            end = body.find(end_marker)
+            encoded = body[:end] if end >= 0 else body
+            compact = re.sub(rb"[\r\n]", b"", encoded)
+            if end >= 0 and 64 <= len(compact) <= MAX_PEM_BYTES:
+                try:
+                    if len(base64.b64decode(compact, validate=True)) >= 48:
+                        return True
+                except (ValueError, binascii.Error):
+                    pass
+            # Fail closed for truncated/oversized PEM-looking bodies, without
+            # classifying isolated BEGIN/END parser literals as key material.
+            prefix = _PEM_BODY.match(body)
+            if (prefix and len(prefix.group().replace(b"\n", b"").replace(b"\r", b"")) >= 64) or re.match(rb"[A-Za-z0-9+/]{64}", body):
+                return True
+    return False
+
+
+def _stream_contains_private_key(path: Path) -> bool:
+    tail = b""
+    with path.open("rb") as stream:
+        while block := stream.read(1024 * 1024):
+            data = tail + block
+            if _contains_private_key(data):
+                return True
+            tail = data[-(MAX_PEM_BYTES + 128):]
+    return False
+
+
+# An exact runtime data exception, not a general scipy/ or .npz allowlist.
+_SCIENTIFIC_NPZ = {"scipy/stats/_sobol_direction_numbers.npz"}
+MAX_NPZ_MEMBERS = 16
+MAX_NPZ_BYTES = 64 * 1024 * 1024
+
+
+def _safe_scientific_npz(path: Path, package_relative: str | None) -> bool:
+    if package_relative not in _SCIENTIFIC_NPZ or path.stat().st_size > MAX_NPZ_BYTES:
+        return False
+    from scripts.windows_profiles import SECRET_BINDINGS
+    from numpy.lib import format as npformat
+    try:
+        with path.open("rb") as raw:
+            if raw.read(4) != b"PK\x03\x04":
+                return False
+            raw.seek(-22, 2)
+            trailer = raw.read()
+            if (trailer[:4] != b"PK\x05\x06" or trailer[-2:] != b"\0\0"
+                    or trailer[4:8] != b"\0" * 4
+                    or not 1 <= int.from_bytes(trailer[10:12], "little") <= MAX_NPZ_MEMBERS
+                    or trailer[8:10] != trailer[10:12]
+                    or int.from_bytes(trailer[12:16], "little") > 64 * 1024):
+                return False  # No appended content or ZIP comment.
+        with zipfile.ZipFile(path) as archive:
+            members = archive.infolist()
+            if not 1 <= len(members) <= MAX_NPZ_MEMBERS or sum(m.file_size for m in members) > MAX_NPZ_BYTES:
+                return False
+            seen = set()
+            for member in members:
+                name = member.filename
+                if (not re.fullmatch(r"[A-Za-z0-9_]+\.npy", name) or name.casefold() in seen
+                        or member.flag_bits & 1 or member.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
+                        or stat.S_IFMT(member.external_attr >> 16) not in {0, stat.S_IFREG}
+                        or member.file_size > MAX_NPZ_BYTES or member.header_offset < 0):
+                    return False
+                seen.add(name.casefold())
+                with archive.open(member) as source:
+                    data = source.read(MAX_NPZ_BYTES + 1)  # CRC checked; bounded even for corrupt metadata.
+                if len(data) != member.file_size or len(data) > MAX_NPZ_BYTES:
+                    return False
+                array = io.BytesIO(data)
+                version = npformat.read_magic(array)
+                if version == (1, 0):
+                    shape, order, dtype = npformat.read_array_header_1_0(array)
+                elif version == (2, 0):
+                    shape, order, dtype = npformat.read_array_header_2_0(array)
+                else:
+                    return False
+                if dtype.hasobject or dtype.fields or dtype.kind not in "biufc" or dtype.itemsize <= 0:
+                    return False
+                size = dtype.itemsize
+                for dimension in shape:
+                    if type(dimension) is not int or dimension < 0 or dimension > MAX_NPZ_BYTES:
+                        return False
+                    size *= dimension
+                if size != len(data) - array.tell():
+                    return False
+                payload = data[array.tell():]
+                if (any(payload.startswith(m) for m in _ARCHIVE_SIGNATURES)
+                        or any(payload.startswith(m) for m, _label in _SQLITE_SIGNATURES)):
+                    return False
+                if len(payload) <= MAX_STRUCTURED_CONTENT_BYTES and payload.lstrip().startswith((b"{", b"[")):
+                    try:
+                        value = _strict_json_bytes(payload, category="PACKAGE_STRUCTURED_CONTENT_INVALID")
+                    except WindowsBuildError:
+                        return False
+                    if _manager_json_violation(value):
+                        return False
+                protected = (b"quantum-studio-protected-key", b"quantum-studio-key-material",
+                             b"licence-signing-ed25519", b"applicant-pii-database-key")
+                if _contains_private_key(data) or any(m in data for m in protected + tuple(n.encode("ascii") for n in SECRET_BINDINGS)):
+                    return False
+        return True
+    except (OSError, ValueError, EOFError, OverflowError, zipfile.BadZipFile, RuntimeError, NotImplementedError, zlib.error):
+        return False
+
+
 def _manager_json_violation(value) -> str | None:
     if not isinstance(value, dict):
         return None
@@ -362,7 +493,7 @@ def _manager_json_violation(value) -> str | None:
     return None
 
 
-def audit_sensitive_payload_content(path: str | Path) -> tuple[str, ...]:
+def audit_sensitive_payload_content(path: str | Path, *, package_relative: str | None = None) -> tuple[str, ...]:
     """Bounded signatures/schema checks; unknown encrypted bytes are not classifiable."""
     path = Path(path)
     before = _regular_file_identity(path)
@@ -384,12 +515,13 @@ def audit_sensitive_payload_content(path: str | Path) -> tuple[str, ...]:
     if _stream_contains_marker(path, (b"quantum-studio-protected-key", b"quantum-studio-key-material",
                                      b"licence-signing-ed25519", b"applicant-pii-database-key")):
         findings.append("manager-protected-key-envelope")
-    archive_suffixes = {".zip", ".whl", ".jar", ".7z", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".xz"}
+    archive_suffixes = {".npz", ".zip", ".whl", ".jar", ".7z", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".xz"}
     if (path.suffix.casefold() in archive_suffixes
             or any(probe.startswith(signature) for signature in _ARCHIVE_SIGNATURES)
             or probe[257:262] == b"ustar"):
-        findings.append("archive-container-forbidden")
-    if _stream_contains_marker(path, _PRIVATE_KEY_MARKERS):
+        if not _safe_scientific_npz(path, package_relative):
+            findings.append("archive-container-forbidden")
+    if _stream_contains_private_key(path):
         findings.append("private-key-material")
     if before[2] <= MAX_STRUCTURED_CONTENT_BYTES:
         with path.open("rb") as stream:
@@ -426,7 +558,7 @@ def audit_customer_package_contents(root: str | Path) -> dict:
                 or path.name.casefold() in FORBIDDEN_NAMES or path.suffix.casefold() in FORBIDDEN_SUFFIXES
                 or "rootfs" in path.name.casefold()):
             forbidden.append(relative)
-        for category in audit_sensitive_payload_content(path):
+        for category in audit_sensitive_payload_content(path, package_relative=relative):
             forbidden.append(f"{relative} [{category}]")
     forbidden = tuple(sorted(set(forbidden)))
     return {"valid": not forbidden, "reason": "" if not forbidden else "FORBIDDEN_PACKAGE_CONTENT", "forbidden": forbidden}
@@ -458,7 +590,7 @@ def audit_package_contents(root: str | Path, *, max_file_size: int = 2 * 1024 * 
             files += 1; total += info[2]
             if info[2] > max_file_size:
                 large.append(relative)
-            for category in audit_sensitive_payload_content(item):
+            for category in audit_sensitive_payload_content(item, package_relative=relative):
                 forbidden.append(f"{relative} [{category}]")
         except (OSError, WindowsBuildError):
             forbidden.append(f"{relative} [file-changed-or-unsafe]")

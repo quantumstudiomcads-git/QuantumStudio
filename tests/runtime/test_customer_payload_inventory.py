@@ -144,7 +144,7 @@ class CustomerPayloadInventoryTests(unittest.TestCase):
             "no-extension": b"SQLite format 3\x00" + b"\x00" * 80,
             "wal.dat": bytes.fromhex("377f0682") + b"\x00" * 80,
             "journal.cache": bytes.fromhex("d9d505f920a163d7") + b"\x00" * 80,
-            "private.dat": b"-----BEGIN OPENSSH PRIVATE KEY-----\nTEST ONLY\n-----END OPENSSH PRIVATE KEY-----",
+            "private.dat": b"-----BEGIN OPENSSH PRIVATE KEY-----\n" + b"A" * 80 + b"\n-----END OPENSSH PRIVATE KEY-----",
             "signing.resource": json.dumps({"format": "quantum-studio-protected-key", "version": 1, "purpose": "licence-signing-ed25519", "protected_data": "AA=="}).encode(),
             "pii.cache": json.dumps({"format": "quantum-studio-key-material", "version": 1, "purpose": "applicant-pii-database-key"}).encode(),
             "applicants.bin": json.dumps({"schema_version": 1, "applications": [{"application_id": "id", "full_name": "Synthetic", "email": "x@example.test", "institution": "Example"}]}).encode(),

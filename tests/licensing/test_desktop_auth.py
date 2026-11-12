@@ -153,6 +153,8 @@ def test_actual_http_transport_uses_no_cookies_or_operator_tokens(device, server
     assert len(handler.received) == 3
     for _path, headers, _body in handler.received:
         assert not {key.lower() for key in headers} & {"cookie", "authorization"}
+        from backend.runtime import VERSION
+        assert headers["User-Agent"] == f"QuantumStudio-Desktop/{VERSION}"
     assert handler.received[0][2] == device_activation_facts(device, "0.2.0")
     assert set(handler.received[1][2]) == {"challenge_id", "device_code"}
 

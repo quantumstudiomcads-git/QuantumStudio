@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from urllib import request, error
 from .base import ConnectorError
+from .http import desktop_json_request
 from .desktop_auth import WebsiteDesktopActivationConnector
 
 
@@ -27,8 +28,7 @@ class WebsiteLicenceDeliveryConnector:
         self._opener = request.build_opener(_NoRedirect())
 
     def _post(self, action, data):
-        req = request.Request(f"{self.base_url}/api/licence/{action}", data=json.dumps(data).encode(),
-                              headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST")
+        req = desktop_json_request(f"{self.base_url}/api/licence/{action}", json.dumps(data).encode())
         try:
             with self._opener.open(req, timeout=self.timeout) as response:
                 raw = response.read(65537)

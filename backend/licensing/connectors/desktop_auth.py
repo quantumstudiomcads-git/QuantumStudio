@@ -5,6 +5,7 @@ import json
 import re
 from urllib import error, parse, request
 from .base import ConnectorError, DesktopActivationConnector
+from .http import desktop_json_request
 
 MAX_BYTES = 8192
 OPAQUE = re.compile(r"[0-9a-f]{64}")
@@ -42,9 +43,8 @@ class WebsiteDesktopActivationConnector(DesktopActivationConnector):
         self._opener = request.build_opener(_NoRedirect())
 
     def _post(self, action, body):
-        req = request.Request(f"{self.base_url}/api/desktop-auth/{action}",
-                              data=json.dumps(body, separators=(",", ":")).encode(),
-                              headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST")
+        req = desktop_json_request(f"{self.base_url}/api/desktop-auth/{action}",
+                                   json.dumps(body, separators=(",", ":")).encode())
         try:
             with self._opener.open(req, timeout=self.timeout) as response:
                 if response.status != 200:

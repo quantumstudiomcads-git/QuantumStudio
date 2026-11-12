@@ -277,6 +277,8 @@ def test_actual_cookie_free_delivery_transport_verifies_and_installs(bundle,serv
     assert LicenceDeliveryService(b.service,connector,b.identity_service).retrieve_and_install()=='installed'
     for _path,headers,_body in handler.received:
         assert not {k.lower() for k in headers}&{'cookie','authorization'}
+        from backend.runtime import VERSION
+        assert headers['User-Agent']==f'QuantumStudio-Desktop/{VERSION}'
 
 
 def test_publication_conflict_is_safe_and_local_identity_preserved(bundle,server):

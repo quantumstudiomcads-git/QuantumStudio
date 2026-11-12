@@ -68,25 +68,15 @@ async function acknowledgement(response) {
     && Object.keys(data).length === 1 && typeof data.id === 'string' && uuid.test(data.id);
 }
 
-// Temporary diagnostics use fixed names only, never exception messages or other properties.
-function safeErrorName(error) {
-  return error instanceof Error
-    ? (['Error', 'TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'URIError',
-        'EvalError', 'AggregateError', 'AbortError', 'TimeoutError'].includes(error.name) ? error.name : 'Error')
-    : typeof error;
-}
-
 export class ResendEmailProvider {
   #apiKey;
   #from;
   #fetch;
-  #environment;
   constructor(env, fetchImpl = globalThis.fetch.bind(globalThis)) {
     if (!validateDeployment(env).ok || !validateResendConfiguration(env).ok) throw new EmailConfigurationError();
     this.#apiKey = env.RESEND_API_KEY;
     this.#from = env.AUTH_EMAIL_FROM;
     this.#fetch = fetchImpl;
-    this.#environment = env.BETA_ENVIRONMENT;
   }
 
   /** @returns {Promise<EmailDeliveryResult>} */
@@ -113,10 +103,7 @@ export class ResendEmailProvider {
           body: JSON.stringify({from: this.#from, to: [email], subject: 'Quantum Studio verification code',
             text: `Your Quantum Studio verification code is: ${otp}\n\nThis code expires in ${expiryMinutes} minutes.\nIf you did not request this code, you can ignore this email.`}),
         });
-      } catch (error) {
-        console.error('qs-resend-request-construction-failure', {
-          name: safeErrorName(error), stage: 'request-construction', environment: this.#environment,
-        });
+      } catch {
         return failed('delivery', 'email-transport-failed');
       }
       try {
@@ -128,10 +115,7 @@ export class ResendEmailProvider {
           if (!await acknowledgement(response)) return failed('delivery', 'invalid-email-provider-response');
         } catch { return failed('delivery', 'invalid-email-provider-response'); }
         return {ok: true, provider: 'resend'};
-      } catch (error) {
-        console.error('qs-resend-transport-exception', {
-          name: safeErrorName(error), stage: 'fetch', aborted: controller.signal.aborted, environment: this.#environment,
-        });
+      } catch {
         return failed('delivery', controller.signal.aborted ? 'email-request-timeout' : 'email-transport-failed');
       }
     };

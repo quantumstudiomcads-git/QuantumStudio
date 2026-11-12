@@ -15,23 +15,32 @@ const exact = exactDeviceFields;
 export const SIGNING_REQUEST_TIMEOUT_MS = 30000;
 
 function configuration(env) {
+  const invalid = reason => ({ok:false,reason});
   try {
-    if (!validateDeployment(env).ok || !['staging','production'].includes(env.BETA_ENVIRONMENT)
-        || typeof env.SIGNING_SERVICE?.fetch !== 'function') throw new Error();
-    const caller = JSON.parse(env.QS_SIGNING_SERVICE_CALLER);
-    if (!exact(caller,['schema_version','environment','caller','secret']) || caller.schema_version !== 1
-        || caller.environment !== env.BETA_ENVIRONMENT || typeof caller.caller !== 'string'
-        || !/^[a-z][a-z0-9_-]{0,63}$/.test(caller.caller) || !decodeDeviceProof(caller.secret,32)) throw new Error();
-    const trust = JSON.parse(env.QS_LICENCE_TRUST);
-    if (!exact(trust,['schema_version','environment','domain','algorithm','keys']) || trust.schema_version !== 1
-        || trust.environment !== env.BETA_ENVIRONMENT || trust.domain !== 'licence' || trust.algorithm !== 'Ed25519'
-        || !trust.keys || typeof trust.keys !== 'object' || Array.isArray(trust.keys)
-        || !Object.keys(trust.keys).length || Object.keys(trust.keys).length > 32) throw new Error();
+    if (!['staging','production'].includes(env.BETA_ENVIRONMENT)) return invalid('invalid_environment');
+    if (!validateDeployment(env).ok) return invalid('deployment_validation_failed');
+    if (typeof env.SIGNING_SERVICE?.fetch !== 'function') return invalid('signing_service_binding_missing');
+    let caller;
+    try { caller = JSON.parse(env.QS_SIGNING_SERVICE_CALLER); }
+    catch { return invalid('caller_json_invalid'); }
+    if (!exact(caller,['schema_version','environment','caller','secret']) || caller.schema_version !== 1) return invalid('caller_schema_invalid');
+    if (caller.environment !== env.BETA_ENVIRONMENT) return invalid('caller_environment_mismatch');
+    if (typeof caller.caller !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(caller.caller)) return invalid('caller_name_invalid');
+    if (!decodeDeviceProof(caller.secret,32)) return invalid('caller_secret_invalid');
+    let trust;
+    try { trust = JSON.parse(env.QS_LICENCE_TRUST); }
+    catch { return invalid('trust_json_invalid'); }
+    if (!exact(trust,['schema_version','environment','domain','algorithm','keys']) || trust.schema_version !== 1) return invalid('trust_schema_invalid');
+    if (trust.environment !== env.BETA_ENVIRONMENT) return invalid('trust_environment_mismatch');
+    if (trust.domain !== 'licence') return invalid('trust_domain_invalid');
+    if (trust.algorithm !== 'Ed25519') return invalid('trust_algorithm_invalid');
+    if (!trust.keys || typeof trust.keys !== 'object' || Array.isArray(trust.keys)
+        || !Object.keys(trust.keys).length || Object.keys(trust.keys).length > 32) return invalid('trust_keys_invalid');
     for (const [kid,value] of Object.entries(trust.keys)) {
-      if (!/^lic-[a-z0-9][a-z0-9._-]{0,63}$/.test(kid) || !decodeDeviceProof(value,32)) throw new Error();
+      if (!/^lic-[a-z0-9][a-z0-9._-]{0,63}$/.test(kid) || !decodeDeviceProof(value,32)) return invalid('trust_keys_invalid');
     }
-    return {caller,trust};
-  } catch { return null; }
+    return {ok:true,caller,trust};
+  } catch { return invalid('deployment_validation_failed'); }
 }
 
 // Matches Python signing_service_auth._message exactly (all signed fields are ASCII).
@@ -90,7 +99,14 @@ export async function issueLicenceViaService(env,activationId) {
   // Local issuance remains owned by the existing TEST worker, no binding required.
   if (isLocalDeployment(env)) return fail(409,'local_worker_required');
   const config = configuration(env);
-  if (!config) return fail(503,'signing_not_configured');
+  if (!config.ok) {
+    // Temporary configuration diagnostic: fixed codes only, no binding values.
+    console.error('qs-signing-configuration-failure', {
+      environment:['staging','production'].includes(env.BETA_ENVIRONMENT)?env.BETA_ENVIRONMENT:'unknown',
+      reason:config.reason,
+    });
+    return fail(503,'signing_not_configured');
+  }
   if (typeof activationId !== 'string' || !uuid.test(activationId)) return fail(400,'invalid_activation_id');
   let timer;
   const controller = new AbortController();

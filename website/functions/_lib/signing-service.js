@@ -107,23 +107,44 @@ export async function issueLicenceViaService(env,activationId) {
     });
     return fail(503,'signing_not_configured');
   }
+  // Temporary phase diagnostics: fixed labels and an optional HTTP status only.
+  const phase = (name,status) => console.info('qs-signing-issuance-phase', {
+    environment:env.BETA_ENVIRONMENT, phase:name,
+    ...(Number.isInteger(status) && status >= 100 && status <= 599 ? {status} : {}),
+  });
+  phase('configuration_valid');
+  const readEligibility = async () => {
+    phase('eligibility_started');
+    try {
+      const row = await eligible(env,activationId);
+      phase(row ? 'eligibility_valid' : 'eligibility_unavailable');
+      return row;
+    } catch (error) { phase('eligibility_exception'); throw error; }
+  };
   if (typeof activationId !== 'string' || !uuid.test(activationId)) return fail(400,'invalid_activation_id');
   let timer;
   const controller = new AbortController();
   try {
-    const row = await eligible(env,activationId);
+    const row = await readEligibility();
     if (!row) return fail(409,'activation_unavailable');
     const body = canonicalJson({schema_version:1,activation_request_id:activationId});
-    const headers = await signingServiceHeaders(env.BETA_ENVIRONMENT,config.caller,body,
-      Math.floor(Date.now()/1000),hex(crypto.getRandomValues(new Uint8Array(32))));
-    const timeout = new Promise(resolve=>{timer=setTimeout(()=>{controller.abort();resolve(null);},SIGNING_REQUEST_TIMEOUT_MS);});
+    phase('signing_headers_started');
+    let headers;
+    try {
+      headers = await signingServiceHeaders(env.BETA_ENVIRONMENT,config.caller,body,
+        Math.floor(Date.now()/1000),hex(crypto.getRandomValues(new Uint8Array(32))));
+    } catch (error) { phase('signing_headers_exception'); throw error; }
+    phase('signing_headers_ready');
+    const timeout = new Promise(resolve=>{timer=setTimeout(()=>{phase('service_fetch_timeout');controller.abort();resolve(null);},SIGNING_REQUEST_TIMEOUT_MS);});
     const attempt = async () => {
       try {
+        phase('service_fetch_started');
         const response = await env.SIGNING_SERVICE.fetch(new Request(target,{method:'POST',headers,body,
           redirect:'error',signal:controller.signal}));
+        phase('service_fetch_response',response.status);
         if (response.status !== 200) return {status:response.status,data:null}; // Never read diagnostics.
         return {status:200,data:await readDeviceRequest(response)};
-      } catch { return null; }
+      } catch { phase('service_fetch_exception'); return null; }
     };
     const reply = await Promise.race([attempt(),timeout]);
     clearTimeout(timer); controller.abort();
@@ -131,19 +152,28 @@ export async function issueLicenceViaService(env,activationId) {
     if ([401,403].includes(reply.status)) return fail(503,'signing_authentication_failed');
     if (reply.status === 409) return fail(409,'signing_conflict');
     if (reply.status !== 200) return fail(503,'signing_temporarily_unavailable');
-    const current = await eligible(env,activationId);
+    const current = await readEligibility();
     // Ignore metadata changes from a concurrent identical completion, but bind the full entitlement/device snapshot.
     for (const field of ['user_id','application_id','installation_id','device_public_key_hash','status','authorized_at',
       'entitlement_id','plan_id','starts_at','expires_at','device_limit','revision']) {
-      if (!current || current[field] !== row[field]) return fail(409,'activation_changed');
+      if (!current || current[field] !== row[field]) { phase('eligibility_unavailable'); return fail(409,'activation_changed'); }
     }
-    const e = await checkedEnvelope(reply.data,current,config.trust);
-    if (!e) return fail(502,'invalid_signing_response');
+    let e;
+    try { e = await checkedEnvelope(reply.data,current,config.trust); }
+    catch (error) { phase('signing_response_validation_failed'); throw error; }
+    if (!e) { phase('signing_response_validation_failed'); return fail(502,'invalid_signing_response'); }
     const stamp = value => new Date(value*1000).toISOString().replace('.000Z','Z');
-    const metadata = await persistLicenceMetadata(env,activationId,{schema_version:1,installation_id:e.device_id,
+    let metadata;
+    try {
+      metadata = await persistLicenceMetadata(env,activationId,{schema_version:1,installation_id:e.device_id,
       licence_id:e.licence_id,status:'ISSUED',issued_at:stamp(e.issued_at),expires_at:stamp(e.expires_at),revoked_at:null});
-    if (!metadata.ok) return fail(409,'licence_conflict');
-    return await persistPublishedLicence(env,activationId,e,{deployed:true});
+    } catch (error) { phase('metadata_persistence_failed'); throw error; }
+    if (!metadata.ok) { phase('metadata_persistence_failed'); return fail(409,'licence_conflict'); }
+    try {
+      const response = await persistPublishedLicence(env,activationId,e,{deployed:true});
+      phase(response.ok ? 'issuance_completed' : 'publication_failed');
+      return response;
+    } catch (error) { phase('publication_failed'); throw error; }
   } catch { return fail(503,'signing_temporarily_unavailable'); }
   finally { clearTimeout(timer); controller.abort(); }
 }

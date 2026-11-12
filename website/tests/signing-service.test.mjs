@@ -47,6 +47,7 @@ beforeEach(async()=>{
     QS_SIGNING_SERVICE_CALLER:JSON.stringify(caller),QS_LICENCE_TRUST:JSON.stringify({schema_version:1,environment:'staging',domain:'licence',algorithm:'Ed25519',keys:{[kid]:publicKey}}),
     SIGNING_SERVICE:{fetch:vi.fn(async()=>response(envelope))}};
   vi.stubGlobal('fetch',vi.fn(()=>{throw new Error('Public fetch forbidden');}));
+  vi.spyOn(console,'info').mockImplementation(()=>{});
 });
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.restoreAllMocks();for(const name of readdirSync(root))unlinkSync(join(root,name));rmdirSync(root);});
 
@@ -63,6 +64,18 @@ it.each(['staging','production'])('%s uses the private binding, publishes exactl
   expect(JSON.parse(await req.text())).toEqual({schema_version:1,activation_request_id:aid});
   expect(req.headers.get('X-QS-Nonce')).not.toBe(env.SIGNING_SERVICE.fetch.mock.calls[1][0].headers.get('X-QS-Nonce'));
   expect(fetch).not.toHaveBeenCalled();
+  const logs=vi.mocked(console.info).mock.calls;
+  expect(logs.slice(0,11).map(([,value])=>value.phase)).toEqual([
+    'configuration_valid','eligibility_started','eligibility_valid','signing_headers_started','signing_headers_ready',
+    'service_fetch_started','service_fetch_response','eligibility_started','eligibility_valid','issuance_completed',
+    'configuration_valid',
+  ]);
+  for(const [event,record] of logs) {
+    expect(event).toBe('qs-signing-issuance-phase');
+    expect(Object.keys(record).sort()).toEqual(record.phase==='service_fetch_response'?['environment','phase','status']:['environment','phase']);
+  }
+  const serialized=JSON.stringify(logs);
+  for(const value of [caller.secret,publicKey,aid,app,installation,hash,JSON.stringify(envelope),'Authorization','QS-HMAC-SHA256'])expect(serialized).not.toContain(value);
 });
 it('matches the existing Python HMAC authenticator and RuntimeEd25519Signer/LeaseVerifier',async()=>{
   const body=canonicalJson({schema_version:1,activation_request_id:aid});
@@ -106,12 +119,15 @@ it.each([401,403,409,500,503])('contains service auth/replay/unavailable HTTP %s
 it('contains transport exceptions',async()=>{
   env.SIGNING_SERVICE.fetch.mockRejectedValue(new Error(caller.secret));
   expect(await (await call()).json()).toEqual({error:{code:'signing_temporarily_unavailable'}});
+  expect(console.info).toHaveBeenCalledWith('qs-signing-issuance-phase',{environment:'staging',phase:'service_fetch_exception'});
+  expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain(caller.secret);
 });
 it('bounds a hanging private service call',async()=>{
   vi.useFakeTimers();env.SIGNING_SERVICE.fetch.mockImplementation(()=>new Promise(()=>{}));
   const pending=call();await vi.waitFor(()=>expect(env.SIGNING_SERVICE.fetch).toHaveBeenCalled());
   await vi.advanceTimersByTimeAsync(SIGNING_REQUEST_TIMEOUT_MS+1);
   expect((await pending).status).toBe(503);
+  expect(console.info).toHaveBeenCalledWith('qs-signing-issuance-phase',{environment:'staging',phase:'service_fetch_timeout'});
 });
 it.each(['signature','device','expiry','issuer','digest','schema','extra','json'])('rejects malformed/mismatched worker %s',async kind=>{
   let e={...envelope},r;
@@ -179,4 +195,25 @@ it('rejects non-JSON and oversized private responses',async()=>{
   expect((await call()).status).toBe(502);
   env.SIGNING_SERVICE.fetch.mockResolvedValueOnce(new Response('x'.repeat(65537),{headers:{'Content-Type':'application/json'}}));
   expect((await call()).status).toBe(502);
+});
+
+
+it.each(['d1','unexpected-row'])('classifies eligibility %s exceptions without diagnostics',async kind=>{
+  vi.spyOn(db,'prepare').mockImplementation(()=>{
+    if(kind==='d1')throw new Error('secret-schema-diagnostic '+caller.secret);
+    return {bind:()=>({first:async()=>({status:'AUTHORIZED',flag_reason:null,revoked_at:null,authorized_at:'valid',application_status:'APPROVED',entitlement_id:'present',user_id:'u',entitlement_user_id:'u',application_id:app,entitlement_application_id:app,plan_id:'beta',device_limit:1,revision:1,starts_at:Symbol('sensitive')})})};
+  });
+  expect(await (await issueLicenceViaService(env,aid)).json()).toEqual({error:{code:'signing_temporarily_unavailable'}});
+  expect(console.info).toHaveBeenLastCalledWith('qs-signing-issuance-phase',{environment:'staging',phase:'eligibility_exception'});
+  expect(env.SIGNING_SERVICE.fetch).not.toHaveBeenCalled();
+  expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toMatch(/secret-schema|sensitive/);
+  expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain(caller.secret);
+});
+it('classifies signing header exceptions without cryptographic details',async()=>{
+  vi.spyOn(crypto.subtle,'importKey').mockRejectedValue(new Error(caller.secret+' secret-hmac-diagnostic'));
+  expect(await (await issueLicenceViaService(env,aid)).json()).toEqual({error:{code:'signing_temporarily_unavailable'}});
+  expect(console.info).toHaveBeenLastCalledWith('qs-signing-issuance-phase',{environment:'staging',phase:'signing_headers_exception'});
+  expect(env.SIGNING_SERVICE.fetch).not.toHaveBeenCalled();
+  const logs=JSON.stringify(vi.mocked(console.info).mock.calls);
+  expect(logs).not.toContain(caller.secret);expect(logs).not.toContain('secret-hmac-diagnostic');
 });

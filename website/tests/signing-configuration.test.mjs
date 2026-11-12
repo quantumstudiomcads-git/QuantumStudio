@@ -33,15 +33,13 @@ const cases=[
   ['trust_algorithm_invalid',trustChange({algorithm:secret})],
   ...[null,[],{},secret,{'bad-kid':publicKey},{'lic-fixture':secret},Object.fromEntries(Array.from({length:33},(_,i)=>['lic-'+i,publicKey]))].map(keys=>['trust_keys_invalid',trustChange({keys})]),
 ];
-it.each(cases)('logs only a fixed %s reason (#%#)',async(reason,change)=>{
+it.each(cases)('rejects %s configuration without temporary logging (#%#)',async(reason,change)=>{
   const logs=['log','info','warn','error','debug'].map(name=>vi.spyOn(console,name).mockImplementation(()=>{}));
   const env=environment();const binding=env.SIGNING_SERVICE.fetch;change(env);
   const response=await issueLicenceViaService(env,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
   expect(response.status).toBe(503);
   const text=await response.text();expect(text).toBe('{"error":{"code":"signing_not_configured"}}');
-  expect(console.error).toHaveBeenCalledExactlyOnceWith('qs-signing-configuration-failure',{
-    environment:reason==='invalid_environment'?'unknown':'staging',reason,
-  });
+  for(const log of logs)expect(log).not.toHaveBeenCalled();
   const serialized=JSON.stringify(logs.flatMap(log=>log.mock.calls))+text;
   for(const value of [secret,caller.secret,publicKey,JSON.stringify(caller),JSON.stringify(trust),'Authorization','QS-HMAC-SHA256'])expect(serialized).not.toContain(value);
   for(const log of logs.filter(log=>log!==console.error))expect(log).not.toHaveBeenCalled();

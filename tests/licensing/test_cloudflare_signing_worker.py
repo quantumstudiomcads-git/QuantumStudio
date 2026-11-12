@@ -398,3 +398,81 @@ def test_freshness_is_checked_after_body_stream_read(bundle,monkeypatch):
     result=run(b.worker.fetch(req))
     assert result.status==401 and result.json()['error']['code']=='stale_request'
     assert b.reads==[]
+
+
+@pytest.mark.parametrize('mode',[Environment.STAGING,Environment.PRODUCTION])
+def test_website_records_workers_compatible_fetch_preserves_auth(modules,monkeypatch,mode):
+    entry=modules.entry
+    calls=[]
+    settings=entry.Settings(mode,'https://website.unit-fixture.org','unused')
+    remote=Message(settings.origin,body=b'{"schema_version":1,"activations":[{"fixture":"activation"}]}')
+    remote.status=200
+    async def result(): return remote
+    def workers_fetch(url,**kwargs):
+        if kwargs.get('redirect')=='error':raise TypeError('Workers redirect mode unsupported')
+        calls.append((url,kwargs));return result()
+    monkeypatch.setattr(entry,'fetch',workers_fetch)
+    parsed=[]
+    def parse(value):parsed.append(value);return 'parsed-activation'
+    monkeypatch.setattr(entry,'_parse_website_activation',parse)
+    assert run(entry.website_records(settings,'synthetic-operator-secret'))==('parsed-activation',)
+    assert parsed==[{'fixture':'activation'}]
+    assert calls==[(settings.origin+'/api/operator/activations',{'headers':{'Authorization':'Bearer synthetic-operator-secret','Accept':'application/json'},'redirect':'manual'})]
+
+
+@pytest.mark.parametrize('status',[300,301,302,303,304,305,306,307,308,399,401,403,404,409,500,503])
+def test_website_records_rejects_status_before_reading_headers_or_body(modules,monkeypatch,status,capsys):
+    entry=modules.entry
+    reads=[]
+    class Remote:
+        @property
+        def body(self):
+            reads.append('body')
+            raise AssertionError('Body must not be read')
+        @property
+        def headers(self):
+            reads.append('headers')
+            raise AssertionError('Location must not be read')
+    remote=Remote();remote.status=status
+    calls=[]
+    async def fetch(url,**kwargs):
+        calls.append((url,kwargs));assert kwargs['redirect']=='manual';return remote
+    monkeypatch.setattr(entry,'fetch',fetch)
+    with pytest.raises(RequestRejected) as error:
+        run(entry.website_records(SimpleNamespace(origin='https://website.unit-fixture.org'),'synthetic-operator-secret'))
+    assert error.value.status==503 and error.value.code=='source_unavailable'
+    assert len(calls)==1
+    assert reads==[]
+    assert 'synthetic-operator-secret' not in str(error.value)
+    assert capsys.readouterr()==('','')
+
+
+@pytest.mark.parametrize('raw',[b'{bad',b'[]',b'{"schema_version":2,"activations":[]}',b'{"schema_version":1,"activations":[{}]}',b'x'*(2*1024*1024+1)],ids=['invalid-json','array-root','wrong-version','invalid-activation','oversized'])
+def test_website_records_rejects_malformed_or_oversized_response(modules,monkeypatch,raw):
+    entry=modules.entry
+    remote=Message('https://website.unit-fixture.org',body=raw);remote.status=200
+    async def fetch(*args,**kwargs):return remote
+    monkeypatch.setattr(entry,'fetch',fetch)
+    with pytest.raises(RequestRejected) as error:
+        run(entry.website_records(SimpleNamespace(origin='https://website.unit-fixture.org'),'synthetic-token'))
+    assert (error.value.status,error.value.code)==(503,'source_unavailable')
+
+
+@pytest.mark.parametrize('timeout_stage',[1,2])
+def test_website_records_both_timeouts_stay_ten_seconds(modules,monkeypatch,timeout_stage):
+    entry=modules.entry;waits=[]
+    remote=Message('https://website.unit-fixture.org',body=b'{"schema_version":1,"activations":[]}');remote.status=200
+    async def fetch(*args,**kwargs):return remote
+    async def wait_for(awaitable,*,timeout):
+        waits.append(timeout)
+        if len(waits)==timeout_stage:
+            awaitable.close()
+            raise asyncio.TimeoutError('sensitive-diagnostic')
+        return await awaitable
+    monkeypatch.setattr(entry,'fetch',fetch)
+    monkeypatch.setattr(entry.asyncio,'wait_for',wait_for)
+    with pytest.raises(RequestRejected) as error:
+        run(entry.website_records(SimpleNamespace(origin='https://website.unit-fixture.org'),'synthetic-token'))
+    assert (error.value.status,error.value.code)==(503,'source_unavailable')
+    assert waits==[10]*timeout_stage
+    assert 'sensitive-diagnostic' not in str(error.value)

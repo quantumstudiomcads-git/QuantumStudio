@@ -101,11 +101,6 @@ export async function issueLicenceViaService(env,activationId) {
   const config = configuration(env);
   if (!config.ok) return fail(503,'signing_not_configured');
   if (typeof activationId !== 'string' || !uuid.test(activationId)) return fail(400,'invalid_activation_id');
-  // Temporary post-fetch diagnostics: no identifiers, payloads or exception details.
-  const phase = (name,status) => console.info('qs-signing-postfetch-phase', {
-    environment:env.BETA_ENVIRONMENT,phase:name,
-    ...(Number.isInteger(status) && status >= 100 && status <= 599 ? {status} : {}),
-  });
   let timer;
   const controller = new AbortController();
   try {
@@ -119,13 +114,10 @@ export async function issueLicenceViaService(env,activationId) {
       try {
         const response = await env.SIGNING_SERVICE.fetch(new Request(target,{method:'POST',headers,body,
           redirect:'manual',signal:controller.signal}));
-        phase('signer_response_received',response.status);
         if (response.status !== 200) {
-          phase('signer_non_200',response.status);
           return {status:response.status,data:null}; // Never read diagnostics or Location.
         }
-        try { return {status:200,data:await readDeviceRequest(response)}; }
-        catch (error) { phase('signing_response_validation_failed'); throw error; }
+        return {status:200,data:await readDeviceRequest(response)};
       } catch { return null; }
     };
     const reply = await Promise.race([attempt(),timeout]);
@@ -136,31 +128,19 @@ export async function issueLicenceViaService(env,activationId) {
     if ([401,403].includes(reply.status)) return fail(503,'signing_authentication_failed');
     if (reply.status === 409) return fail(409,'signing_conflict');
     if (reply.status !== 200) return fail(503,'signing_temporarily_unavailable');
-    let current;
-    try { current = await eligible(env,activationId); }
-    catch (error) { phase('second_eligibility_check_failed'); throw error; }
-    if (!current) { phase('second_eligibility_check_failed'); return fail(409,'activation_changed'); }
+    const current = await eligible(env,activationId);
     // Ignore metadata changes from a concurrent identical completion, but bind the full entitlement/device snapshot.
     for (const field of ['user_id','application_id','installation_id','device_public_key_hash','status','authorized_at',
       'entitlement_id','plan_id','starts_at','expires_at','device_limit','revision']) {
-      if (current[field] !== row[field]) { phase('activation_snapshot_changed'); return fail(409,'activation_changed'); }
+      if (!current || current[field] !== row[field]) return fail(409,'activation_changed');
     }
-    let e;
-    try { e = await checkedEnvelope(reply.data,current,config.trust); }
-    catch (error) { phase('signing_response_validation_failed'); throw error; }
-    if (!e) { phase('signing_response_validation_failed'); return fail(502,'invalid_signing_response'); }
+    const e = await checkedEnvelope(reply.data,current,config.trust);
+    if (!e) return fail(502,'invalid_signing_response');
     const stamp = value => new Date(value*1000).toISOString().replace('.000Z','Z');
-    try {
-      const metadata = await persistLicenceMetadata(env,activationId,{schema_version:1,installation_id:e.device_id,
+    const metadata = await persistLicenceMetadata(env,activationId,{schema_version:1,installation_id:e.device_id,
       licence_id:e.licence_id,status:'ISSUED',issued_at:stamp(e.issued_at),expires_at:stamp(e.expires_at),revoked_at:null});
-      if (!metadata.ok) { phase('metadata_persistence_failed'); return fail(409,'licence_conflict'); }
-    } catch (error) { phase('metadata_persistence_failed'); throw error; }
-    phase('metadata_persisted');
-    try {
-      const response = await persistPublishedLicence(env,activationId,e,{deployed:true});
-      phase(response.ok ? 'publication_succeeded' : 'publication_failed');
-      return response;
-    } catch (error) { phase('publication_failed'); throw error; }
+    if (!metadata.ok) return fail(409,'licence_conflict');
+    return await persistPublishedLicence(env,activationId,e,{deployed:true});
   } catch { return fail(503,'signing_temporarily_unavailable'); }
   finally { clearTimeout(timer); controller.abort(); }
 }

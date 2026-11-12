@@ -51,11 +51,7 @@ beforeEach(async()=>{
 });
 afterEach(()=>{
   const records=vi.mocked(console.info).mock.calls;
-  for(const [event,record] of records) {
-    expect(event).toBe('qs-signing-postfetch-phase');
-    expect(Object.keys(record).sort()).toEqual(['signer_response_received','signer_non_200'].includes(record.phase)?['environment','phase','status']:['environment','phase']);
-    if('status' in record)expect(Number.isInteger(record.status)).toBe(true);
-  }
+  expect(console.info).not.toHaveBeenCalled();
   const logged=JSON.stringify(records);
   for(const value of [caller.secret,publicKey,aid,app,installation,hash,envelope.licence_id,JSON.stringify(envelope),'Authorization','QS-HMAC-SHA256','sensitive-diagnostic'])expect(logged).not.toContain(value);
   vi.useRealTimers();vi.unstubAllGlobals();vi.restoreAllMocks();for(const name of readdirSync(root))unlinkSync(join(root,name));rmdirSync(root);});
@@ -82,11 +78,7 @@ it.each(['staging','production'])('%s uses the private binding, publishes exactl
   expect(JSON.parse(await req.text())).toEqual({schema_version:1,activation_request_id:aid});
   expect(req.headers.get('X-QS-Nonce')).not.toBe(env.SIGNING_SERVICE.fetch.mock.calls[1][0].headers.get('X-QS-Nonce'));
   expect(fetch).not.toHaveBeenCalled();
-  expect(vi.mocked(console.info).mock.calls.slice(0,3)).toEqual([
-    ['qs-signing-postfetch-phase',{environment:mode,phase:'signer_response_received',status:200}],
-    ['qs-signing-postfetch-phase',{environment:mode,phase:'metadata_persisted'}],
-    ['qs-signing-postfetch-phase',{environment:mode,phase:'publication_succeeded'}],
-  ]);
+  expect(console.info).not.toHaveBeenCalled();
 });
 
 it('matches the existing Python HMAC authenticator and RuntimeEd25519Signer/LeaseVerifier',async()=>{
@@ -155,7 +147,7 @@ it.each(['signature','device','expiry','issuer','digest','schema','extra','json'
   }
   if(kind==='json')r=new Response('{bad',{headers:{'Content-Type':'application/json'}});
   env.SIGNING_SERVICE.fetch.mockResolvedValue(r);expect((await call()).status).toBe(502);
-  expect(console.info).toHaveBeenLastCalledWith('qs-signing-postfetch-phase',{environment:'staging',phase:'signing_response_validation_failed'});
+  expect(console.info).not.toHaveBeenCalled();
   expect(await db.prepare('SELECT * FROM published_licences').first()).toBeNull();
 });
 it.each(['REVOKED','FLAGGED','expired','device','metadata','application'])('rejects ineligible %s before calling worker',async kind=>{
@@ -174,7 +166,7 @@ it('resumes after metadata persisted but publication failed',async()=>{
   const prepare=db.prepare.bind(db);let failOnce=true;
   vi.spyOn(db,'prepare').mockImplementation(sql=>{if(failOnce&&sql.includes('INSERT INTO published_licences')){failOnce=false;throw new Error('fixture interruption');}return prepare(sql);});
   expect((await call()).status).toBe(503);
-  expect(console.info).toHaveBeenLastCalledWith('qs-signing-postfetch-phase',{environment:'staging',phase:'publication_failed'});
+  expect(console.info).not.toHaveBeenCalled();
   expect((await db.prepare('SELECT licence_id FROM beta_activations').first()).licence_id).toBe(envelope.licence_id);
   expect((await call()).status).toBe(200);
 });
@@ -194,7 +186,7 @@ it('browser/session callers cannot request arbitrary payloads or bypass operator
 it('rejects entitlement changes while the private call is in flight',async()=>{
   env.SIGNING_SERVICE.fetch.mockImplementation(async()=>{await db.prepare('UPDATE account_entitlements SET revision=revision+1').run();return response(envelope);});
   expect((await call()).status).toBe(409);
-  expect(console.info).toHaveBeenLastCalledWith('qs-signing-postfetch-phase',{environment:'staging',phase:'activation_snapshot_changed'});expect(await db.prepare('SELECT * FROM published_licences').first()).toBeNull();
+  expect(console.info).not.toHaveBeenCalled();expect(await db.prepare('SELECT * FROM published_licences').first()).toBeNull();
 });
 it.each(['environment','test-issuer','key'])('rejects mismatched or malformed public trust: %s',async kind=>{
   const t=JSON.parse(env.QS_LICENCE_TRUST);
@@ -254,10 +246,7 @@ it.each([300,301,302,303,304,305,306,307,308,399])('rejects HTTP %s redirects wi
   expect(headers).not.toHaveBeenCalled();expect(text).not.toHaveBeenCalled();expect(json).not.toHaveBeenCalled();
   expect(reply.bodyUsed).toBe(false);
   expect(errorLog).not.toHaveBeenCalled();expect(fetch).not.toHaveBeenCalled();
-  expect(vi.mocked(console.info).mock.calls).toEqual([
-    ['qs-signing-postfetch-phase',{environment:'staging',phase:'signer_response_received',status}],
-    ['qs-signing-postfetch-phase',{environment:'staging',phase:'signer_non_200',status}],
-  ]);
+  expect(console.info).not.toHaveBeenCalled();
   expect(await db.prepare('SELECT * FROM published_licences').first()).toBeNull();
 });
 
@@ -270,7 +259,7 @@ it('classifies metadata persistence failure without changing the existing confli
   });
   const result=await issueLicenceViaService(env,aid);
   expect(result.status).toBe(409);expect(await result.json()).toEqual({error:{code:'licence_conflict'}});
-  expect(console.info).toHaveBeenLastCalledWith('qs-signing-postfetch-phase',{environment:'staging',phase:'metadata_persistence_failed'});
+  expect(console.info).not.toHaveBeenCalled();
   expect(await db.prepare('SELECT * FROM published_licences').first()).toBeNull();
 });
 it('classifies exceptions in the second eligibility check',async()=>{
@@ -280,5 +269,5 @@ it('classifies exceptions in the second eligibility check',async()=>{
   });
   const result=await issueLicenceViaService(env,aid);expect(result.status).toBe(503);
   expect(await result.json()).toEqual({error:{code:'signing_temporarily_unavailable'}});
-  expect(console.info).toHaveBeenLastCalledWith('qs-signing-postfetch-phase',{environment:'staging',phase:'second_eligibility_check_failed'});
+  expect(console.info).not.toHaveBeenCalled();
 });

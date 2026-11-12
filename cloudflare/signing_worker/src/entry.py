@@ -91,7 +91,8 @@ async def authenticated_request(request, auth):
 async def website_records(settings, token):
     try:
         remote = await asyncio.wait_for(fetch(settings.origin+'/api/operator/activations',
-            headers={'Authorization':'Bearer '+token,'Accept':'application/json'},redirect='error'),timeout=10)
+            headers={'Authorization':'Bearer '+token,'Accept':'application/json'},redirect='manual'),timeout=10)
+        if 300 <= remote.status < 400: raise ValueError
         if remote.status != 200: raise ValueError
         raw = await asyncio.wait_for(read_limited(remote,MAX_ACTIVATION_RESPONSE_BYTES),timeout=10)
         data=json.loads(raw)

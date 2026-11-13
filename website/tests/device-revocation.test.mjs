@@ -156,3 +156,67 @@ with tempfile.TemporaryDirectory() as root:
   expect(licence.expires_at-licence.issued_at).toBe(70*86400);
   expect(await grant()).toEqual(original);expect((await row()).status).toBe('REVOKED');
 });
+
+
+async function staleActivation() {
+  const id='44444444-4444-4444-8444-444444444444';
+  // The unique current-device index is per user. Preserve it: stale history
+  // belongs to an older account/application for the same installation.
+  db.script(`INSERT INTO users(user_id,full_name,institution,email,normalized_email,email_lookup_hash,status,created_at,updated_at)
+    VALUES('old-user','Old account','Institute','old@example.test','old@example.test','old-hash','VERIFIED','2026-01-01','2026-01-01');
+    INSERT INTO beta_applications(application_id,user_id,full_name,email,normalized_email,email_lookup_hash,institution,country,research_area,
+      operating_system,privacy_consent,privacy_version,terms_consent,terms_version,communications_consent,status,submitted_at,updated_at)
+    VALUES('99999999-9999-4999-8999-999999999999','old-user','Old account','old@example.test','old@example.test','old-hash','Institute','Test','Test',
+      'Windows',1,'1',1,'1',0,'APPLIED','2026-01-01','2026-01-01');`);
+  await db.prepare(`INSERT INTO beta_activations(activation_request_id,application_id,user_id,installation_id,platform,architecture,app_version,
+    device_public_key_hash,status,flag_reason,created_at,updated_at)
+    SELECT ?,'99999999-9999-4999-8999-999999999999','old-user',installation_id,platform,architecture,app_version,device_public_key_hash,
+      'FLAGGED','APPLICATION_NOT_ELIGIBLE',created_at,updated_at FROM beta_activations WHERE activation_request_id=?`).bind(id,deviceA.activation_request_id).run();
+  return id;
+}
+const recovery={schema_version:1,expected_status:'FLAGGED',reason_code:'ADMINISTRATIVE',reason_text:'Retire stale never-authorized activation'};
+it('recovers only the selected stale same-installation FLAGGED history with one durable audit',async()=>{
+  const stale=await staleActivation();const original=await row(),entitlement=await grant(),before=await row(stale);
+  expect((await revoke(recovery,token,stale)).status).toBe(200);
+  const retired=await row(stale);
+  expect(retired).toEqual({...before,status:'REVOKED',revoked_at:'2027-01-01T00:00:00.000Z',
+    revocation_reason_code:'ADMINISTRATIVE',revocation_reason_text:recovery.reason_text,authorization_revision:before.authorization_revision+1});
+  expect(retired.authorized_at).toBeNull();expect(retired.flag_reason).toBe('APPLICATION_NOT_ELIGIBLE');
+  expect(await row()).toEqual(original);expect(await grant()).toEqual(entitlement);
+  const audit=await events();expect(audit).toHaveLength(1);
+  expect(audit[0]).toMatchObject({old_status:'FLAGGED',new_status:'REVOKED',actor_reference:'operator-stale-activation-recovery',event_timestamp:retired.revoked_at});
+  expect(JSON.parse(audit[0].metadata_json).activation_id).toBe(stale);
+  vi.setSystemTime(new Date('2027-01-02T00:00:00Z'));
+  expect(await (await revoke(recovery,token,stale)).json()).toMatchObject({result:'already_revoked',revoked_at:retired.revoked_at});
+  expect(await row(stale)).toEqual(retired);expect(await events()).toHaveLength(1);
+  expect((await revoke({...recovery,reason_code:'OTHER'},token,stale)).status).toBe(409);
+});
+it('requires the dedicated token and exact FLAGGED state for recovery',async()=>{
+  const stale=await staleActivation();const before=await row(stale);
+  expect((await revoke(recovery,null,stale)).status).toBe(401);
+  expect((await revoke(recovery,'wrong-token',stale)).status).toBe(403);
+  expect((await revoke(payload,token,stale)).status).toBe(409);
+  expect((await revoke(recovery)).status).toBe(409);
+  expect(await row(stale)).toEqual(before);expect(await events()).toHaveLength(0);
+});
+it.each(['authorized_at','licence_id'])('refuses previously authorized or issued FLAGGED recovery (%s)',async field=>{
+  const stale=await staleActivation();
+  await db.prepare(`UPDATE beta_activations SET ${field}=? WHERE activation_request_id=?`).bind(field==='authorized_at'?'2026-12-31T00:00:00Z':'synthetic-existing-licence',stale).run();
+  expect((await revoke(recovery,token,stale)).status).toBe(409);
+  expect((await row(stale)).status).toBe('FLAGGED');expect(await events()).toHaveLength(0);
+});
+it('rolls back stale recovery if its audit cannot be committed',async()=>{
+  const stale=await staleActivation();const before=await row(stale);
+  db.script("CREATE TRIGGER fail_recovery BEFORE INSERT ON beta_audit_events WHEN NEW.event_type='OPERATOR_DEVICE_REVOKED' BEGIN SELECT RAISE(ABORT,'synthetic audit failure'); END;");
+  expect((await revoke(recovery,token,stale)).status).toBe(503);
+  expect(await row(stale)).toEqual(before);expect((await row()).status).toBe('AUTHORIZED');
+});
+it('fails closed if a stale activation changes after the initial read',async()=>{
+  const stale=await staleActivation();const batch=db.batch.bind(db);
+  db.batch=async statements=>{
+    await db.prepare("UPDATE beta_activations SET authorized_at='2026-12-31T00:00:00Z' WHERE activation_request_id=?").bind(stale).run();
+    return batch(statements);
+  };
+  expect((await revoke(recovery,token,stale)).status).toBe(409);
+  expect((await row(stale)).status).toBe('FLAGGED');expect(await events()).toHaveLength(0);
+});

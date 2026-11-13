@@ -8,7 +8,7 @@ const headers = {'Content-Type': 'application/json; charset=utf-8', 'Cache-Contr
   'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer'};
 const json = (status, value) => new Response(JSON.stringify(value), {status, headers});
 const failure = (status, code) => json(status, {error: {code}});
-const readActivation = (db, id) => db.prepare(`SELECT application_id, status, revoked_at,
+const readActivation = (db, id) => db.prepare(`SELECT application_id, status, revoked_at, authorized_at, licence_id,
   revocation_reason_code, revocation_reason_text FROM beta_activations WHERE activation_request_id = ?`).bind(id).first();
 const matches = (row, payload) => row?.status === 'REVOKED' && row.revoked_at
   && row.revocation_reason_code === payload.reason_code
@@ -62,7 +62,7 @@ export async function onRequestPost({request, env, params}) {
   }
   // No activation revision exists in M9A. Require the precise source state;
   // REVOKED is terminal, so identical retries cannot encounter an ABA transition.
-  if (payload.expected_status !== 'AUTHORIZED') return failure(409, 'activation_conflict');
+  if (!['AUTHORIZED','FLAGGED'].includes(payload.expected_status)) return failure(409, 'activation_conflict');
   const db = env.BETA_DB;
   try {
     const row = await readActivation(db, id);
@@ -70,18 +70,24 @@ export async function onRequestPost({request, env, params}) {
     if (row.status === 'REVOKED') {
       return matches(row, payload) ? success(id, row, 'already_revoked') : failure(409, 'activation_conflict');
     }
-    if (row.status !== 'AUTHORIZED') return failure(409, 'activation_conflict');
+    if (row.status !== payload.expected_status) return failure(409, 'activation_conflict');
+    // Explicit recovery only for never-authorized, unissued FLAGGED history.
+    if (payload.expected_status === 'FLAGGED' && (row.authorized_at !== null || row.licence_id !== null)) {
+      return failure(409, 'activation_conflict');
+    }
     const now = new Date().toISOString();
     const results = await db.batch([
       db.prepare(`UPDATE beta_activations SET status = 'REVOKED', revoked_at = ?, updated_at = ?,
         revocation_reason_code = ?, revocation_reason_text = ?
-        WHERE activation_request_id = ? AND status = 'AUTHORIZED' AND revoked_at IS NULL`)
-        .bind(now, now, payload.reason_code, payload.reason_text ?? null, id),
+        WHERE activation_request_id = ? AND status = ? AND revoked_at IS NULL
+          AND (? <> 'FLAGGED' OR (authorized_at IS NULL AND licence_id IS NULL))`)
+        .bind(now, now, payload.reason_code, payload.reason_text ?? null, id, payload.expected_status, payload.expected_status),
       db.prepare(`INSERT INTO beta_audit_events
         (event_id, application_id, event_type, event_timestamp, actor_reference, old_status, new_status, metadata_json)
-        SELECT ?, ?, 'OPERATOR_DEVICE_REVOKED', ?, 'operator-device-revocation', 'AUTHORIZED', 'REVOKED', ?
+        SELECT ?, ?, 'OPERATOR_DEVICE_REVOKED', ?, ?, ?, 'REVOKED', ?
         WHERE changes() = 1`)
         .bind(crypto.randomUUID(), row.application_id, now,
+          payload.expected_status === 'FLAGGED' ? 'operator-stale-activation-recovery' : 'operator-device-revocation', payload.expected_status,
           JSON.stringify({schema: 1, activation_id: id, reason_code: payload.reason_code})),
     ]);
     const changes = results?.[0]?.meta?.changes;

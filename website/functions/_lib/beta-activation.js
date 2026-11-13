@@ -1,5 +1,6 @@
 import {buildJsonResponse, authRuntimeValidation, getValidatedSessionFromRequest} from './auth.js';
 import {errorResponse, expectedOrigin} from './beta-registration.js';
+import {issueLicenceViaService} from './signing-service.js';
 
 const MAX_REQUEST_BYTES = 4096;
 const DEFAULT_MAX_ACTIVE_DEVICES = 1;
@@ -322,6 +323,21 @@ export async function registerActivationForUser(env, userId, facts) {
     }
     if (parsed.value.device_public_key_hash && activation.device_public_key_hash !== parsed.value.device_public_key_hash) {
       return errorResponse(409, 'device_identity_conflict', 'The installation already has a different public device identity.');
+    }
+    // The upsert has committed and the returned row/identity has been checked.
+    // Local TEST issuance stays with the operator worker. Signing failure must
+    // never roll back authorization or change the desktop activation contract.
+    if (activation.status === 'AUTHORIZED' && ['staging','production'].includes(env.BETA_ENVIRONMENT)) {
+      try {
+        const issuance = await issueLicenceViaService(env, activation.activation_request_id);
+        if (!issuance.ok) console.warn('qs-automatic-licence-issuance-pending', {
+          environment: env.BETA_ENVIRONMENT, status: issuance.status,
+        });
+      } catch {
+        console.warn('qs-automatic-licence-issuance-pending', {
+          environment: env.BETA_ENVIRONMENT, status: 503,
+        });
+      }
     }
     return buildJsonResponse(200, {
       activation: userActivationPayload(activation),

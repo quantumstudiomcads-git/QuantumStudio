@@ -412,3 +412,45 @@ def test_local_private_field_never_reaches_publication_transport(bundle,server):
     with pytest.raises(WebsiteLicenceSyncError,match='unsupported fields'):
         publish_website_test_licence(b.db,b.activation,test_mode=True,base_url=url,token='synthetic-token')
     assert handler.received==[]
+
+
+
+def test_beta_entitlement_preserves_signed_pro_profile_and_explicit_grants(bundle):
+    from operator_tools.licence_manager.policy import derive_profile
+    from operator_tools.licence_manager.models import Profile
+    b=bundle
+    original=canonical_json(b.envelope)
+    assert b.activation.account_entitlement['plan_id']=='beta'
+    assert {k:b.envelope[k] for k in ('plan_id','channel','policy_profile')}=={
+        'plan_id':'pro','channel':'beta','policy_profile':'PROFESSOR_BETA'}
+    grants=derive_profile(Profile.PROFESSOR_BETA)
+    assert tuple(b.envelope['feature_entitlements'])==grants.features
+    assert tuple(b.envelope['calculation_entitlements'])==grants.calculations
+    assert b.envelope['registered_device_limit']==b.activation.account_entitlement['device_limit']==1
+    assert b.envelope['expires_at']==int(__import__('datetime').datetime.fromisoformat(b.activation.account_entitlement['expires_at'].replace('Z','+00:00')).timestamp())
+    b.service.accept_lease(b.envelope,persist=False)
+    summary=b.service.diagnostics_summary()
+    assert summary['plan_id']=='pro' and summary['policy_profile']=='PROFESSOR_BETA'
+    assert canonical_json(b.envelope)==original
+
+
+@pytest.mark.parametrize('state',['active','revoked','expired','online_validation_required','invalid_licence','invalid_device','installed'])
+def test_account_dialog_distinguishes_profile_from_tier_and_never_duplicates_summary(qtbot,bundle,monkeypatch,state):
+    from PySide6.QtWidgets import QLabel
+    b=bundle
+    summary={'status':'online_validation_required' if state=='installed' else state,
+        'plan_id':'pro','policy_profile':'PROFESSOR_BETA','expires_at':b.envelope['expires_at'],
+        'licence_id':b.envelope['licence_id'],'test_mode':True}
+    monkeypatch.setattr(b.service,'diagnostics_summary',lambda:summary)
+    dialog=AccountLicensingDialog(licensing_service=b.service)
+    qtbot.addWidget(dialog)
+    for _ in range(2):dialog._show_delivery_result(state,'')
+    text=dialog.licence_summary.text()
+    assert 'Licence profile: Professor beta' in text
+    assert 'Capability tier: pro' in text
+    assert 'Plan:' not in text
+    assert b.envelope['licence_id'] not in dialog.status.text()
+    labels='\n'.join(label.text() for label in dialog.findChildren(QLabel))
+    assert labels.count('Licence status:')==1
+    assert labels.count(b.envelope['licence_id'])==1
+    assert dialog.status.text()

@@ -162,7 +162,6 @@ class AccountLicensingDialog(QDialog):
         title = QLabel("Account / Licensing")
         layout.addWidget(title)
         summary = licensing_service.diagnostics_summary() if licensing_service else {}
-        local_status = str(summary.get('status', 'unavailable')).replace('_', ' ').title()
         self.licence_summary = QLabel()
         self.licence_summary.setWordWrap(True)
         layout.addWidget(self.licence_summary)
@@ -293,7 +292,9 @@ class AccountLicensingDialog(QDialog):
         if expiry:
             expiry = datetime.fromtimestamp(expiry, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         mode = "TEST LICENSING - explicit local trust\n" if summary.get("test_mode") else ""
-        self.licence_summary.setText(f"{mode}Licence status: {status}\nPlan: {summary.get('plan_id') or 'None'}\nExpiry: {expiry or 'Not available'}\nLicence ID: {summary.get('licence_id') or 'None'}")
+        profile = summary.get("policy_profile")
+        profile_label = {"PROFESSOR_BETA": "Professor beta", "INTERNAL_VALIDATION": "Internal validation"}.get(profile, profile or "Not available")
+        self.licence_summary.setText(f"{mode}Licence status: {status}\nLicence profile: {profile_label}\nCapability tier: {summary.get('plan_id') or 'None'}\nExpiry: {expiry or 'Not available'}\nLicence ID: {summary.get('licence_id') or 'None'}")
         self.start_button.setVisible(raw_status != "active")
 
     def check_licence(self):
@@ -350,9 +351,16 @@ class AccountLicensingDialog(QDialog):
         if state == "installed":
             summary = self._service.diagnostics_summary() if self._service else {}
             self.status.setText("Active - signed licence and current online authorization verified." if summary.get("status") == "active"
-                else self.licence_summary.text())
+                else "Signed licence installed. Current online authorization is required.")
         elif state in {"active", "revoked", "expired", "online_validation_required", "invalid_licence", "invalid_device"}:
-            self.status.setText(self.licence_summary.text())
+            self.status.setText({
+                "active": "Signed licence and current online device authorization verified.",
+                "revoked": "Device authorization is revoked. Protected work is unavailable.",
+                "expired": "The licence has expired. Protected work is unavailable.",
+                "online_validation_required": "Current online device authorization is required.",
+                "invalid_licence": "The signed licence could not be validated.",
+                "invalid_device": "The signed licence does not match this device.",
+            }[state])
         elif state == "pending":
             self.status.setText("Device authorized - licence pending. No signed licence has been published yet.")
         else:

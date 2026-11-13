@@ -227,6 +227,8 @@ class LicensingService:
             "test_mode": self.test_mode,
             "licence_id": self.lease.licence_id if self.lease else None,
             "plan_id": self.lease.plan_id if self.lease else None,
+            "policy_profile": self._verified_envelope.get("policy_profile")
+                if self.lease and self._verified_envelope else None,
             "expires_at": self.lease.expires_at if self.lease else None,
             "device_registered": self.device_identity is not None,
             "clock_validation_required": self.clock_validation_required,

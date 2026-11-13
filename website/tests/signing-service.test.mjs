@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {SQLiteD1} from './helpers/sqlite-d1.mjs';
 import {canonicalJson} from '../functions/_lib/licence-delivery.js';
+import {registerActivationForUser} from '../functions/_lib/beta-activation.js';
 import {issueLicenceViaService,signingServiceHeaders,SIGNING_REQUEST_TIMEOUT_MS} from '../functions/_lib/signing-service.js';
 import {onRequestPost as issueRoute} from '../functions/api/operator/activations/[activationId]/issue.js';
 
@@ -270,4 +271,86 @@ it('classifies exceptions in the second eligibility check',async()=>{
   const result=await issueLicenceViaService(env,aid);expect(result.status).toBe(503);
   expect(await result.json()).toEqual({error:{code:'signing_temporarily_unavailable'}});
   expect(console.info).not.toHaveBeenCalled();
+});
+
+
+const activationFacts={installation_id:installation,device_public_key_hash:hash,platform:'windows',architecture:'x86_64',app_version:'0.2.0'};
+const authorize=()=>registerActivationForUser(env,'u',activationFacts);
+const publications=async()=>(await db.prepare('SELECT * FROM published_licences').all()).results;
+it.each(['staging','production'])('%s automatically publishes only after authorization is durably committed',async mode=>{
+  env.BETA_ENVIRONMENT=mode;
+  env.QS_SIGNING_SERVICE_CALLER=JSON.stringify({...caller,environment:mode});
+  env.QS_LICENCE_TRUST=JSON.stringify({...JSON.parse(env.QS_LICENCE_TRUST),environment:mode});
+  await db.prepare('DELETE FROM beta_activations').run();
+  env.SIGNING_SERVICE.fetch.mockImplementation(async req=>{
+    const body=await req.clone().json();
+    expect(Object.keys(body).sort()).toEqual(['activation_request_id','schema_version']);
+    const committed=await db.prepare('SELECT * FROM beta_activations WHERE activation_request_id=?').bind(body.activation_request_id).first();
+    expect(committed.status).toBe('AUTHORIZED');expect(committed.authorized_at).toBeTruthy();
+    expect(req.headers.get('Authorization')).toMatch(/^QS-HMAC-SHA256 /);
+    return response(envelope);
+  });
+  const result=await authorize();expect(result.status).toBe(200);
+  const data=await result.json();expect(data.activation.status).toBe('AUTHORIZED');
+  expect(data).not.toHaveProperty('envelope');expect(JSON.stringify(data)).not.toContain(caller.secret);
+  const saved=await publications();expect(saved).toHaveLength(1);expect(saved[0].envelope_json).toBe(canonicalJson(envelope));
+  expect(env.SIGNING_SERVICE.fetch).toHaveBeenCalledOnce();
+  expect(JSON.parse(saved[0].envelope_json)).toMatchObject({plan_id:'pro',channel:'beta',policy_profile:'PROFESSOR_BETA',registered_device_limit:1});
+  expect((await db.prepare('SELECT plan_id FROM account_entitlements').first()).plan_id).toBe('beta');
+});
+it('automatic retry after temporary failure publishes once and repeats idempotently',async()=>{
+  const logs=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  env.SIGNING_SERVICE.fetch.mockResolvedValueOnce(new Response(caller.secret,{status:503}));
+  expect((await authorize()).status).toBe(200);
+  expect((await db.prepare('SELECT status FROM beta_activations WHERE activation_request_id=?').bind(aid).first()).status).toBe('AUTHORIZED');
+  expect(await publications()).toHaveLength(0);
+  expect(logs).toHaveBeenCalledExactlyOnceWith('qs-automatic-licence-issuance-pending',{environment:'staging',status:503});
+  expect((await authorize()).status).toBe(200);const saved=await publications();expect(saved).toHaveLength(1);
+  expect((await authorize()).status).toBe(200);expect(await publications()).toEqual(saved);
+  expect(JSON.stringify(logs.mock.calls)).not.toContain(caller.secret);
+});
+it('concurrent authorization retries retain one activation and one immutable publication',async()=>{
+  await db.prepare('DELETE FROM beta_activations').run();
+  const responses=await Promise.all([authorize(),authorize()]);expect(responses.map(r=>r.status)).toEqual([200,200]);
+  expect((await db.prepare('SELECT * FROM beta_activations').all()).results).toHaveLength(1);
+  expect(await publications()).toHaveLength(1);
+  expect((await publications())[0].envelope_json).toBe(canonicalJson(envelope));
+});
+it.each([409,503])('automatic signer HTTP %s keeps authorization and generic compatible response',async status=>{
+  const log=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  env.SIGNING_SERVICE.fetch.mockResolvedValueOnce(new Response(caller.secret+' '+publicKey,{status}));
+  const result=await authorize();expect(result.status).toBe(200);
+  const body=await result.json();expect(body.activation.status).toBe('AUTHORIZED');
+  expect(await publications()).toHaveLength(0);
+  expect(log).toHaveBeenCalledExactlyOnceWith('qs-automatic-licence-issuance-pending',{environment:'staging',status:status===409?409:503});
+  const text=JSON.stringify([body,log.mock.calls]);
+  for(const forbidden of [caller.secret,publicKey,'Authorization','QS-HMAC-SHA256','signature'])expect(text).not.toContain(forbidden);
+});
+it('FLAGGED application or device never auto-issues',async()=>{
+  await db.prepare("UPDATE beta_applications SET status='REVOKED' WHERE application_id=?").bind(app).run();
+  const result=await authorize();expect(result.status).toBe(200);expect((await result.json()).activation.status).toBe('FLAGGED');
+  expect(env.SIGNING_SERVICE.fetch).not.toHaveBeenCalled();expect(await publications()).toHaveLength(0);
+});
+it('concurrent revocation before readback never auto-issues for the revoked activation',async()=>{
+  const prepare=db.prepare.bind(db);
+  vi.spyOn(db,'prepare').mockImplementation(sql=>{
+    const statement=prepare(sql);
+    if(!sql.includes("ORDER BY (status <> 'REVOKED')"))return statement;
+    return {bind(...values){const bound=statement.bind(...values);return {first:async()=>{
+      await prepare("UPDATE beta_activations SET status='REVOKED',revoked_at=? WHERE activation_request_id=?").bind(stamp(now),aid).run();
+      return bound.first();
+    }};}};
+  });
+  const result=await authorize();expect(result.status).toBe(200);expect((await result.json()).activation.status).toBe('REVOKED');
+  expect(env.SIGNING_SERVICE.fetch).not.toHaveBeenCalled();expect(await publications()).toHaveLength(0);
+});
+it.each(['missing','expired'])('%s entitlement never auto-issues',async kind=>{
+  if(kind==='missing')await db.prepare('DELETE FROM account_entitlements').run();
+  else await db.prepare('UPDATE account_entitlements SET starts_at=?,expires_at=?').bind(stamp(now-7776060),stamp(now-60)).run();
+  expect((await authorize()).status).toBe(403);expect(env.SIGNING_SERVICE.fetch).not.toHaveBeenCalled();
+  expect(await publications()).toHaveLength(0);
+});
+it('local TEST activation keeps its existing worker-owned issuance flow',async()=>{
+  env.BETA_ENVIRONMENT='local';delete env.SIGNING_SERVICE;
+  expect((await authorize()).status).toBe(200);expect(await publications()).toHaveLength(0);
 });

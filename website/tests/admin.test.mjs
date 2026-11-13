@@ -13,6 +13,7 @@ import {onRequest as middleware} from '../functions/_middleware.js';
 import {canonicalJson} from '../functions/_lib/licence-delivery.js';
 import {createAdminClient,adminActionNotice,canIssue} from '../src/lib/admin-client';
 import {AdminApplicationDetail} from '../src/components/AdminApplicationDetail';
+import {registerActivationForUser} from '../functions/_lib/beta-activation.js';
 
 vi.setConfig({testTimeout:30000});
 const admin='11111111-1111-4111-8111-111111111111', user='22222222-2222-4222-8222-222222222222';
@@ -181,4 +182,18 @@ it('rejects malformed application identifiers and pagination input',async()=>{
     const r=await listRoute({env,request:request('/api/admin/applications?'+query)});expect(r.status).toBe(400);
   }
   const r=await detailRoute({env,params:{applicationId:'not-a-uuid'},request:request('/api/admin/applications/not-a-uuid')});expect(r.status).toBe(400);
+});
+
+
+it('admin Issue Licence recovers after automatic issuance temporarily fails',async()=>{
+  await approve();
+  const logs=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  env.SIGNING_SERVICE.fetch.mockResolvedValueOnce(new Response('never-expose-worker-diagnostic',{status:503}));
+  const registered=await registerActivationForUser(env,user,{installation_id:installation,device_public_key_hash:hash,platform:'windows',architecture:'x86_64',app_version:'0.2.0'});
+  expect(registered.status).toBe(200);expect((await registered.json()).activation.status).toBe('AUTHORIZED');
+  expect(await db.prepare('SELECT * FROM published_licences').first()).toBeNull();
+  expect((await issue()).status).toBe(200);
+  const saved=await db.prepare('SELECT * FROM published_licences').first();expect(saved).toBeTruthy();
+  expect((await issue()).status).toBe(200);expect(await db.prepare('SELECT * FROM published_licences').first()).toEqual(saved);
+  expect(JSON.stringify(logs.mock.calls)).not.toContain('never-expose-worker-diagnostic');
 });

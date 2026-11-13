@@ -11,8 +11,12 @@ send_metrics = false
 tag = "v1"
 new_sqlite_classes = ["SigningCoordinator"]
 
-[observability]
-enabled = false
+[env.staging.observability]
+enabled = true
+
+[env.staging.observability.logs]
+enabled = true
+invocation_logs = true
 
 [env.staging]
 name = "quantum-studio-private-signing-staging"

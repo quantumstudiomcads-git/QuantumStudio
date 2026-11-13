@@ -17,6 +17,14 @@ from operator_tools.licence_manager.website_sync import _parse_website_activatio
 from storage import DurableSql, DurableJournal, DurableIssuanceDatabase
 
 
+def phase(environment, name, status=None):
+    """Temporary fixed-label diagnostics; never serialize runtime objects/errors."""
+    record = {'environment': environment if environment in ('staging','production') else 'unknown', 'phase': name}
+    if type(status) is int and 100 <= status <= 599:
+        record['status'] = status
+    print('qs-private-signer-phase', json.dumps(record, separators=(',', ':')))
+
+
 @dataclass(frozen=True)
 class Settings:
     environment: Environment
@@ -92,6 +100,8 @@ async def website_records(settings, token):
     try:
         remote = await asyncio.wait_for(fetch(settings.origin+'/api/operator/activations',
             headers={'Authorization':'Bearer '+token,'Accept':'application/json'},redirect='manual'),timeout=10)
+        if remote.status != 200:
+            phase(settings.environment.value,'website_records_failed',remote.status)
         if 300 <= remote.status < 400: raise ValueError
         if remote.status != 200: raise ValueError
         raw = await asyncio.wait_for(read_limited(remote,MAX_ACTIVATION_RESPONSE_BYTES),timeout=10)
@@ -114,27 +124,37 @@ def profile_provider(profile):
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
+        environment = getattr(self.env,'BETA_ENVIRONMENT','')
         try:
             settings,auth,_ = configure(self.env)
+            phase(environment,'default_config_valid')
             body,_ = await authenticated_request(request,auth)
+            phase(environment,'default_authenticated')
             namespace = self.env.SIGNING_COORDINATOR
             stub = namespace.get(namespace.idFromName(settings.object_name))
             # Send only the validated bounded raw request; the DO authenticates again.
             forwarded = Request(request.url,method='POST',headers=dict(request.headers.items()),body=body)
-            return await stub.fetch(forwarded)
+            phase(environment,'durable_object_dispatch_started')
+            result = await stub.fetch(forwarded)
+            phase(environment,'durable_object_dispatch_completed')
+            return result
         except Exception as error:
+            phase(environment,'default_failure')
             return failure(error)
 
 
 class SigningCoordinator(DurableObject):
     async def fetch(self, request):
+        environment = getattr(self.env,'BETA_ENVIRONMENT','')
         lease = None
         journal = None
         try:
             settings,auth,values = configure(self.env)
+            phase(environment,'coordinator_config_valid')
             expected = self.env.SIGNING_COORDINATOR.idFromName(settings.object_name)
             if self.ctx.id.toString() != expected.toString(): raise ValueError
             body,call = await authenticated_request(request,auth)
+            phase(environment,'coordinator_authenticated')
             # cryptography/Rust initializes entropy on import. Import only inside
             # an authenticated request, never during a Worker module snapshot.
             from operator_tools.licence_manager.signing_runtime import RuntimeEd25519Signer
@@ -142,26 +162,50 @@ class SigningCoordinator(DurableObject):
             sql = DurableSql(self.ctx.storage)
             identity = 'cloudflare:'+settings.object_name
             journal = DurableJournal(sql,settings.environment,identity)
+            phase(environment,'journal_initialized')
             journal.consume(call,int(time.time()))
+            phase(environment,'request_consumed')
             activation_id = _activation_id(body)
             lease = journal.acquire(int(time.time()))
+            phase(environment,'lease_acquired')
             signer = RuntimeEd25519Signer(values,bind_environment=True)
+            phase(environment,'signer_initialized')
             source = SimpleNamespace(environment=settings.environment,origin=settings.origin)
             core = PrivateSigningService(database_factory=None,source=source,signer=signer,
                 authenticator=auth,journal=journal,profile_provider=profile_provider)
-            facts = await website_records(settings,values['QS_OPERATOR_SYNC_TOKEN'])
+            phase(environment,'website_records_started')
+            try:
+                facts = await website_records(settings,values['QS_OPERATOR_SYNC_TOKEN'])
+            except Exception:
+                phase(environment,'website_records_failed')
+                raise
+            phase(environment,'website_records_succeeded')
             journal.assert_owner(lease,int(time.time()))
             if abs(int(time.time())-call.timestamp)>FRESHNESS_SECONDS: raise RequestRejected(401,'stale_request')
             activation,records=core.validate_activations(activation_id,facts)
+            phase(environment,'activation_validation_succeeded')
             database=DurableIssuanceDatabase(sql,journal,lease,time.time,identity)
+            phase(environment,'persist_activation_started')
             envelope,existing=core.persist_activation(database,activation,records,call.caller)
-            current_facts=await website_records(settings,values['QS_OPERATOR_SYNC_TOKEN'])
+            phase(environment,'persist_activation_succeeded')
+            phase(environment,'second_website_records_started')
+            try:
+                current_facts=await website_records(settings,values['QS_OPERATOR_SYNC_TOKEN'])
+            except Exception:
+                phase(environment,'second_website_records_failed')
+                raise
+            phase(environment,'second_website_records_succeeded')
             journal.assert_owner(lease,int(time.time()))
             if abs(int(time.time())-call.timestamp)>FRESHNESS_SECONDS: raise RequestRejected(401,'stale_request')
             current,_=core.validate_activations(activation_id,current_facts)
+            phase(environment,'current_activation_validation_succeeded')
             result=core.completed_response(activation,current,envelope,existing)
-            return response(result.status,result.body)
+            phase(environment,'completed_response_created')
+            reply = response(result.status,result.body)
+            phase(environment,'coordinator_completed')
+            return reply
         except Exception as error:
+            phase(environment,'coordinator_failure')
             return failure(error)
         finally:
             if lease is not None:

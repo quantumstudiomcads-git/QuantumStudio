@@ -439,12 +439,14 @@ def test_website_records_rejects_status_before_reading_headers_or_body(modules,m
         calls.append((url,kwargs));assert kwargs['redirect']=='manual';return remote
     monkeypatch.setattr(entry,'fetch',fetch)
     with pytest.raises(RequestRejected) as error:
-        run(entry.website_records(SimpleNamespace(origin='https://website.unit-fixture.org'),'synthetic-operator-secret'))
+        run(entry.website_records(SimpleNamespace(origin='https://website.unit-fixture.org',environment=Environment.PRODUCTION),'synthetic-operator-secret'))
     assert error.value.status==503 and error.value.code=='source_unavailable'
     assert len(calls)==1
     assert reads==[]
     assert 'synthetic-operator-secret' not in str(error.value)
-    assert capsys.readouterr()==('','')
+    captured=capsys.readouterr()
+    assert captured.err==''
+    assert captured.out.strip()=='qs-private-signer-phase '+json.dumps({'environment':'production','phase':'website_records_failed','status':status},separators=(',',':'))
 
 
 @pytest.mark.parametrize('raw',[b'{bad',b'[]',b'{"schema_version":2,"activations":[]}',b'{"schema_version":1,"activations":[{}]}',b'x'*(2*1024*1024+1)],ids=['invalid-json','array-root','wrong-version','invalid-activation','oversized'])
@@ -454,7 +456,7 @@ def test_website_records_rejects_malformed_or_oversized_response(modules,monkeyp
     async def fetch(*args,**kwargs):return remote
     monkeypatch.setattr(entry,'fetch',fetch)
     with pytest.raises(RequestRejected) as error:
-        run(entry.website_records(SimpleNamespace(origin='https://website.unit-fixture.org'),'synthetic-token'))
+        run(entry.website_records(SimpleNamespace(origin='https://website.unit-fixture.org',environment=Environment.PRODUCTION),'synthetic-token'))
     assert (error.value.status,error.value.code)==(503,'source_unavailable')
 
 
@@ -472,7 +474,81 @@ def test_website_records_both_timeouts_stay_ten_seconds(modules,monkeypatch,time
     monkeypatch.setattr(entry,'fetch',fetch)
     monkeypatch.setattr(entry.asyncio,'wait_for',wait_for)
     with pytest.raises(RequestRejected) as error:
-        run(entry.website_records(SimpleNamespace(origin='https://website.unit-fixture.org'),'synthetic-token'))
+        run(entry.website_records(SimpleNamespace(origin='https://website.unit-fixture.org',environment=Environment.PRODUCTION),'synthetic-token'))
     assert (error.value.status,error.value.code)==(503,'source_unavailable')
     assert waits==[10]*timeout_stage
     assert 'sensitive-diagnostic' not in str(error.value)
+
+
+PHASES=[
+    'default_config_valid','default_authenticated','durable_object_dispatch_started',
+    'coordinator_config_valid','coordinator_authenticated','journal_initialized','request_consumed','lease_acquired','signer_initialized',
+    'website_records_started','website_records_succeeded','activation_validation_succeeded','persist_activation_started','persist_activation_succeeded',
+    'second_website_records_started','second_website_records_succeeded','current_activation_validation_succeeded','completed_response_created','coordinator_completed',
+    'durable_object_dispatch_completed',
+]
+
+
+def safe_phase_records(capsys,b):
+    output=capsys.readouterr()
+    assert output.err==''
+    records=[]
+    for line in output.out.splitlines():
+        assert line.startswith('qs-private-signer-phase ')
+        record=json.loads(line.removeprefix('qs-private-signer-phase '))
+        assert set(record) in ({'environment','phase'},{'environment','phase','status'})
+        assert record['environment'] in ('production','staging','unknown')
+        if 'status' in record:assert type(record['status']) is int
+        records.append(record)
+    from backend.licensing.canonical import b64url_encode
+    for value in [b.env.QS_OPERATOR_SYNC_TOKEN,b.env.QS_LICENCE_SIGNING_KEY,b.env.QS_LICENCE_SIGNING_PUBLIC_KEY,
+                  b64url_encode(AUTH_KEY),b64url_encode(SEED),AID,APP,b.device.device_id,b.device.public_key_hash,
+                  'sensitive-diagnostic','Authorization',b.env.QS_SIGNING_OBJECT_NAME,'fixed-object-id']:
+        assert value not in output.out
+    return records
+
+
+def test_private_signer_success_phase_sequence_is_safe(bundle,capsys):
+    b=bundle
+    result=run(b.worker.fetch(request(b)))
+    assert result.status==200
+    records=safe_phase_records(capsys,b)
+    assert [r['phase'] for r in records]==PHASES
+    assert result.json()['envelope']['licence_id'] not in json.dumps(records)
+
+
+@pytest.mark.parametrize('stage',['source','activation','persistence','second-source'])
+def test_private_signer_failure_phases_preserve_responses(bundle,monkeypatch,capsys,stage):
+    b=bundle
+    from operator_tools.licence_manager.signing_service import PrivateSigningService
+    if stage in ('source','second-source'):
+        original=b.entry.website_records
+        calls=[]
+        async def read(settings,token):
+            calls.append(1)
+            if len(calls)==(1 if stage=='source' else 2):raise RequestRejected(503,'source_unavailable')
+            return await original(settings,token)
+        monkeypatch.setattr(b.entry,'website_records',read)
+    elif stage=='activation':
+        def reject(*args):raise RequestRejected(409,'activation_unavailable')
+        monkeypatch.setattr(PrivateSigningService,'validate_activations',reject)
+    else:
+        def reject(*args):raise RuntimeError('sensitive-diagnostic '+b.env.QS_OPERATOR_SYNC_TOKEN)
+        monkeypatch.setattr(PrivateSigningService,'persist_activation',reject)
+    result=run(b.worker.fetch(request(b)))
+    assert result.status==(409 if stage=='activation' else 503)
+    assert result.json()=={'error':{'code':'activation_unavailable' if stage=='activation' else 'service_unavailable' if stage=='persistence' else 'source_unavailable'}}
+    phases=[r['phase'] for r in safe_phase_records(capsys,b)]
+    assert phases[-2:]==['coordinator_failure','durable_object_dispatch_completed']
+    expected={'source':'website_records_failed','second-source':'second_website_records_failed','activation':'website_records_succeeded','persistence':'persist_activation_started'}[stage]
+    assert phases[-3]==expected
+    assert 'coordinator_completed' not in phases
+
+
+def test_default_failure_does_not_print_invalid_environment_or_exception(modules,capsys):
+    worker=modules.entry.Default(None,SimpleNamespace(BETA_ENVIRONMENT='sensitive-diagnostic'))
+    result=run(worker.fetch(Message('https://private.unit-fixture.org')))
+    assert result.status==503
+    output=capsys.readouterr()
+    assert output.out.strip()=='qs-private-signer-phase {"environment":"unknown","phase":"default_failure"}'
+    assert output.err==''
